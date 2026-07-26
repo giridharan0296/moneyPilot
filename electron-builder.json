@@ -1,0 +1,38 @@
+{
+  "appId": "com.giridharan19.expensetracker.desktop",
+  "productName": "MyMoney",
+  "copyright": "Copyright © 2026",
+  "directories": {
+    "output": "dist-desktop",
+    "buildResources": "assets"
+  },
+  "files": [
+    "electron/**/*",
+    "dist/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.js"
+  },
+  "asar": true,
+  "win": {
+    "target": ["nsis"],
+    "icon": "assets/icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "shortcutName": "MyMoney"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "category": "public.app-category.finance",
+    "icon": "assets/icon.png"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "category": "Finance",
+    "icon": "assets/icon.png"
+  }
+}

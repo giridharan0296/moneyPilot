@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "MyMoney",
+    "slug": "expense-tracker",
+    "owner": "giridharan19",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to recognize your speech and turn it into transactions.",
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to hear your voice for auto-filling transactions."
+      }
+    },
+    "android": {
+      "package": "com.giridharan19.expensetracker",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#10b981"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to record voice notes for your transactions."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to hear your voice for auto-filling transactions.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to recognize your speech and turn it into transactions."
+        }
+      ],
+      "expo-asset",
+      "expo-secure-store",
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d393366d-2ad1-4564-a445-b692100d4a31"
+      }
+    }
+  }
+}
