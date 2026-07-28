@@ -3,13 +3,14 @@
 //
 // Enter a ticker (RELIANCE, TCS, AAPL, …) → live ratios from Yahoo Finance:
 // valuation (P/E, P/B, PEG), profitability (ROE, margins), leverage,
-// growth, and a short signal strip. Optional route param `symbol` pre-fills
-// from Portfolio.
+// growth, an invest thesis (Attractive / Fair / Expensive / Caution) with
+// a suggested amount from portfolio + Cash & Bank, and a short signal strip.
+// Optional route param `symbol` pre-fills from Portfolio.
 //
 // No API key. Session cookies are handled in lib/fundamentals.js.
 // ----------------------------------------------------------------------------
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
@@ -24,6 +25,8 @@ import {
 
 import AppIcon from '../components/AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { usePortfolio } from '../contexts/PortfolioContext';
+import { useNetWorth } from '../contexts/NetWorthContext';
 import {
   fetchFundamentals,
   searchSymbols,
@@ -31,6 +34,11 @@ import {
   formatPct,
   formatMoney,
   formatCompact,
+  suggestInvestAmount,
+  holdingValueForSymbol,
+  fetchPeerComparison,
+  enrichHoldingsProfiles,
+  assessPortfolioRisk,
 } from '../lib/fundamentals';
 
 const QUICK = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'AAPL', 'MSFT'];
@@ -57,12 +65,321 @@ function Section({ title, children, styles }) {
 function toneColor(tone, colors) {
   if (tone === 'good') return '#059669';
   if (tone === 'warn') return '#d97706';
+  if (tone === 'bad') return '#dc2626';
   return colors.text.secondary;
+}
+
+function thesisPalette(key) {
+  if (key === 'attractive') {
+    return { bg: '#ecfdf5', border: '#a7f3d0', badge: '#059669', text: '#065f46' };
+  }
+  if (key === 'expensive') {
+    return { bg: '#fffbeb', border: '#fde68a', badge: '#d97706', text: '#92400e' };
+  }
+  if (key === 'caution') {
+    return { bg: '#fef2f2', border: '#fecaca', badge: '#dc2626', text: '#991b1b' };
+  }
+  return { bg: '#f8fafc', border: '#e2e8f0', badge: '#475569', text: '#334155' };
+}
+
+function riskPalette(level) {
+  if (level === 'high') return thesisPalette('caution');
+  if (level === 'moderate') return thesisPalette('expensive');
+  if (level === 'low') return thesisPalette('attractive');
+  return thesisPalette('fair');
+}
+
+function vsColor(verdict) {
+  if (verdict === 'better') return '#059669';
+  if (verdict === 'worse') return '#d97706';
+  return '#64748b';
+}
+
+function PeerComparisonCard({ comparison, loading, error, onSelect, styles, colors }) {
+  if (loading) {
+    return (
+      <Section title="Peer comparison" styles={styles}>
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="small" color="#7c3aed" />
+          <Text style={styles.inlineLoadingText}>Loading peers…</Text>
+        </View>
+      </Section>
+    );
+  }
+  if (error) {
+    return (
+      <Section title="Peer comparison" styles={styles}>
+        <Text style={styles.softError}>{error}</Text>
+      </Section>
+    );
+  }
+  if (!comparison || !comparison.rows?.length) return null;
+
+  const metrics = [
+    { key: 'pe', label: 'P/E', format: (n) => formatRatio(n) },
+    { key: 'pb', label: 'P/B', format: (n) => formatRatio(n) },
+    { key: 'roe', label: 'ROE', format: (n) => formatPct(n) },
+    { key: 'profitMargin', label: 'Margin', format: (n) => formatPct(n) },
+  ];
+
+  return (
+    <Section title="Peer comparison" styles={styles}>
+      <View style={styles.peerWrap}>
+        <Text style={[styles.peerHeadline, { color: toneColor(comparison.tone, colors) }]}>
+          {comparison.headline}
+        </Text>
+        {comparison.peerCount > 0 ? (
+          <Text style={styles.peerSub}>
+            vs median of {comparison.peerCount} similar stock{comparison.peerCount === 1 ? '' : 's'}
+          </Text>
+        ) : null}
+
+        <View style={styles.vsRow}>
+          {['pe', 'pb', 'roe', 'profitMargin'].map((k) => {
+            const v = comparison.vs?.[k];
+            if (!v) return null;
+            const label = k === 'profitMargin' ? 'Margin' : k.toUpperCase();
+            return (
+              <View key={k} style={styles.vsChip}>
+                <Text style={styles.vsChipLabel}>{label}</Text>
+                <Text style={[styles.vsChipVal, { color: vsColor(v.verdict) }]}>
+                  {v.diffPct > 0 ? '+' : ''}{v.diffPct}%
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.peerTable}>
+          <View style={[styles.peerTableRow, styles.peerTableHead]}>
+            <Text style={[styles.peerCellSym, styles.peerHeadText]}>Symbol</Text>
+            {metrics.map((m) => (
+              <Text key={m.key} style={[styles.peerCell, styles.peerHeadText]}>{m.label}</Text>
+            ))}
+          </View>
+          {comparison.rows.map((row) => (
+            <TouchableOpacity
+              key={row.symbol}
+              style={[styles.peerTableRow, row.isSubject && styles.peerSubjectRow]}
+              disabled={row.isSubject}
+              onPress={() => onSelect?.(row.symbol)}
+            >
+              <Text
+                style={[styles.peerCellSym, row.isSubject && styles.peerSubjectText]}
+                numberOfLines={1}
+              >
+                {row.isSubject ? '● ' : ''}{baseSymShort(row.symbol)}
+              </Text>
+              {metrics.map((m) => (
+                <Text
+                  key={m.key}
+                  style={[styles.peerCell, row.isSubject && styles.peerSubjectText]}
+                >
+                  {m.format(row[m.key])}
+                </Text>
+              ))}
+            </TouchableOpacity>
+          ))}
+          {comparison.medians && comparison.peerCount > 0 ? (
+            <View style={[styles.peerTableRow, styles.peerMedianRow]}>
+              <Text style={[styles.peerCellSym, styles.peerMedianText]}>Median</Text>
+              {metrics.map((m) => (
+                <Text key={m.key} style={[styles.peerCell, styles.peerMedianText]}>
+                  {m.format(comparison.medians[m.key])}
+                </Text>
+              ))}
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.peerHint}>Tap a peer to analyze it. Similar names from Yahoo.</Text>
+      </View>
+    </Section>
+  );
+}
+
+function baseSymShort(sym) {
+  return String(sym || '').replace(/\.(NS|BO)$/i, '');
+}
+
+function PortfolioRiskCard({ risk, loading, styles, colors }) {
+  if (!risk && loading) {
+    return (
+      <Section title="Portfolio risk" styles={styles}>
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="small" color="#7c3aed" />
+          <Text style={styles.inlineLoadingText}>Checking concentration…</Text>
+        </View>
+      </Section>
+    );
+  }
+  if (!risk) return null;
+  const pal = riskPalette(risk.level);
+  const levelLabel = risk.level === 'unknown'
+    ? 'No data'
+    : risk.level.charAt(0).toUpperCase() + risk.level.slice(1);
+
+  return (
+    <Section title="Portfolio risk" styles={styles}>
+      <View style={[styles.investCard, { backgroundColor: pal.bg, borderColor: pal.border }]}>
+        <View style={styles.investHeader}>
+          <View style={[styles.investBadge, { backgroundColor: pal.badge }]}>
+            <Text style={styles.investBadgeText}>{levelLabel}</Text>
+          </View>
+          {risk.sizeMultiplier < 1 ? (
+            <Text style={[styles.investScore, { color: pal.text }]}>
+              Size ×{risk.sizeMultiplier.toFixed(1)}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={[styles.investAction, { color: pal.text }]}>{risk.summary}</Text>
+
+        {loading ? (
+          <View style={[styles.inlineLoading, { paddingHorizontal: 0, paddingTop: 10, paddingBottom: 0 }]}>
+            <ActivityIndicator size="small" color="#7c3aed" />
+            <Text style={styles.inlineLoadingText}>Resolving sectors…</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.riskMetrics}>
+          {risk.stockPct != null ? (
+            <View style={styles.riskMetric}>
+              <Text style={styles.metricLabel}>This stock</Text>
+              <Text style={styles.metricValue}>
+                {Math.round((risk.projectedStockPct ?? risk.stockPct) * 100)}%
+              </Text>
+            </View>
+          ) : null}
+          {risk.sectorPct != null ? (
+            <View style={styles.riskMetric}>
+              <Text style={styles.metricLabel}>Sector</Text>
+              <Text style={styles.metricValue}>
+                {Math.round((risk.projectedSectorPct ?? risk.sectorPct) * 100)}%
+              </Text>
+            </View>
+          ) : null}
+          {risk.sameIndustryCount > 0 ? (
+            <View style={styles.riskMetric}>
+              <Text style={styles.metricLabel}>Same industry</Text>
+              <Text style={styles.metricValue}>{risk.sameIndustryCount}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {risk.flags?.length > 0 ? (
+          <View style={styles.reasonList}>
+            {risk.flags.map((f, i) => (
+              <View key={`${f.text}-${i}`} style={styles.reasonRow}>
+                <View style={[styles.signalDot, { backgroundColor: toneColor(f.tone, colors) }]} />
+                <Text style={styles.reasonText}>{f.text}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    </Section>
+  );
+}
+
+function InvestGuide({ data, suggestion, styles, colors }) {
+  const thesis = data?.thesis;
+  if (!thesis) return null;
+  const pal = thesisPalette(thesis.key);
+  const cur = data.currency || 'INR';
+  const rangePos = thesis.week52Pos;
+
+  return (
+    <Section title="Invest guide" styles={styles}>
+      <View style={[styles.investCard, { backgroundColor: pal.bg, borderColor: pal.border }]}>
+        <View style={styles.investHeader}>
+          <View style={[styles.investBadge, { backgroundColor: pal.badge }]}>
+            <Text style={styles.investBadgeText}>{thesis.label}</Text>
+          </View>
+          <Text style={[styles.investScore, { color: pal.text }]}>
+            Score {thesis.score > 0 ? '+' : ''}{thesis.score}
+          </Text>
+        </View>
+        <Text style={[styles.investAction, { color: pal.text }]}>{thesis.action}</Text>
+
+        {rangePos != null ? (
+          <View style={styles.rangeBlock}>
+            <View style={styles.rangeLabels}>
+              <Text style={styles.rangeLabel}>52W low</Text>
+              <Text style={styles.rangeLabel}>52W high</Text>
+            </View>
+            <View style={styles.rangeTrack}>
+              <View style={[styles.rangeFill, { width: `${Math.round(rangePos * 100)}%` }]} />
+              <View style={[styles.rangeThumb, { left: `${Math.round(rangePos * 100)}%` }]} />
+            </View>
+            <Text style={styles.rangeHint}>
+              Price is {Math.round(rangePos * 100)}% up from the 52-week low
+            </Text>
+          </View>
+        ) : null}
+
+        {thesis.reasons?.length > 0 ? (
+          <View style={styles.reasonList}>
+            {thesis.reasons.map((r, i) => (
+              <View key={`${r.text}-${i}`} style={styles.reasonRow}>
+                <View style={[styles.signalDot, { backgroundColor: toneColor(r.tone, colors) }]} />
+                <Text style={styles.reasonText}>{r.text}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.suggestBox}>
+          <Text style={styles.suggestLabel}>Suggested invest amount</Text>
+          {suggestion?.amount != null && suggestion.amount > 0 ? (
+            <Text style={styles.suggestAmount}>{formatMoney(suggestion.amount, cur)}</Text>
+          ) : (
+            <Text style={styles.suggestAmountMuted}>
+              {suggestion?.status === 'skip' || suggestion?.status === 'full' || suggestion?.status === 'no_cash'
+                ? '₹0'
+                : '—'}
+            </Text>
+          )}
+          <Text style={styles.suggestNote}>{suggestion?.note || thesis.action}</Text>
+
+          {suggestion && (suggestion.portfolioValue > 0 || suggestion.cashAvailable != null) ? (
+            <View style={styles.suggestMeta}>
+              {suggestion.maxPortfolioPct > 0 ? (
+                <Text style={styles.suggestMetaText}>
+                  Cap {Math.round(suggestion.maxPortfolioPct * 100)}% of equity
+                  {suggestion.targetValue != null
+                    ? ` (≈ ${formatMoney(suggestion.targetValue, cur)})`
+                    : ''}
+                </Text>
+              ) : null}
+              {suggestion.holdingValue > 0 ? (
+                <Text style={styles.suggestMetaText}>
+                  You already hold {formatMoney(suggestion.holdingValue, cur)}
+                </Text>
+              ) : null}
+              {suggestion.cashAvailable != null && suggestion.cashAvailable > 0 ? (
+                <Text style={styles.suggestMetaText}>
+                  Cash & Bank {formatMoney(suggestion.cashAvailable, cur)}
+                  {suggestion.maxCashPct > 0
+                    ? ` · uses up to ${Math.round(suggestion.maxCashPct * 100)}%`
+                    : ''}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+
+        <Text style={styles.investDisclaimer}>
+          Heuristic from ratios, 52-week range, peers, and your portfolio — not investment advice.
+        </Text>
+      </View>
+    </Section>
+  );
 }
 
 export default function FundamentalAnalysisScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
+  const { holdings, summary: portfolioSummary } = usePortfolio();
+  const { assets } = useNetWorth();
   const initial = route?.params?.symbol ? String(route.params.symbol) : '';
 
   const [query, setQuery] = useState(initial);
@@ -71,8 +388,56 @@ export default function FundamentalAnalysisScreen({ route }) {
   const [data, setData] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [peerComparison, setPeerComparison] = useState(null);
+  const [peersLoading, setPeersLoading] = useState(false);
+  const [peersError, setPeersError] = useState(null);
+  const [enrichedHoldings, setEnrichedHoldings] = useState([]);
+  const [riskLoading, setRiskLoading] = useState(false);
   const searchTimer = useRef(null);
   const reqId = useRef(0);
+
+  const cashAvailable = useMemo(() => {
+    return (assets || []).reduce((sum, a) => {
+      if (a?.categoryId !== 'cash') return sum;
+      const v = a.valueInBase != null && isFinite(Number(a.valueInBase))
+        ? Number(a.valueInBase)
+        : Number(a.value) || 0;
+      return sum + (isFinite(v) ? v : 0);
+    }, 0);
+  }, [assets]);
+
+  // Preliminary risk (name concentration only) so size haircut can apply
+  // before sector enrichment finishes.
+  const risk = useMemo(() => {
+    if (!data) return null;
+    const list = enrichedHoldings.length ? enrichedHoldings : holdings;
+    // Use thesis max % of portfolio as a stand-in proposed amount for projection.
+    const port = portfolioSummary?.totalValue || 0;
+    const held = holdingValueForSymbol(holdings, data.symbol);
+    const maxPct = data.thesis?.maxPortfolioPct ?? 0.05;
+    const proposed = Math.max(0, port * maxPct - held);
+    return assessPortfolioRisk({
+      symbol: data.symbol,
+      sector: data.sector,
+      industry: data.industry,
+      beta: data.beta,
+      holdings: list,
+      portfolioValue: port,
+      proposedAmount: proposed,
+    });
+  }, [data, holdings, enrichedHoldings, portfolioSummary?.totalValue]);
+
+  const suggestion = useMemo(() => {
+    if (!data?.thesis) return null;
+    return suggestInvestAmount({
+      thesis: data.thesis,
+      portfolioValue: portfolioSummary?.totalValue || 0,
+      holdingValue: holdingValueForSymbol(holdings, data.symbol),
+      cashAvailable,
+      currency: data.currency || 'INR',
+      risk,
+    });
+  }, [data, holdings, portfolioSummary?.totalValue, cashAvailable, risk]);
 
   const runLookup = useCallback(async (symbol) => {
     const s = String(symbol || '').trim();
@@ -85,6 +450,9 @@ export default function FundamentalAnalysisScreen({ route }) {
     setQuery(s);
     setLoading(true);
     setError(null);
+    setPeerComparison(null);
+    setPeersError(null);
+    setEnrichedHoldings([]);
     const id = ++reqId.current;
     try {
       const result = await fetchFundamentals(s);
@@ -103,6 +471,50 @@ export default function FundamentalAnalysisScreen({ route }) {
   useEffect(() => {
     if (initial) runLookup(initial);
   }, [initial, runLookup]);
+
+  // Load peers + enrich holdings for sector risk after a successful quote.
+  useEffect(() => {
+    if (!data?.symbol) return undefined;
+    let cancelled = false;
+    const symbol = data.symbol;
+
+    (async () => {
+      setPeersLoading(true);
+      setPeersError(null);
+      try {
+        const cmp = await fetchPeerComparison(data, { limit: 4 });
+        if (!cancelled) setPeerComparison(cmp);
+      } catch (e) {
+        if (!cancelled) {
+          setPeerComparison(null);
+          setPeersError(e?.message || 'Could not load peers.');
+        }
+      } finally {
+        if (!cancelled) setPeersLoading(false);
+      }
+    })();
+
+    (async () => {
+      if (!holdings?.length) {
+        setEnrichedHoldings([]);
+        return;
+      }
+      setRiskLoading(true);
+      try {
+        const enriched = await enrichHoldingsProfiles(holdings, { max: 12 });
+        if (!cancelled) setEnrichedHoldings(enriched);
+      } catch {
+        if (!cancelled) setEnrichedHoldings(holdings);
+      } finally {
+        if (!cancelled) setRiskLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when the analyzed symbol changes; holdings are read from closure.
+  }, [data?.symbol]);
 
   // Debounced symbol search while typing.
   useEffect(() => {
@@ -143,7 +555,7 @@ export default function FundamentalAnalysisScreen({ route }) {
       >
         <Text style={styles.heading}>Fundamental Analysis</Text>
         <Text style={styles.sub}>
-          Look up valuation, profitability, and leverage ratios for any stock — on demand.
+          Valuation ratios plus an invest signal and suggested amount from your portfolio and cash.
         </Text>
 
         <View style={styles.searchRow}>
@@ -273,6 +685,29 @@ export default function FundamentalAnalysisScreen({ route }) {
                 {data.exchange ? ` · ${data.exchange}` : ''}
               </Text>
             </View>
+
+            <InvestGuide
+              data={data}
+              suggestion={suggestion}
+              styles={styles}
+              colors={colors}
+            />
+
+            <PortfolioRiskCard
+              risk={risk}
+              loading={riskLoading && holdings.length > 0}
+              styles={styles}
+              colors={colors}
+            />
+
+            <PeerComparisonCard
+              comparison={peerComparison}
+              loading={peersLoading}
+              error={peersError}
+              onSelect={runLookup}
+              styles={styles}
+              colors={colors}
+            />
 
             {data.signals?.length > 0 ? (
               <Section title="Quick read" styles={styles}>
@@ -583,6 +1018,203 @@ const makeStyles = (c) => ({
     fontSize: 13,
     color: c.text.primary,
     lineHeight: 18,
+  },
+
+  investCard: {
+    margin: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+  },
+  investHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  investBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  investBadgeText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
+    letterSpacing: 0.3,
+  },
+  investScore: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  investAction: {
+    marginTop: 10,
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  rangeBlock: { marginTop: 14 },
+  rangeLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  rangeLabel: { fontSize: 11, color: c.text.muted, fontWeight: '600' },
+  rangeTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: c.bg.canvas || '#e5e7eb',
+    overflow: 'visible',
+    position: 'relative',
+  },
+  rangeFill: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#a78bfa',
+  },
+  rangeThumb: {
+    position: 'absolute',
+    top: -3,
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    borderRadius: 7,
+    backgroundColor: '#7c3aed',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  rangeHint: {
+    marginTop: 8,
+    fontSize: 11,
+    color: c.text.secondary,
+  },
+  reasonList: { marginTop: 12, gap: 8 },
+  reasonRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  reasonText: {
+    flex: 1,
+    fontSize: 13,
+    color: c.text.primary,
+    lineHeight: 18,
+  },
+  suggestBox: {
+    marginTop: 14,
+    backgroundColor: c.bg.surface,
+    borderRadius: 10,
+    padding: 12,
+  },
+  suggestLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.text.muted,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  suggestAmount: {
+    marginTop: 4,
+    fontSize: 26,
+    fontWeight: '800',
+    color: c.text.primary,
+  },
+  suggestAmountMuted: {
+    marginTop: 4,
+    fontSize: 26,
+    fontWeight: '800',
+    color: c.text.muted,
+  },
+  suggestNote: {
+    marginTop: 6,
+    fontSize: 13,
+    color: c.text.secondary,
+    lineHeight: 18,
+  },
+  suggestMeta: { marginTop: 10, gap: 3 },
+  suggestMetaText: { fontSize: 11, color: c.text.muted, lineHeight: 16 },
+  investDisclaimer: {
+    marginTop: 12,
+    fontSize: 11,
+    color: c.text.muted,
+    lineHeight: 15,
+  },
+
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 16,
+  },
+  inlineLoadingText: { fontSize: 13, color: c.text.secondary },
+  softError: {
+    padding: 14,
+    fontSize: 13,
+    color: c.text.secondary,
+    lineHeight: 18,
+  },
+
+  peerWrap: { padding: 12 },
+  peerHeadline: { fontSize: 15, fontWeight: '700' },
+  peerSub: { fontSize: 12, color: c.text.secondary, marginTop: 4 },
+  vsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  vsChip: {
+    backgroundColor: c.bg.canvas,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 72,
+  },
+  vsChipLabel: { fontSize: 10, fontWeight: '700', color: c.text.muted },
+  vsChipVal: { fontSize: 14, fontWeight: '800', marginTop: 2 },
+  peerTable: { marginTop: 14 },
+  peerTableHead: { borderBottomWidth: 1, borderBottomColor: c.border?.subtle || '#e5e7eb' },
+  peerTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 9,
+    borderTopWidth: 1,
+    borderTopColor: c.border?.subtle || '#f3f4f6',
+  },
+  peerSubjectRow: { backgroundColor: 'rgba(124, 58, 237, 0.06)' },
+  peerMedianRow: { backgroundColor: c.bg.canvas },
+  peerCellSym: {
+    flex: 1.3,
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  peerCell: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: c.text.secondary,
+    textAlign: 'right',
+  },
+  peerHeadText: { color: c.text.muted, fontWeight: '700', fontSize: 11 },
+  peerSubjectText: { color: c.text.primary, fontWeight: '800' },
+  peerMedianText: { color: c.text.muted, fontStyle: 'italic' },
+  peerHint: {
+    marginTop: 10,
+    fontSize: 11,
+    color: c.text.muted,
+    lineHeight: 15,
+  },
+
+  riskMetrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+  },
+  riskMetric: {
+    width: '33.33%',
+    paddingVertical: 6,
+    paddingRight: 8,
   },
 
   aboutText: {

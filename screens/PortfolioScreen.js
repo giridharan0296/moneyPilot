@@ -1,18 +1,19 @@
 // ----------------------------------------------------------------------------
-// PortfolioScreen — read-only view of imported broker holdings.
+// PortfolioScreen — view of imported broker holdings with live price refresh.
 //
 // Layout:
-//   - Big summary card (total current value, P&L amount + %)
+//   - Big summary card (total current value, P&L, Refresh for live quotes)
 //   - Per-broker cards (Zerodha, Groww, ...) with count + value + last import
 //   - Full holdings list, sorted by current value desc
 //   - Empty state with an Import button
 //
-// The screen never *edits* holdings — only shows them. Edits happen through
-// re-importing (or clearing via the header action).
+// Quantity / avgCost only change via re-import. Live refresh rewrites
+// currentPrice, currentValue, and pnl from Yahoo quotes.
 // ----------------------------------------------------------------------------
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   ScrollView,
   View,
   Text,
@@ -24,6 +25,7 @@ import { usePortfolio } from '../contexts/PortfolioContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useSettings } from '../contexts/SettingsContext';
+import { useToast } from '../contexts/ToastContext';
 import { baseAmountOf } from '../lib/currency';
 import AppIcon from '../components/AppIcon';
 
@@ -46,11 +48,27 @@ function formatDate(iso) {
   }
 }
 
+function formatDateTime(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
 export default function PortfolioScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
-  const { holdings, summary, clearAll } = usePortfolio();
+  const { holdings, summary, clearAll, refreshLivePrices, pricesUpdatedAt } = usePortfolio();
   const { investments } = useTransactions();
   const { baseCurrency, fxRates, brokers } = useSettings();
+  const { showToast } = useToast();
+  const [refreshing, setRefreshing] = useState(false);
 
   // Lookup indexed by id — cheap to build, and every render of a broker
   // row calls this at least twice (label + color). Keeping it as a Map
@@ -165,6 +183,34 @@ export default function PortfolioScreen({ navigation }) {
     );
   }
 
+  async function handleRefreshPrices() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const result = await refreshLivePrices();
+      const failedCount = result.failed?.length || 0;
+      if (result.updated > 0) {
+        const msg = failedCount > 0
+          ? `Updated ${result.updated} holding${result.updated === 1 ? '' : 's'} · ${failedCount} unresolved`
+          : `Updated ${result.updated} holding${result.updated === 1 ? '' : 's'} with live prices`;
+        showToast(msg, { variant: 'success' });
+      } else if (failedCount > 0) {
+        showToast(
+          `Could not resolve prices for ${failedCount} symbol${failedCount === 1 ? '' : 's'}. Try again or check tickers.`,
+          { variant: 'error' },
+        );
+      } else {
+        showToast('No prices returned. Try again later.', { variant: 'error' });
+      }
+    } catch (e) {
+      showToast(e?.message || 'Price refresh failed. Check network and try again.', {
+        variant: 'error',
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // ---- Empty state ----
   if (!hasHoldings) {
     return (
@@ -195,7 +241,25 @@ export default function PortfolioScreen({ navigation }) {
     >
       {/* Big summary card */}
       <View style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Portfolio value</Text>
+        <View style={styles.heroTopRow}>
+          <Text style={styles.heroLabel}>Portfolio value</Text>
+          <TouchableOpacity
+            style={[styles.refreshBtn, refreshing && styles.refreshBtnDisabled]}
+            onPress={handleRefreshPrices}
+            disabled={refreshing}
+            hitSlop={8}
+            accessibilityLabel="Refresh live prices"
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <AppIcon name="refresh-cw" size={14} color="#fff" strokeWidth={2.2} />
+                <Text style={styles.refreshBtnText}>Refresh</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
         <Text style={styles.heroValue}>{formatMoney(summary.totalValue)}</Text>
         <View style={styles.heroPnlRow}>
           <View
@@ -224,6 +288,11 @@ export default function PortfolioScreen({ navigation }) {
         </View>
         <Text style={styles.heroSub}>
           Invested {formatMoney(summary.totalCost)} · {summary.count} holdings
+        </Text>
+        <Text style={styles.heroLive}>
+          {pricesUpdatedAt
+            ? `Live prices · ${formatDateTime(pricesUpdatedAt)}`
+            : 'Prices from last import — tap Refresh for live quotes'}
         </Text>
       </View>
 
@@ -388,7 +457,8 @@ export default function PortfolioScreen({ navigation }) {
       </TouchableOpacity>
 
       <Text style={styles.footer}>
-        Prices are as of your last import — not live. Tap a holding to open fundamental analysis.
+        Tap Refresh for live Yahoo quotes (delayed). Tap a holding for fundamental analysis.
+        {pricesUpdatedAt ? ` Last refresh ${formatDateTime(pricesUpdatedAt)}.` : ''}
       </Text>
     </ScrollView>
   );
@@ -418,7 +488,26 @@ const makeStyles = (c) => ({
     padding: 20,
     marginBottom: 16,
   },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   heroLabel: { color: '#9ca3af', fontSize: 12, fontWeight: '600', letterSpacing: 0.5 },
+  refreshBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    minWidth: 96,
+    justifyContent: 'center',
+  },
+  refreshBtnDisabled: { opacity: 0.7 },
+  refreshBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   heroValue: { color: '#fff', fontSize: 34, fontWeight: '800', marginTop: 6 },
   heroPnlRow: { flexDirection: 'row', marginTop: 10 },
   heroPnlPill: {
@@ -429,6 +518,7 @@ const makeStyles = (c) => ({
   heroPnl:    { fontSize: 14, fontWeight: '700', marginRight: 8 },
   heroPnlPct: { fontSize: 12, fontWeight: '700' },
   heroSub:    { color: '#9ca3af', fontSize: 12, marginTop: 10 },
+  heroLive:   { color: '#a5b4fc', fontSize: 11, marginTop: 6, fontWeight: '600' },
 
   // ---- Section titles ----
   sectionTitle: {

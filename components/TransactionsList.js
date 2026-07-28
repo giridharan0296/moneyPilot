@@ -296,11 +296,7 @@ export default function TransactionsList({
     // the list is filtered to "Groww" would look like a silent failure.
     // Toast + "Show all" clears the filter and reveals the row.
     if (!isInCurrentRange(values.date)) {
-      const dateLabel = values.date.toLocaleDateString(undefined, {
-        day: 'numeric',
-        month: 'short',
-      });
-      showToast(`Saved on ${dateLabel} — hidden by ${rangeLabel} filter.`, {
+      showToast(`Saved ${formatToastTimestamp(values.date)} — hidden by ${rangeLabel} filter.`, {
         variant: 'info',
         duration: 5000,
         actionLabel: 'Show',
@@ -820,12 +816,34 @@ function formatMoney(n) {
 
 function formatDate(iso) {
   const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    day: '2-digit',
-    month: 'short',
+  if (Number.isNaN(d.getTime())) return '—';
+  const now = new Date();
+  const sameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+
+  const time = d.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
   });
+
+  if (sameDay(d, now)) return `Today · ${time}`;
+  if (sameDay(d, yesterday)) return `Yesterday · ${time}`;
+
+  const day = d.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  });
+  return `${day} · ${time}`;
+}
+
+function formatToastTimestamp(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return 'just now';
+  return formatDate(d.toISOString());
 }
 
 // Human-readable label for the undo toast — "Coffee ₹120" beats "1 item".

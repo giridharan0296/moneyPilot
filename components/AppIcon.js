@@ -147,6 +147,13 @@ const ICONS = {
     <Circle key="a" cx="11" cy="11" r="8" {...p} />,
     <Line key="b" x1="21" y1="21" x2="16.65" y2="16.65" {...p} />,
   ],
+  // Lucide `refresh-cw` — circular arrows for live quote refresh.
+  'refresh-cw': (p) => [
+    <Path key="a" d="M21 2v6h-6" {...p} />,
+    <Path key="b" d="M3 12a9 9 0 0 1 15-6.7L21 8" {...p} />,
+    <Path key="c" d="M3 22v-6h6" {...p} />,
+    <Path key="d" d="M21 12a9 9 0 0 1-15 6.7L3 16" {...p} />,
+  ],
   'bar-chart-2': (p) => [
     <Line key="a" x1="18" y1="20" x2="18" y2="10" {...p} />,
     <Line key="b" x1="12" y1="20" x2="12" y2="4"  {...p} />,

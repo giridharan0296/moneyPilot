@@ -200,6 +200,7 @@ export default function SettingsScreen({ navigation }) {
 
   const {
     holdings,
+    pricesUpdatedAt,
     restoreState: restorePortfolio,
   } = usePortfolio();
 
@@ -302,7 +303,7 @@ export default function SettingsScreen({ navigation }) {
           categories,
           accounts,
           accountGroups,
-          portfolio: { holdings },
+          portfolio: { holdings, pricesUpdatedAt },
           netWorth: { assets, liabilities, history: netWorthHistory },
           recurring: { rules: recurringRules },
           budgets,

@@ -28,7 +28,7 @@ import {
 } from '../lib/currency';
 
 // ----------------------------------------------------------------------------
-// TransactionForm — the shared amount+category+account+date+note form.
+// TransactionForm — the shared amount+category+account+timestamp+note form.
 // Used by both the "Add" flow (in TransactionsList) and the "Edit" flow
 // (in EditTransactionModal). Same UI, same validation, one implementation.
 //
@@ -140,6 +140,9 @@ export default function TransactionForm({
 
   const [transcribing, setTranscribing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  // Android can't show date+time in one dialog — step through date, then time.
+  // null | 'date' | 'time' | 'datetime' (iOS / web single-shot).
+  const [pickerStep, setPickerStep] = useState(null);
   const [manualTranscript, setManualTranscript] = useState(null); // null | string  → also controls modal visibility
   const {
     whisperApiKey,
@@ -437,7 +440,7 @@ export default function TransactionForm({
 
     if (parsed.date) {
       setDate(parsed.date);
-      applied.push(`Date ${formatChipDate(parsed.date)}`);
+      applied.push(`Time ${formatChipTimestamp(parsed.date)}`);
     } else {
       missed.push('Date');
     }
@@ -483,11 +486,65 @@ export default function TransactionForm({
     if (text) applyTranscript(text);
   };
 
-  const handleDateChange = (event, selectedDate) => {
-    setShowPicker(Platform.OS === 'ios');
-    if (event.type === 'dismissed') return;
-    if (selectedDate) setDate(selectedDate);
+  const openTimestampPicker = () => {
+    if (Platform.OS === 'android') {
+      setPickerStep('date');
+      setShowPicker(true);
+      return;
+    }
+    setPickerStep('datetime');
+    setShowPicker(true);
   };
+
+  const handleDateChange = (event, selectedDate) => {
+    if (event?.type === 'dismissed') {
+      setShowPicker(false);
+      setPickerStep(null);
+      return;
+    }
+    if (!selectedDate) return;
+
+    if (Platform.OS === 'android' && pickerStep === 'date') {
+      const next = new Date(date);
+      next.setFullYear(
+        selectedDate.getFullYear(),
+        selectedDate.getMonth(),
+        selectedDate.getDate(),
+      );
+      setDate(next);
+      // Must unmount the date dialog before mounting the time dialog.
+      setShowPicker(false);
+      setPickerStep('time');
+      setTimeout(() => setShowPicker(true), 50);
+      return;
+    }
+
+    if (Platform.OS === 'android' && pickerStep === 'time') {
+      const next = new Date(date);
+      next.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
+      // Cap at "now" so a past date + late clock can't land in the future.
+      const capped = next.getTime() > Date.now() ? new Date() : next;
+      setDate(capped);
+      setShowPicker(false);
+      setPickerStep(null);
+      return;
+    }
+
+    // iOS / web datetime (or any single-shot picker).
+    const capped = selectedDate.getTime() > Date.now() ? new Date() : selectedDate;
+    setDate(capped);
+    // Keep iOS spinner mounted so the user can keep adjusting; close on web.
+    if (Platform.OS !== 'ios') {
+      setShowPicker(false);
+      setPickerStep(null);
+    }
+  };
+
+  const pickerMode = pickerStep === 'time'
+    ? 'time'
+    : pickerStep === 'date'
+      ? 'date'
+      : 'datetime';
 
   return (
     <View>
@@ -642,22 +699,22 @@ export default function TransactionForm({
         </>
       )}
 
-      <Text style={styles.label}>Date</Text>
+      <Text style={styles.label}>Timestamp</Text>
       <TouchableOpacity
-        onPress={() => setShowPicker(true)}
+        onPress={openTimestampPicker}
         activeOpacity={0.7}
         style={styles.dateChip}
       >
         <View style={styles.dateChipInner}>
           <AppIcon name="calendar" size={16} color="#111" strokeWidth={2} />
-          <Text style={styles.dateChipText}>{formatChipDate(date)}</Text>
+          <Text style={styles.dateChipText}>{formatChipTimestamp(date)}</Text>
         </View>
         <Text style={styles.dateChipHint}>Tap to change</Text>
       </TouchableOpacity>
       {showPicker && (
         <DateTimePicker
           value={date}
-          mode="date"
+          mode={pickerMode}
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           maximumDate={new Date()}
           onChange={handleDateChange}
@@ -1075,7 +1132,8 @@ function GroupedAccountPicker({
   );
 }
 
-function formatChipDate(d) {
+function formatChipTimestamp(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—';
   const now = new Date();
   const same = (a, b) =>
     a.getFullYear() === b.getFullYear() &&
@@ -1083,13 +1141,20 @@ function formatChipDate(d) {
     a.getDate() === b.getDate();
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (same(d, now)) return 'Today';
-  if (same(d, yesterday)) return 'Yesterday';
-  return d.toLocaleDateString(undefined, {
+
+  const time = d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  if (same(d, now)) return `Today · ${time}`;
+  if (same(d, yesterday)) return `Yesterday · ${time}`;
+  const day = d.toLocaleDateString(undefined, {
     day: '2-digit',
     month: 'short',
-    year: 'numeric',
+    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
   });
+  return `${day} · ${time}`;
 }
 
 const makeStyles = (c) => ({

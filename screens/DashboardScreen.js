@@ -1,6 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
+  ActionSheetIOS,
+  Alert,
   DeviceEventEmitter,
+  Dimensions,
+  Platform,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -8,6 +12,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import DateFilterBar from '../components/DateFilterBar';
+import SpendOverTimeChart from '../components/SpendOverTimeChart';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
@@ -43,6 +48,13 @@ export default function DashboardScreen() {
   // transactions. We just read the summary here to show a compact strip.
   const netWorth = useNetWorth();
   const navigation = useNavigation();
+
+  // Chart width = screen minus dashboard container padding (16 each side)
+  // minus card padding (14 each side).
+  const spendChartWidth = useMemo(
+    () => Dimensions.get('window').width - 16 * 2 - 14 * 2,
+    [],
+  );
 
   // ---- One-shot banner: "N transactions added by recurring rules." -----
   //
@@ -342,11 +354,9 @@ export default function DashboardScreen() {
   // `transactions:openAdd` event the tab's FAB uses so a single tap
   // takes the user straight to the pre-filled add-transaction modal.
   //
-  // For Income / Expense we hop to the Transactions tab with the
-  // right initialTab; for Invest we hop to the Invest tab's home.
-  // The event is emitted on the next tick so it lands after the
-  // target TransactionsList has mounted and subscribed.
-  const openQuickAdd = (type) => {
+  // Entry point is the header "+" — Income / Expense / Investment are
+  // picked from an action sheet so the dashboard stays uncluttered.
+  const openQuickAdd = useCallback((type) => {
     if (type === 'investment') {
       navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
     } else {
@@ -355,7 +365,51 @@ export default function DashboardScreen() {
     setTimeout(() => {
       DeviceEventEmitter.emit('transactions:openAdd', { type });
     }, 60);
-  };
+  }, [navigation]);
+
+  const showAddMenu = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Cancel', 'Income', 'Expense', 'Investment'],
+          cancelButtonIndex: 0,
+        },
+        (index) => {
+          if (index === 1) openQuickAdd('income');
+          else if (index === 2) openQuickAdd('expense');
+          else if (index === 3) openQuickAdd('investment');
+        },
+      );
+      return;
+    }
+    Alert.alert('Add transaction', 'What would you like to add?', [
+      { text: 'Income', onPress: () => openQuickAdd('income') },
+      { text: 'Expense', onPress: () => openQuickAdd('expense') },
+      { text: 'Investment', onPress: () => openQuickAdd('investment') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [openQuickAdd]);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={showAddMenu}
+          hitSlop={12}
+          style={{ paddingHorizontal: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Add transaction"
+        >
+          <AppIcon
+            name="plus"
+            size={22}
+            color={themeColors.text.primary}
+            strokeWidth={2.4}
+          />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, showAddMenu, themeColors.text.primary]);
 
   return (
     <ScrollView
@@ -443,34 +497,6 @@ export default function DashboardScreen() {
         </Text>
       </View>
 
-      {/* QUICK-ADD ROW — three tappable chips that jump straight to the
-          pre-filled add-transaction modal for the chosen type. Placed
-          RIGHT below the balance card so "how did that number change?"
-          → "add the transaction that changes it" is a single tap away.
-          Colours mirror the summary-row identity strip (income green,
-          expense red, invest indigo) so the visual language stays
-          consistent across the dashboard. */}
-      <View style={styles.quickAddRow}>
-        <QuickAddChip
-          label="Add income"
-          icon="wallet"
-          color="#059669"
-          onPress={() => openQuickAdd('income')}
-        />
-        <QuickAddChip
-          label="Add expense"
-          icon="credit-card"
-          color="#dc2626"
-          onPress={() => openQuickAdd('expense')}
-        />
-        <QuickAddChip
-          label="Add invest"
-          icon="trending-up"
-          color="#4f46e5"
-          onPress={() => openQuickAdd('investment')}
-        />
-      </View>
-
       {/* SUMMARY ROW — 3 compact cards */}
       <View style={styles.summaryRow}>
         <SummaryCard
@@ -496,6 +522,22 @@ export default function DashboardScreen() {
           borderColor="#6366f1"
           amountColor="#4f46e5"
           baseCurrency={baseCurrency}
+        />
+      </View>
+
+      {/* SPEND OVER TIME — smooth XY curve of expenses. Uses its own
+          range chips (independent of the global date filter) so users
+          can zoom the graph without reshaping every other card. */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Spend over time</Text>
+        <Text style={styles.spendChartSub}>
+          Smooth curve of your expenses · X = date · Y = amount
+        </Text>
+        <SpendOverTimeChart
+          expenses={expenses}
+          fxRates={fxRates}
+          baseCurrency={baseCurrency}
+          width={Math.max(260, spendChartWidth)}
         />
       </View>
 
@@ -1101,33 +1143,6 @@ export default function DashboardScreen() {
   );
 }
 
-// Quick-Add chip — one column of the three-up quick-add row. Each
-// chip is a tinted rectangle with a filled icon badge, a short label,
-// and a subtle "+ tap to add" hint. Kept as a full column (flex: 1)
-// so all three read as equal-weight actions.
-function QuickAddChip({ label, icon, color, onPress }) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={onPress}
-      style={[styles.quickAddChip, { borderColor: color + '55' }]}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-    >
-      <View style={[styles.quickAddBadge, { backgroundColor: color }]}>
-        <AppIcon name={icon} size={16} color="#fff" strokeWidth={2.4} />
-      </View>
-      <Text style={[styles.quickAddLabel, { color }]} numberOfLines={1}>
-        {label}
-      </Text>
-      <View style={styles.quickAddPlus}>
-        <AppIcon name="plus" size={12} color={color} strokeWidth={2.6} />
-      </View>
-    </TouchableOpacity>
-  );
-}
-
 // A compact summary card. Three of these sit side-by-side.
 function SummaryCard({ label, amount, count, borderColor, amountColor, baseCurrency }) {
   const styles = useThemedStyles(makeStyles);
@@ -1365,47 +1380,6 @@ const makeStyles = (c) => ({
     fontSize: 10,
     color: c.text.muted,
     marginTop: 2,
-  },
-
-  // Quick-add row — three equal-weight chips sitting between the balance
-  // card and the summary row. Each chip is a tap-target with a filled
-  // icon badge; the whole surface uses `c.bg.surface` so it flows with
-  // the rest of the dashboard cards.
-  quickAddRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 16,
-  },
-  quickAddChip: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: c.bg.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-  },
-  quickAddBadge: {
-    width: 26, height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickAddLabel: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  quickAddPlus: {
-    width: 18, height: 18,
-    borderRadius: 9,
-    alignItems: 'center', justifyContent: 'center',
-    // Extremely subtle tint so the "+" reads as a discoverable
-    // affordance without adding another shape / border to the row.
-    backgroundColor: 'rgba(0,0,0,0.04)',
   },
 
   // Month-over-month spending trend card.
@@ -1920,6 +1894,13 @@ const makeStyles = (c) => ({
     fontWeight: '700',
     color: c.text.primary,
     marginBottom: 12,
+  },
+  spendChartSub: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: -6,
+    marginBottom: 12,
+    lineHeight: 17,
   },
 
   // Comparison bar chart

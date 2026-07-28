@@ -12,7 +12,9 @@
     "electron:build": "expo export --platform web && electron-builder --config electron-builder.json",
     "electron:build:win": "expo export --platform web && electron-builder --config electron-builder.json --win",
     "electron:build:mac": "expo export --platform web && electron-builder --config electron-builder.json --mac",
-    "electron:build:linux": "expo export --platform web && electron-builder --config electron-builder.json --linux"
+    "electron:build:linux": "expo export --platform web && electron-builder --config electron-builder.json --linux",
+    "screenshots:marketing": "node scripts/capture-marketing-screenshots.mjs",
+    "screenshots:marketing:dark": "node scripts/capture-marketing-screenshots.mjs --dark"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.2",
@@ -52,6 +54,7 @@
   "private": true,
   "devDependencies": {
     "electron": "^43.1.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.49.1"
   }
 }

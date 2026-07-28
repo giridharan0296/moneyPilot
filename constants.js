@@ -23,6 +23,7 @@ export const STORAGE_KEYS = {
 
   // Portfolio holdings imported from broker CSVs
   portfolio_holdings:             '@financeApp/portfolio/holdings/v1',
+  portfolio_prices_updated_at:    '@financeApp/portfolio/pricesUpdatedAt/v1',
 
   // Net worth: what you own (assets) and what you owe (liabilities)
   assets:                         '@financeApp/networth/assets/v1',
