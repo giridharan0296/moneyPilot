@@ -56,6 +56,8 @@ export const STORAGE_KEYS = {
   // stays around for hand-entered non-loan liabilities) — every loan
   // auto-creates a mirror liability so Net Worth stays consistent.
   loans:                          '@financeApp/loans/v1',
+  // User-created loan types (beyond the built-in LOAN_KINDS list).
+  loan_kinds:                     '@financeApp/loans/customKinds/v1',
 
   // Theme preference: 'light' | 'dark' | 'system'.
   theme:                          '@financeApp/theme/v1',
@@ -237,6 +239,7 @@ export const DEFAULT_LIABILITY_CATEGORIES = [
   { id: 'personal',    label: 'Personal Loan',  emoji: '💰', color: '#f97316' },
   { id: 'credit_card', label: 'Credit Card',    emoji: '💳', color: '#ec4899' },
   { id: 'education',   label: 'Education Loan', emoji: '🎓', color: '#a855f7' },
+  { id: 'gold_loan',   label: 'Gold Loan',      emoji: '🥇', color: '#ca8a04' },
   { id: 'borrowed',    label: 'Money Borrowed', emoji: '↘️', color: '#8b5cf6' },
   { id: 'other_liab',  label: 'Other',          emoji: '📦', color: '#6b7280' },
 ];

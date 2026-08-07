@@ -42,8 +42,6 @@ import {
   computePayoffProjection,
   formatDate,
   formatMoney,
-  kindIcon,
-  kindLabel,
 } from '../lib/loans';
 import { radii, spacing } from '../lib/theme';
 
@@ -198,6 +196,7 @@ export default function LoansScreen({ navigation }) {
 function LoanRow({ loan, onPress, onDelete }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const { kindIcon, kindLabel } = useLoans();
   const pct = computePayoffPercent(loan);
   const { remainingMonths, projectedClosureDate } = computePayoffProjection(loan);
 
@@ -224,7 +223,7 @@ function LoanRow({ loan, onPress, onDelete }) {
           )}
         </View>
         <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {kindLabel(loan.kind)}
+          {kindLabel(loan.kind, loan.kindLabel)}
           {loan.lenderName ? `  ·  ${loan.lenderName}` : ''}
         </Text>
 

@@ -122,6 +122,7 @@ function validateBackupSections(d) {
     ['transfers',              isArrayOrMissing(d.transfers)],
     ['goals',                  isArrayOrMissing(d.goals)],
     ['loans',                  isArrayOrMissing(d.loans)],
+    ['customLoanKinds',        isArrayOrMissing(d.customLoanKinds)],
     ['currency',               isObjOrMissing(d.currency)],
     ['currency.fxRates',       isObjOrMissing(d.currency?.fxRates)],
     ['preferences',            isObjOrMissing(d.preferences)],
@@ -214,6 +215,7 @@ export default function SettingsScreen({ navigation }) {
 
   const {
     loans,
+    customLoanKinds,
     restoreState: restoreLoans,
   } = useLoans();
 
@@ -325,6 +327,7 @@ export default function SettingsScreen({ navigation }) {
           transfers,
           goals,
           loans,
+          customLoanKinds,
           // F9 Tier-2 (multi-currency). The base currency + FX rate
           // table are the parameters that give meaning to every
           // amountInBase / valueInBase snapshot on rows. If a backup
@@ -572,7 +575,10 @@ export default function SettingsScreen({ navigation }) {
     runSection('budgets', () => restoreBudgets({ budgets: d.budgets ?? [] }));
     runSection('transfers', () => restoreTransfers({ transfers: d.transfers ?? [] }));
     runSection('goals', () => restoreGoals({ goals: d.goals ?? [] }));
-    runSection('loans', () => restoreLoans({ loans: d.loans ?? [] }));
+    runSection('loans', () => restoreLoans({
+      loans: d.loans ?? [],
+      customLoanKinds: d.customLoanKinds ?? [],
+    }));
     runSection('preferences.theme', () => {
       if (prefs.theme && ['light', 'dark', 'system'].includes(prefs.theme)) {
         setThemeMode(prefs.theme);

@@ -33,13 +33,12 @@ import {
 } from 'react-native';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import { useLoans } from '../contexts/LoansContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import {
-  LOAN_KINDS,
   LOAN_METHODS,
   computeEmiAmount,
-  findLoanKind,
   formatMoney,
 } from '../lib/loans';
 
@@ -57,8 +56,11 @@ export default function LoanForm({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { accounts, accountGroups } = useSettings();
+  const { loanKinds, findLoanKind, addCustomLoanKind } = useLoans();
 
   const [kind, setKind] = useState(initialValues?.kind ?? 'personal');
+  const [addingCustomKind, setAddingCustomKind] = useState(false);
+  const [customKindLabel, setCustomKindLabel] = useState('');
   const kindMeta = findLoanKind(kind);
   const accent = kindMeta?.color ?? '#2563eb';
 
@@ -210,7 +212,7 @@ export default function LoanForm({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.chipRow}
       >
-        {LOAN_KINDS.map((k) => {
+        {loanKinds.map((k) => {
           const selected = k.id === kind;
           return (
             <TouchableOpacity
@@ -237,7 +239,52 @@ export default function LoanForm({
             </TouchableOpacity>
           );
         })}
+        {!isEdit && (
+          <TouchableOpacity
+            onPress={() => setAddingCustomKind((v) => !v)}
+            activeOpacity={0.7}
+            style={[styles.chip, styles.chipDashed]}
+          >
+            <View style={styles.chipInnerRow}>
+              <AppIcon name="plus" size={13} color={accent} strokeWidth={2.2} />
+              <Text style={[styles.chipText, { color: accent }]}>Custom</Text>
+            </View>
+          </TouchableOpacity>
+        )}
       </ScrollView>
+      {!isEdit && addingCustomKind && (
+        <View style={styles.customKindRow}>
+          <TextInput
+            style={[styles.input, styles.customKindInput]}
+            value={customKindLabel}
+            onChangeText={setCustomKindLabel}
+            placeholder="e.g. Bike Loan"
+            placeholderTextColor="#9ca3af"
+            autoFocus
+          />
+          <TouchableOpacity
+            style={[styles.customKindAddBtn, { backgroundColor: accent }]}
+            activeOpacity={0.8}
+            onPress={() => {
+              const res = addCustomLoanKind({ label: customKindLabel });
+              if (!res.ok) {
+                Alert.alert(
+                  'Could not add type',
+                  res.reason === 'duplicate_name'
+                    ? 'A loan type with that name already exists.'
+                    : 'Enter a short name for the loan type.',
+                );
+                return;
+              }
+              changeKind(res.kind.id);
+              setCustomKindLabel('');
+              setAddingCustomKind(false);
+            }}
+          >
+            <Text style={styles.customKindAddText}>Add</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {isEdit && (
         <Text style={styles.hint}>Type is locked on edit — delete and re-add to change it.</Text>
       )}
@@ -385,17 +432,20 @@ export default function LoanForm({
           )}
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.label}>EMI day</Text>
+          <Text style={styles.label}>EMI date (day)</Text>
           <TextInput
             style={styles.input}
             value={emiDayOfMonth}
             onChangeText={setEmiDayOfMonth}
             keyboardType="numeric"
-            placeholder='1..31'
+            placeholder="e.g. 5"
             placeholderTextColor="#9ca3af"
           />
         </View>
       </View>
+      <Text style={styles.hint}>
+        Day of every month your EMI is due (1–28 recommended). Example: 5 = 5th of each month.
+      </Text>
 
       <Text style={styles.label}>Disbursement date</Text>
       <TouchableOpacity
@@ -408,6 +458,11 @@ export default function LoanForm({
         </Text>
         <Text style={styles.dateChipHint}>{isEdit ? 'locked' : 'tap to change'}</Text>
       </TouchableOpacity>
+      {!isEdit && (
+        <Text style={styles.hint}>
+          Past start date + EMI amount → after save you can record EMIs already paid.
+        </Text>
+      )}
       {showDatePicker && (
         <DateTimePicker
           value={disburseDate}
@@ -577,10 +632,19 @@ const makeStyles = (c) => ({
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
     backgroundColor: c.bg.surfaceAlt, borderWidth: 1, borderColor: c.border.subtle,
   },
+  chipDashed: {
+    borderStyle: Platform.OS === 'web' ? 'dashed' : 'solid',
+  },
   chipText: { fontSize: 13, fontWeight: '600', color: c.text.secondary },
   chipInnerRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chipTextSelected: { color: '#fff' },
   chipEmpty: { fontSize: 12, color: c.text.muted, fontStyle: 'italic', paddingVertical: 8 },
+  customKindRow: { flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' },
+  customKindInput: { flex: 1, marginTop: 0 },
+  customKindAddBtn: {
+    paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, alignItems: 'center',
+  },
+  customKindAddText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   groupHeader: {
     fontSize: 10, color: c.text.secondary, fontWeight: '700',

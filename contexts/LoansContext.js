@@ -48,11 +48,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { STORAGE_KEYS } from '../constants';
 import {
+  CUSTOM_LOAN_KIND_COLORS,
+  LOAN_KINDS,
+  buildLedgerWithRateChange,
   computeAdjustment,
   computeEmiAmount,
   computeLiveTenureRemaining,
-  findLoanKind,
+  computeOutstandingAtDate,
+  enumerateEmiDueDates,
+  findLoanKind as findLoanKindInLib,
   getRateAtDate,
+  kindIcon as kindIconInLib,
+  kindLabel as kindLabelInLib,
+  normalizeCustomLoanKind,
+  rebuildReducingBalanceSplits,
   splitPrincipalInterestAtDate,
 } from '../lib/loans';
 import { useNetWorth } from './NetWorthContext';
@@ -69,6 +78,9 @@ function normalizeLoan(l) {
     name:                   (l.name ?? '').trim(),
     lenderName:             (l.lenderName ?? '').trim(),
     kind:                   l.kind ?? 'personal',
+    // Denormalized label so custom types still display if the kind row
+    // was removed or a backup restores loans before custom kinds.
+    kindLabel:              (l.kindLabel ?? '').trim() || null,
     direction:              l.direction ?? 'owed_by_me',
     principal:              Number(l.principal) || 0,
     disburseDate:           l.disburseDate ?? new Date().toISOString(),
@@ -194,6 +206,7 @@ function normalizeEvent(e) {
 
 export function LoansProvider({ children }) {
   const [loans, setLoans] = useState([]);
+  const [customLoanKinds, setCustomLoanKinds] = useState([]);
   const [ready, setReady] = useState(false);
 
   const {
@@ -202,14 +215,35 @@ export function LoansProvider({ children }) {
     deleteLiability,
   } = useNetWorth();
 
-  // ---- Load persisted loans on mount ----
+  // ---- Load persisted loans + custom kinds on mount ----
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.loans);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) setLoans(parsed.map(normalizeLoan));
+        const [rawLoans, rawKinds] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEYS.loans),
+          AsyncStorage.getItem(STORAGE_KEYS.loan_kinds),
+        ]);
+        if (rawKinds) {
+          try {
+            const parsedKinds = JSON.parse(rawKinds);
+            if (Array.isArray(parsedKinds)) {
+              setCustomLoanKinds(
+                parsedKinds
+                  .map((k, i) => normalizeCustomLoanKind(k, i))
+                  .filter(Boolean),
+              );
+            }
+          } catch (e) {
+            console.warn('Failed to parse custom loan kinds:', e);
+          }
+        }
+        if (rawLoans) {
+          const parsed = JSON.parse(rawLoans);
+          if (Array.isArray(parsed)) {
+            // Heal EMI P/I splits (e.g. first-EMI broken-period interest)
+            // so ledgers logged under the old full-month rule catch up.
+            setLoans(parsed.map((l) => rebuildReducingBalanceSplits(normalizeLoan(l))));
+          }
         }
       } catch (e) {
         console.warn('Failed to load loans:', e);
@@ -225,6 +259,69 @@ export function LoansProvider({ children }) {
     AsyncStorage.setItem(STORAGE_KEYS.loans, JSON.stringify(loans))
       .catch((e) => console.warn('Save loans failed:', e));
   }, [loans, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    AsyncStorage.setItem(STORAGE_KEYS.loan_kinds, JSON.stringify(customLoanKinds))
+      .catch((e) => console.warn('Save loan kinds failed:', e));
+  }, [customLoanKinds, ready]);
+
+  const loanKinds = useMemo(
+    () => [...LOAN_KINDS, ...customLoanKinds],
+    [customLoanKinds],
+  );
+
+  const findLoanKind = useCallback(
+    (id) => findLoanKindInLib(id, customLoanKinds),
+    [customLoanKinds],
+  );
+
+  const kindLabel = useCallback(
+    (id, fallback) => kindLabelInLib(id, customLoanKinds, fallback),
+    [customLoanKinds],
+  );
+
+  const kindIcon = useCallback(
+    (id) => kindIconInLib(id, customLoanKinds),
+    [customLoanKinds],
+  );
+
+  const addCustomLoanKind = useCallback(({ label, color, direction } = {}) => {
+    const trimmed = String(label ?? '').trim();
+    if (!trimmed) return { ok: false, reason: 'invalid_name' };
+    const duplicate = [...LOAN_KINDS, ...customLoanKinds].some(
+      (k) => k.label.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (duplicate) return { ok: false, reason: 'duplicate_name' };
+
+    const kind = normalizeCustomLoanKind({
+      id: `custom_${shortId()}`,
+      label: trimmed,
+      icon: 'tag',
+      color: color || CUSTOM_LOAN_KIND_COLORS[
+        customLoanKinds.length % CUSTOM_LOAN_KIND_COLORS.length
+      ],
+      defaultDirection: direction === 'owed_to_me' ? 'owed_to_me' : 'owed_by_me',
+      liabilityCategoryId: 'other_liab',
+      defaultMethod: 'reducing',
+    });
+    if (!kind) return { ok: false, reason: 'invalid_name' };
+    setCustomLoanKinds((prev) => [...prev, kind]);
+    return { ok: true, kind };
+  }, [customLoanKinds]);
+
+  // After load/heal, keep mirror liabilities aligned with recomputed outstanding.
+  useEffect(() => {
+    if (!ready) return;
+    for (const loan of loans) {
+      if (!loan.linkedLiabilityId) continue;
+      updateLiability(loan.linkedLiabilityId, {
+        outstanding: loan.currentOutstanding,
+      });
+    }
+    // Intentionally once when the store becomes ready — mutators sync mirrors themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   // ---- Read helpers ----
   const findLoan = useCallback(
@@ -247,7 +344,7 @@ export function LoansProvider({ children }) {
       if (!name) return { ok: false, reason: 'invalid_name' };
       if (principal <= 0) return { ok: false, reason: 'invalid_principal' };
 
-      const kindMeta = findLoanKind(data.kind);
+      const kindMeta = findLoanKindInLib(data.kind, customLoanKinds);
       const direction = data.direction ?? kindMeta?.defaultDirection ?? 'owed_by_me';
 
       // Derive EMI if the caller left it blank but supplied rate + tenure.
@@ -268,14 +365,17 @@ export function LoansProvider({ children }) {
 
       // Mirror liability — only when the user OWES the money. For informal
       // "money lent" loans we skip the mirror (that side is an asset, handled
-      // separately in a future phase).
+      // separately in a future phase). Custom types default to other_liab.
       let linkedLiabilityId = null;
-      if (direction === 'owed_by_me' && kindMeta?.liabilityCategoryId) {
+      const liabilityCategoryId =
+        kindMeta?.liabilityCategoryId
+        ?? (direction === 'owed_by_me' ? 'other_liab' : null);
+      if (direction === 'owed_by_me' && liabilityCategoryId) {
         const created = addLiability({
           name,
-          categoryId: kindMeta.liabilityCategoryId,
+          categoryId: liabilityCategoryId,
           outstanding: principal,
-          note: `Auto-created from Loans: ${kindMeta.label}`,
+          note: `Auto-created from Loans: ${kindMeta?.label ?? 'Loan'}`,
         });
         if (created) linkedLiabilityId = created.id;
       }
@@ -301,6 +401,7 @@ export function LoansProvider({ children }) {
         name,
         lenderName:             data.lenderName ?? '',
         kind:                   data.kind ?? 'personal',
+        kindLabel:              kindMeta?.label ?? data.kindLabel ?? null,
         direction,
         principal,
         disburseDate:           data.disburseDate ?? nowIso,
@@ -321,7 +422,7 @@ export function LoansProvider({ children }) {
       setLoans((prev) => [loan, ...prev]);
       return { ok: true, loan };
     },
-    [addLiability],
+    [addLiability, customLoanKinds],
   );
 
   // --------------------------------------------------------------------------
@@ -642,10 +743,10 @@ export function LoansProvider({ children }) {
       // truthful after future rate changes and after prior payments.
       const split = splitPrincipalInterestAtDate(loan, eventDate, amt);
 
-      // Cap principal at current outstanding — if the user pays a rounded
-      // EMI on a loan that's about to close, the extra becomes "interest"
-      // rather than negative outstanding.
-      const principalPortion = Math.min(split.principal, loan.currentOutstanding);
+      // Cap principal at the outstanding AS OF the payment date (not today's
+      // balance) so a back-dated first EMI isn't clipped by later payments.
+      const outstandingAt = computeOutstandingAtDate(loan, eventDate);
+      const principalPortion = Math.min(split.principal, outstandingAt);
       const interestPortion  = amt - principalPortion;
 
       const event = normalizeEvent({
@@ -657,11 +758,83 @@ export function LoansProvider({ children }) {
         note: note ?? '',
       });
 
-      const next = applyLedgerEvent(loan, event, principalPortion);
+      // Append then rebuild splits so a back-dated / first EMI gets broken-
+      // period interest and outstanding is replayed from the full ledger.
+      const appended = applyLedgerEvent(loan, event, principalPortion);
+      const next = rebuildReducingBalanceSplits(appended);
+      if (
+        next.linkedLiabilityId &&
+        next.currentOutstanding !== appended.currentOutstanding
+      ) {
+        updateLiability(next.linkedLiabilityId, {
+          outstanding: next.currentOutstanding,
+        });
+      }
       setLoans((prev) => prev.map((l) => (l.id === loanId ? next : l)));
       return { ok: true, loan: next };
     },
-    [applyLedgerEvent, findLoan],
+    [applyLedgerEvent, findLoan, updateLiability],
+  );
+
+  // Record every scheduled EMI from first due date through today in one
+  // state update. Used when the user adds a loan that already started
+  // earlier and has been paying EMIs outside the app.
+  const backfillPaidEmis = useCallback(
+    (loanId, { throughDate } = {}) => {
+      const loan = findLoan(loanId);
+      if (!loan) return { ok: false, reason: 'not_found', recorded: 0 };
+      if (loan.status === 'closed') return { ok: false, reason: 'loan_closed', recorded: 0 };
+
+      const emi = Number(loan.emiAmount) || 0;
+      if (emi <= 0) return { ok: false, reason: 'invalid_amount', recorded: 0 };
+
+      // If tenure wasn't filled in, still allow dating EMIs through today
+      // (capped) — otherwise past-start loans with blank tenure never
+      // surface a backfill option.
+      const tenureCap = Number(loan.tenureMonths) > 0 ? Number(loan.tenureMonths) : 600;
+      const existingEmiKeys = new Set(
+        (loan.events || [])
+          .filter((e) => e.kind === 'emi')
+          .map((e) => new Date(e.date).toDateString()),
+      );
+      const dates = enumerateEmiDueDates({
+        disburseDate: loan.disburseDate,
+        emiDayOfMonth: loan.emiDayOfMonth,
+        throughDate: throughDate || new Date(),
+        tenureMonths: tenureCap,
+        firstEmiOffsetMonths: 1,
+      }).filter((d) => !existingEmiKeys.has(new Date(d).toDateString()));
+      if (dates.length === 0) return { ok: true, loan, recorded: 0 };
+
+      let current = loan;
+      let recorded = 0;
+      for (const date of dates) {
+        if (current.status === 'closed' || current.currentOutstanding <= 1e-6) break;
+        const split = splitPrincipalInterestAtDate(current, date, emi);
+        const principalPortion = Math.min(split.principal, current.currentOutstanding);
+        const interestPortion = emi - principalPortion;
+        const event = normalizeEvent({
+          kind: 'emi',
+          date,
+          amount: emi,
+          principal: principalPortion,
+          interest: Math.max(0, interestPortion),
+          note: 'Backfilled EMI',
+        });
+        current = applyLedgerEvent(current, event, principalPortion);
+        recorded += 1;
+      }
+
+      current = rebuildReducingBalanceSplits(current);
+      if (current.linkedLiabilityId) {
+        updateLiability(current.linkedLiabilityId, {
+          outstanding: current.currentOutstanding,
+        });
+      }
+      setLoans((prev) => prev.map((l) => (l.id === loanId ? current : l)));
+      return { ok: true, loan: current, recorded };
+    },
+    [applyLedgerEvent, findLoan, updateLiability],
   );
 
   // Log a prepayment. 100% principal (assumed no interest component since
@@ -761,10 +934,12 @@ export function LoansProvider({ children }) {
   //
   // Args: { newRatePct, effectiveDate, adjustmentMode, note }
   //
-  // On success: appends a rate_change event to the ledger, updates the loan's
-  // ratePct + (emiAmount OR tenureMonths depending on adjustmentMode),
-  // does NOT touch the mirror liability (outstanding is unaffected by a
-  // rate change — only the future EMI split changes).
+  // On success: inserts a rate_change on the ledger, recomputes EMI or tenure
+  // from the outstanding AS OF the effective date, and re-splits every EMI
+  // (and refreshes later prepays/rate changes) on or after that date so
+  // principal remaining stays truthful. A forward-dated change with no later
+  // EMIs still leaves outstanding unchanged — only the P/I mix of future
+  // payments shifts.
   // --------------------------------------------------------------------------
   const updateRate = useCallback(
     (loanId, { newRatePct, effectiveDate, adjustmentMode = 'keep_tenure', note }) => {
@@ -789,40 +964,16 @@ export function LoansProvider({ children }) {
         return { ok: false, reason: 'before_disburse' };
       }
 
-      // LO-H2: use the LIVE remaining tenure (see logPrepayment for the
-      // full rationale). Feeding loan.tenureMonths directly would recompute
-      // the new EMI over more months than the loan actually has left.
-      const liveTenureRemaining = computeLiveTenureRemaining(loan);
-
-      const adjustment = computeAdjustment({
-        outstanding: loan.currentOutstanding,
+      const built = buildLedgerWithRateChange(loan, {
         newRatePct: rate,
-        method: loan.method,
+        effectiveDate: eventDate,
         adjustmentMode,
-        currentEmi: loan.emiAmount,
-        currentTenureRemaining: liveTenureRemaining,
+        note,
       });
+      if (!built.ok) return { ok: false, reason: built.reason };
 
-      const event = normalizeEvent({
-        kind: 'rate_change',
-        date: eventDate,
-        // Rate changes don't move cash — amount / principal / interest are
-        // all zero. The rate-change snapshot fields carry the real payload.
-        amount: 0,
-        principal: 0,
-        interest: 0,
-        note: note ?? '',
-        oldRatePct: loan.ratePct,
-        newRatePct: rate,
-        adjustmentMode,
-        outstandingAtChange: loan.currentOutstanding,
-        oldEmi: loan.emiAmount,
-        newEmi: adjustment.newEmi,
-        oldTenureRemaining: liveTenureRemaining,
-        newTenureRemaining: adjustment.newTenureRemaining,
-        approximated: adjustment.approximated,
-        unamortizable: adjustment.unamortizable ?? false,
-      });
+      const events = built.events.map((e) => normalizeEvent(e));
+      const replayed = replayLoanState(loan, events);
 
       // LO-L13: derive the "displayed current rate" from the ledger
       // instead of blindly overwriting with the new rate. Handles:
@@ -830,27 +981,28 @@ export function LoansProvider({ children }) {
       //   * effectiveDate in the past    → still correct (getRateAtDate
       //     returns the most recent rate ≤ today)
       //   * effectiveDate == now (usual) → returns the new rate
-      // The rate_change event itself is always appended so the ledger
-      // stays complete; only the surface-level `loan.ratePct` field is
-      // gated on effectiveDate.
-      const withNewEvent = {
-        ...loan,
-        events: [...loan.events, event],
-      };
-      const currentRateNow = getRateAtDate(withNewEvent, new Date().toISOString());
+      const withEvents = { ...loan, events };
+      const currentRateNow = getRateAtDate(withEvents, new Date().toISOString());
 
       const next = {
         ...loan,
-        ratePct:      currentRateNow ?? rate,
-        emiAmount:    adjustment.newEmi,
-        tenureMonths: adjustment.newTenureRemaining,
-        events:       withNewEvent.events,
-        updatedAt:    new Date().toISOString(),
+        ratePct:            currentRateNow ?? rate,
+        emiAmount:          replayed.emiAmount,
+        tenureMonths:       replayed.tenureMonths,
+        currentOutstanding: replayed.currentOutstanding,
+        status:             replayed.status,
+        events,
+        updatedAt:          new Date().toISOString(),
       };
+      if (loan.linkedLiabilityId) {
+        updateLiability(loan.linkedLiabilityId, {
+          outstanding: replayed.currentOutstanding,
+        });
+      }
       setLoans((prev) => prev.map((l) => (l.id === loanId ? next : l)));
-      return { ok: true, loan: next, adjustment };
+      return { ok: true, loan: next, adjustment: built.adjustment };
     },
-    [findLoan],
+    [findLoan, updateLiability],
   );
 
   // Manually close a loan (e.g. lender wrote it off, or user forgives a
@@ -935,7 +1087,20 @@ export function LoansProvider({ children }) {
   // remove pre-restore loans, not silently keep them.
   const restoreState = useCallback((payload) => {
     if (!payload) return;
-    setLoans(Array.isArray(payload.loans) ? payload.loans.map(normalizeLoan) : []);
+    setLoans(
+      Array.isArray(payload.loans)
+        ? payload.loans.map((l) => rebuildReducingBalanceSplits(normalizeLoan(l)))
+        : [],
+    );
+    if ('customLoanKinds' in payload) {
+      setCustomLoanKinds(
+        Array.isArray(payload.customLoanKinds)
+          ? payload.customLoanKinds
+              .map((k, i) => normalizeCustomLoanKind(k, i))
+              .filter(Boolean)
+          : [],
+      );
+    }
   }, []);
 
   // Derived — total outstanding by direction. Used by the LoansScreen hero.
@@ -958,6 +1123,12 @@ export function LoansProvider({ children }) {
       ready,
       loans,
       summary,
+      loanKinds,
+      customLoanKinds,
+      findLoanKind,
+      kindLabel,
+      kindIcon,
+      addCustomLoanKind,
       findLoan,
       addLoan,
       updateLoan,
@@ -965,6 +1136,7 @@ export function LoansProvider({ children }) {
       fixLoanSetup,
       deleteLoan,
       logEmi,
+      backfillPaidEmis,
       logPrepayment,
       closeLoan,
       deleteEvent,
@@ -974,6 +1146,12 @@ export function LoansProvider({ children }) {
       ready,
       loans,
       summary,
+      loanKinds,
+      customLoanKinds,
+      findLoanKind,
+      kindLabel,
+      kindIcon,
+      addCustomLoanKind,
       findLoan,
       addLoan,
       updateLoan,
@@ -981,6 +1159,7 @@ export function LoansProvider({ children }) {
       fixLoanSetup,
       deleteLoan,
       logEmi,
+      backfillPaidEmis,
       logPrepayment,
       closeLoan,
       deleteEvent,

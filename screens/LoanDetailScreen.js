@@ -50,12 +50,11 @@ import {
   computePayoffProjection,
   computeTotalInterestPaid,
   computeTotalPrincipalRepaid,
+  enumerateEmiDueDates,
   formatDate,
   formatMoney,
   formatMoneyDetail,
   formatSchedule,
-  kindIcon,
-  kindLabel,
 } from '../lib/loans';
 import { radii, spacing } from '../lib/theme';
 
@@ -69,6 +68,16 @@ const EVENT_META = {
   rate_change: { icon: 'trending-up',      label: 'Rate changed', color: '#8b5cf6' },
   closure:     { icon: 'flag',             label: 'Closed',       color: '#6b7280' },
 };
+
+function ordinalSuffix(n) {
+  const day = Number(n) || 0;
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) return 'th';
+  if (day % 10 === 1) return 'st';
+  if (day % 10 === 2) return 'nd';
+  if (day % 10 === 3) return 'rd';
+  return 'th';
+}
 
 function buildPrepaymentPlan(loan) {
   const balance = Number(loan?.currentOutstanding) || 0;
@@ -125,9 +134,12 @@ export default function LoanDetailScreen({ route, navigation }) {
     fixLoanSetup,
     deleteLoan,
     logEmi,
+    backfillPaidEmis,
     logPrepayment,
     closeLoan,
     deleteEvent,
+    kindIcon,
+    kindLabel,
   } = useLoans();
   const { showToast } = useToast();
 
@@ -157,6 +169,64 @@ export default function LoanDetailScreen({ route, navigation }) {
     });
   }, [navigation, mode, loan?.name]);
 
+  const offerEmiBackfill = async (createdLoan) => {
+    const tenureCap = Number(createdLoan.tenureMonths) > 0
+      ? Number(createdLoan.tenureMonths)
+      : 600;
+    const dueDates = enumerateEmiDueDates({
+      disburseDate: createdLoan.disburseDate,
+      emiDayOfMonth: createdLoan.emiDayOfMonth,
+      throughDate: new Date(),
+      tenureMonths: tenureCap,
+      firstEmiOffsetMonths: 1,
+    });
+    const emi = Number(createdLoan.emiAmount) || 0;
+    if (dueDates.length === 0) {
+      showToast('Loan added', { variant: 'success', duration: 1500 });
+      return;
+    }
+    if (emi <= 0) {
+      showToast(
+        'Loan added — set an EMI amount to backfill past payments',
+        { variant: 'info', duration: 2800 },
+      );
+      return;
+    }
+
+    const title = 'Record past EMIs?';
+    const message =
+      `This loan started earlier. Record ${dueDates.length} paid EMI${dueDates.length === 1 ? '' : 's'} of ${formatMoney(emi)} through today?\n\nThis updates loan outstanding and timeline. It does not create expense transactions.`;
+
+    // Multi-button Alert.alert is unreliable on react-native-web.
+    let confirmed = false;
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      confirmed = typeof window !== 'undefined'
+        && window.confirm(`${title}\n\n${message}`);
+    } else {
+      confirmed = await new Promise((resolve) => {
+        Alert.alert(title, message, [
+          { text: 'Not yet', style: 'cancel', onPress: () => resolve(false) },
+          {
+            text: `Record ${dueDates.length} EMI${dueDates.length === 1 ? '' : 's'}`,
+            onPress: () => resolve(true),
+          },
+        ]);
+      });
+    }
+
+    if (!confirmed) {
+      showToast('Loan added', { variant: 'success', duration: 1500 });
+      return;
+    }
+    const result = backfillPaidEmis(createdLoan.id);
+    const n = result?.recorded || 0;
+    showToast(
+      n > 0 ? `Loan added · ${n} EMI${n === 1 ? '' : 's'} recorded` : 'Loan added',
+      { variant: 'success', duration: 2200 },
+    );
+  };
+
   const handleCreate = (values) => {
     const res = addLoan(values);
     if (!res.ok) {
@@ -165,7 +235,7 @@ export default function LoanDetailScreen({ route, navigation }) {
     }
     setLoanId(res.loan.id);
     setMode('view');
-    showToast('Loan added', { variant: 'success', duration: 1500 });
+    offerEmiBackfill(res.loan);
   };
 
   const handleEditSubmit = (values) => {
@@ -264,6 +334,50 @@ export default function LoanDetailScreen({ route, navigation }) {
   const barColor = loan.status === 'closed' ? '#9ca3af' : '#059669';
   const prepaymentPlan = loan.status !== 'closed' ? buildPrepaymentPlan(loan) : null;
   const estimatedEnd = loan.status !== 'closed' ? computePayoffProjection(loan) : null;
+  const emiEventCount = (loan.events || []).filter((e) => e.kind === 'emi').length;
+  const pendingBackfillDates = loan.status !== 'closed' && emiEventCount === 0
+    ? enumerateEmiDueDates({
+        disburseDate: loan.disburseDate,
+        emiDayOfMonth: loan.emiDayOfMonth,
+        throughDate: new Date(),
+        // Blank tenure used to hide backfill entirely — use a cap so
+        // past due dates through today still appear.
+        tenureMonths: Number(loan.tenureMonths) > 0 ? Number(loan.tenureMonths) : 600,
+        firstEmiOffsetMonths: 1,
+      })
+    : [];
+  const canBackfillEmis = pendingBackfillDates.length > 0 && (Number(loan.emiAmount) || 0) > 0;
+
+  const handleBackfillEmis = async () => {
+    const title = 'Record past EMIs?';
+    const message =
+      `Record ${pendingBackfillDates.length} paid EMI${pendingBackfillDates.length === 1 ? '' : 's'} of ${formatMoney(loan.emiAmount)} through today?\n\nUse this only if you have not logged those EMIs yet.`;
+
+    let confirmed = false;
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      confirmed = typeof window !== 'undefined'
+        && window.confirm(`${title}\n\n${message}`);
+    } else {
+      confirmed = await new Promise((resolve) => {
+        Alert.alert(title, message, [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          {
+            text: `Record ${pendingBackfillDates.length}`,
+            onPress: () => resolve(true),
+          },
+        ]);
+      });
+    }
+    if (!confirmed) return;
+
+    const result = backfillPaidEmis(loan.id);
+    const n = result?.recorded || 0;
+    showToast(
+      n > 0 ? `${n} EMI${n === 1 ? '' : 's'} recorded` : 'No EMIs recorded',
+      { variant: 'success', duration: 2000 },
+    );
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -282,7 +396,7 @@ export default function LoanDetailScreen({ route, navigation }) {
             <View style={{ flex: 1 }}>
               <Text style={styles.heroName}>{loan.name}</Text>
               <Text style={styles.heroSub}>
-                {kindLabel(loan.kind)}
+                {kindLabel(loan.kind, loan.kindLabel)}
                 {loan.lenderName ? `  ·  ${loan.lenderName}` : ''}
                 {loan.status === 'closed' ? '  ·  CLOSED' : ''}
               </Text>
@@ -318,7 +432,10 @@ export default function LoanDetailScreen({ route, navigation }) {
             />
           )}
           <DetailRow label="Disbursed" value={formatDate(loan.disburseDate)} />
-          <DetailRow label="EMI day" value={`${loan.emiDayOfMonth} of each month`} />
+          <DetailRow
+            label="EMI date"
+            value={`${loan.emiDayOfMonth}${ordinalSuffix(loan.emiDayOfMonth)} of every month`}
+          />
           {loan.direction && (
             <DetailRow
               label="Direction"
@@ -435,8 +552,17 @@ export default function LoanDetailScreen({ route, navigation }) {
                   })
                 }
               />
-              <ActionBtn label="Close"    icon="flag" onPress={handleClose} />
+              {canBackfillEmis ? (
+                <ActionBtn label="Backfill EMIs" icon="repeat" onPress={handleBackfillEmis} />
+              ) : (
+                <ActionBtn label="Close" icon="flag" onPress={handleClose} />
+              )}
             </View>
+            {canBackfillEmis && (
+              <View style={styles.actionsRow}>
+                <ActionBtn label="Close" icon="flag" onPress={handleClose} />
+              </View>
+            )}
           </>
         )}
         <View style={styles.actionsRow}>
