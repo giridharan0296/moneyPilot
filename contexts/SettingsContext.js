@@ -725,15 +725,21 @@ export function SettingsProvider({ children }) {
   }, []);
 
   // ---- Accounts: add / delete ----
-  const addAccount = useCallback(({ label, emoji, color, groupId, currency }) => {
+  const addAccount = useCallback(({ label, emoji, color, groupId, currency, openingBalance }) => {
     const trimmed = (label ?? '').trim();
     if (!trimmed || !groupId) return null;
+    const parsedOpeningBalance = Number(openingBalance);
     const newAcc = {
       id: prefixedId('acc'),
       groupId,
       label: trimmed,
       emoji: (emoji ?? '💳').trim() || '💳',
       color: color ?? '#6b7280',
+      // This is a starting point for the account ledger, not income. It
+      // deliberately lives with the account so it cannot affect budgets or
+      // income/cash-flow reports.
+      openingBalance: Number.isFinite(parsedOpeningBalance) ? parsedOpeningBalance : 0,
+      openingBalanceDate: new Date().toISOString(),
       // Optional per-account currency. Falls back to the app-wide base so
       // legacy INR-only flows stay identical. New accounts opened
       // deliberately in USD/EUR/AED override this.
@@ -766,6 +772,18 @@ export function SettingsProvider({ children }) {
               currency: isKnownCurrency(patch.currency)
                 ? String(patch.currency).toUpperCase()
                 : (a.currency ?? baseCurrency),
+              ...(patch.openingBalance != null && Number.isFinite(Number(patch.openingBalance))
+                ? {
+                    openingBalance: Number(patch.openingBalance),
+                    openingBalanceDate: a.openingBalanceDate ?? new Date().toISOString(),
+                  }
+                : {}),
+              ...(patch.reconciliationBalance != null && Number.isFinite(Number(patch.reconciliationBalance))
+                ? {
+                    reconciliationBalance: Number(patch.reconciliationBalance),
+                    reconciledAt: new Date().toISOString(),
+                  }
+                : {}),
             }
           : a,
       ),

@@ -125,7 +125,11 @@ export default function EditTransactionModal({
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={styles.body}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <TransactionForm
             categories={categories}
             accounts={accounts}

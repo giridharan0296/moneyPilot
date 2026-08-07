@@ -19,7 +19,7 @@
 // Every tab that has its own list gets its own contextual FAB.
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
   Platform,
@@ -42,6 +42,15 @@ const INVEST_ACCENT = '#6366f1';
 export default function InvestmentsScreen({ navigation, route }) {
   const styles = useThemedStyles(makeStyles);
   const focusId = route?.params?.focusId ?? null;
+  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      'transactions:modalOpen',
+      (open) => setModalOpen(!!open),
+    );
+    return () => sub.remove();
+  }, []);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -92,18 +101,21 @@ export default function InvestmentsScreen({ navigation, route }) {
           add-flow discovery is identical across every tab that owns a
           list. Emits `transactions:openAdd` with `{ type: 'investment' }`;
           the mounted <TransactionsList> above listens and opens its
-          AddTransactionModal in investment mode. */}
-      <TouchableOpacity
-        style={[styles.fab, { backgroundColor: INVEST_ACCENT }]}
-        onPress={() =>
-          DeviceEventEmitter.emit('transactions:openAdd', { type: 'investment' })
-        }
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Add investment"
-      >
-        <AppIcon name="plus" size={26} color="#fff" strokeWidth={2.6} />
-      </TouchableOpacity>
+          AddTransactionModal in investment mode. Hidden while the modal
+          is open so it can't steal taps. */}
+      {!modalOpen && (
+        <TouchableOpacity
+          style={[styles.fab, { backgroundColor: INVEST_ACCENT }]}
+          onPress={() =>
+            DeviceEventEmitter.emit('transactions:openAdd', { type: 'investment' })
+          }
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Add investment"
+        >
+          <AppIcon name="plus" size={26} color="#fff" strokeWidth={2.6} />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }

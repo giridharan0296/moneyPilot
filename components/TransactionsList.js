@@ -3,7 +3,6 @@ import {
   Alert,
   DeviceEventEmitter,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   Text,
@@ -137,6 +136,20 @@ export default function TransactionsList({
   // `editing`  → existing transaction being edited (or null when closed)
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [addPrefill, setAddPrefill] = useState(null);
+
+  // Tell the parent tab (Transactions / Invest) to hide its FAB while a
+  // modal is open — otherwise the FAB can sit above the form on web and
+  // steal taps.
+  useEffect(() => {
+    DeviceEventEmitter.emit(
+      'transactions:modalOpen',
+      showAdd || editing !== null,
+    );
+    return () => {
+      DeviceEventEmitter.emit('transactions:modalOpen', false);
+    };
+  }, [showAdd, editing]);
 
   // ---- Focus-and-highlight (Search → row jump) ----
   //
@@ -169,6 +182,7 @@ export default function TransactionsList({
       'transactions:openAdd',
       (payload) => {
         if (payload?.type !== type) return;
+        setAddPrefill(payload?.prefill ?? null);
         setShowAdd(true);
       },
     );
@@ -192,14 +206,23 @@ export default function TransactionsList({
   // Special sentinel: brokerFilter === '__none__' filters to rows
   // without a broker set (legacy or intentional). Anything else
   // matches by exact brokerId.
+  //
+  // Always sort by createdAt DESC so "Recent" is newest-timestamp-first
+  // even when a row's time was edited, or demo/import data wasn't
+  // prepended in chronological order.
   const dateFilteredItems = filterByRange(items);
-  const filteredItems = (type === 'investment' && brokerFilter)
-    ? dateFilteredItems.filter((tx) =>
-        brokerFilter === '__none__'
-          ? !tx.brokerId
-          : tx.brokerId === brokerFilter,
-      )
-    : dateFilteredItems;
+  const filteredItems = useMemo(() => {
+    const list = (type === 'investment' && brokerFilter)
+      ? dateFilteredItems.filter((tx) =>
+          brokerFilter === '__none__'
+            ? !tx.brokerId
+            : tx.brokerId === brokerFilter,
+        )
+      : dateFilteredItems;
+    return [...list].sort(
+      (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0),
+    );
+  }, [dateFilteredItems, type, brokerFilter]);
 
   // ---- Derived ----
   // Sum in BASE CURRENCY. Foreign-currency rows contribute their frozen
@@ -256,6 +279,27 @@ export default function TransactionsList({
 
   // ---- Handlers ----
   const handleAdd = (values) => {
+    if (type === 'expense' && Array.isArray(values.splits) && values.splits.length > 0) {
+      const splitGroupId = `split_${Date.now()}`;
+      values.splits.forEach((split, index) => {
+        addTransaction('expense', {
+          id: `${splitGroupId}_${index}`,
+          amount: split.amount,
+          categoryId: split.categoryId,
+          subCategoryId: null,
+          accountId: values.accountId,
+          note: values.note,
+          voiceNote: index === 0 ? values.voiceNote ?? null : null,
+          createdAt: values.date.toISOString(),
+          currency: values.currency,
+          fxRate: values.fxRate,
+          amountInBase: split.amount * (Number(values.fxRate) || 1),
+          splitGroupId,
+        });
+      });
+      showToast(`Saved ${values.splits.length} expense splits`, { variant: 'success', duration: 1500 });
+      return;
+    }
     const newItem = {
       id: Date.now().toString(),
       amount: values.amount,
@@ -265,6 +309,9 @@ export default function TransactionsList({
       note: values.note,
       voiceNote: values.voiceNote ?? null,
       createdAt: values.date.toISOString(),
+      currency: values.currency,
+      fxRate: values.fxRate,
+      amountInBase: values.amountInBase,
       // Include brokerId ONLY for investment rows. Passing it through
       // on expense/income would clutter backups with meaningless
       // undefined fields; keeping this branch explicit also makes the
@@ -514,11 +561,11 @@ export default function TransactionsList({
     );
   };
 
+  // Modals must NOT sit inside KeyboardAvoidingView — nesting a RN Modal
+  // under KAV commonly causes "keyboard opens but typing doesn't land"
+  // on Android and web. Each modal owns its own KAV instead.
   return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={styles.root}>
       <FlatList
         ref={listRef}
         data={filteredItems}
@@ -661,37 +708,45 @@ export default function TransactionsList({
         }
       />
 
-      <EditTransactionModal
-        visible={editing !== null}
-        item={editing}
-        onClose={() => setEditing(null)}
-        categories={categories}
-        accounts={accounts}
-        accountGroups={accountGroups}
-        accentColor={accentColor}
-        type={type}
-        onSave={handleSaveEdit}
-        onDelete={handleDeleteEdit}
-      />
+      {editing !== null && (
+        <EditTransactionModal
+          visible
+          item={editing}
+          onClose={() => setEditing(null)}
+          categories={categories}
+          accounts={accounts}
+          accountGroups={accountGroups}
+          accentColor={accentColor}
+          type={type}
+          onSave={handleSaveEdit}
+          onDelete={handleDeleteEdit}
+        />
+      )}
 
       {/* New-transaction modal, opened by the parent Transactions screen's
           FAB. Uses the same `handleAdd` pipeline as the old inline form
           so all the follow-through logic (broker-default persistence,
           "hidden by filter" toast, voice-note handling) still runs. */}
-      <AddTransactionModal
-        visible={showAdd}
-        onClose={() => setShowAdd(false)}
-        categories={categories}
-        accounts={accounts}
-        accountGroups={accountGroups}
-        accentColor={accentColor}
-        type={type}
-        title={t.addFormTitle}
-        submitLabel={t.submitLabel}
-        notePlaceholder={t.notePlaceholder}
-        onAdd={handleAdd}
-      />
-    </KeyboardAvoidingView>
+      {showAdd && (
+        <AddTransactionModal
+          visible
+          onClose={() => {
+            setShowAdd(false);
+            setAddPrefill(null);
+          }}
+          categories={categories}
+          accounts={accounts}
+          accountGroups={accountGroups}
+          accentColor={accentColor}
+          type={type}
+          title={t.addFormTitle}
+          submitLabel={t.submitLabel}
+          notePlaceholder={t.notePlaceholder}
+          initialValues={addPrefill || undefined}
+          onAdd={handleAdd}
+        />
+      )}
+    </View>
   );
 }
 

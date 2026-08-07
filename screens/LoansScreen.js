@@ -54,6 +54,7 @@ const GROUPS = [
 
 export default function LoansScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { loans, summary, deleteLoan } = useLoans();
   const { showToast } = useToast();
   const [showClosed, setShowClosed] = useState(false);
@@ -63,16 +64,21 @@ export default function LoansScreen({ navigation }) {
       headerRight: () => (
         <TouchableOpacity
           onPress={() => navigation.navigate('LoanDetail', { mode: 'new' })}
-          hitSlop={8}
-          style={styles.headerBtn}
+          hitSlop={12}
+          style={{ paddingHorizontal: 8 }}
           accessibilityRole="button"
           accessibilityLabel="Add loan"
         >
-          <Text style={styles.headerBtnText}>+ New</Text>
+          <AppIcon
+            name="plus"
+            size={22}
+            color={themeColors.text.primary}
+            strokeWidth={2.4}
+          />
         </TouchableOpacity>
       ),
     });
-  }, [navigation]);
+  }, [navigation, themeColors.text.primary]);
 
   const visibleLoans = useMemo(
     () => (showClosed ? loans : loans.filter((l) => l.status !== 'closed')),
@@ -140,9 +146,7 @@ export default function LoansScreen({ navigation }) {
           </Text>
         </View>
 
-        {loans.length === 0 && (
-          <EmptyState onCreate={() => navigation.navigate('LoanDetail', { mode: 'new' })} />
-        )}
+        {loans.length === 0 && <EmptyState />}
 
         {GROUPS.map((group) => {
           const items = grouped[group.direction] ?? [];
@@ -167,16 +171,6 @@ export default function LoansScreen({ navigation }) {
             </View>
           );
         })}
-
-        {loans.length > 0 && (
-          <TouchableOpacity
-            onPress={() => navigation.navigate('LoanDetail', { mode: 'new' })}
-            style={styles.addBtn}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.addBtnText}>+ New loan</Text>
-          </TouchableOpacity>
-        )}
 
         {closedCount > 0 && (
           <TouchableOpacity
@@ -268,7 +262,7 @@ function LoanRow({ loan, onPress, onDelete }) {
   );
 }
 
-function EmptyState({ onCreate }) {
+function EmptyState() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   return (
@@ -279,11 +273,8 @@ function EmptyState({ onCreate }) {
       <Text style={styles.emptyTitle}>No loans tracked yet.</Text>
       <Text style={styles.emptySub}>
         Add a home / car / personal loan and log EMIs as they get paid.
-        Prepayments and closures are supported too.
+        Prepayments and closures are supported too. Tap + in the header to start.
       </Text>
-      <TouchableOpacity onPress={onCreate} style={styles.emptyBtn} activeOpacity={0.7}>
-        <Text style={styles.emptyBtnText}>+ Add your first loan</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -291,9 +282,6 @@ function EmptyState({ onCreate }) {
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
   container: { padding: spacing.xl, paddingBottom: 40 },
-
-  headerBtn: { paddingHorizontal: 12, paddingVertical: 6 },
-  headerBtnText: { color: '#2563eb', fontSize: 14, fontWeight: '700' },
 
   hero: {
     backgroundColor: c.bg.surface,
@@ -375,18 +363,6 @@ const makeStyles = (c) => ({
   },
   deleteText: { color: c.text.secondary, fontSize: 13, fontWeight: '700' },
 
-  addBtn: {
-    marginTop: spacing.md,
-    paddingVertical: spacing.md,
-    borderRadius: radii.lg,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#93c5fd',
-    borderStyle: 'dashed',
-    alignItems: 'center',
-  },
-  addBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 14 },
-
   toggleClosed: {
     marginTop: spacing.md,
     alignItems: 'center',
@@ -413,12 +389,5 @@ const makeStyles = (c) => ({
   },
   emptyIconWrap: { marginBottom: spacing.sm, opacity: 0.85 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: c.text.primary, marginTop: spacing.md },
-  emptySub: { fontSize: 13, color: c.text.secondary, textAlign: 'center', marginTop: 4, marginBottom: spacing.lg },
-  emptyBtn: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-    borderRadius: radii.lg,
-  },
-  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  emptySub: { fontSize: 13, color: c.text.secondary, textAlign: 'center', marginTop: 4 },
 });

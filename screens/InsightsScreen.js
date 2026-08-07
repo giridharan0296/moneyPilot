@@ -73,7 +73,7 @@ export default function InsightsScreen({ navigation }) {
   const {
     ready, insights, generatedAt, provider, model,
     loading, error, generate, configured,
-    summary, summaryJson, confirmBeforeSend,
+    summary, summaryJson, confirmBeforeSend, showSampleInsights, isSample,
   } = useAiInsights();
 
   // Modal state. Two independent flows use the same modal component:
@@ -132,7 +132,7 @@ export default function InsightsScreen({ navigation }) {
 
   if (!ready) return null; // brief flicker guard on cold-start
 
-  if (!configured) {
+  if (!configured && !isSample) {
     return (
       <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
         <View style={[styles.ctaCard, { borderColor: '#6366f1' + '40' }]}>
@@ -163,6 +163,14 @@ export default function InsightsScreen({ navigation }) {
             <Text style={styles.ctaButtonText}>Open Settings</Text>
             <AppIcon name="arrow-right" size={16} color="#fff" strokeWidth={2.4} />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.sampleButton}
+            onPress={showSampleInsights}
+            activeOpacity={0.85}
+          >
+            <AppIcon name="eye" size={16} color="#6366f1" strokeWidth={2.3} />
+            <Text style={styles.sampleButtonText}>View sample insights</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     );
@@ -178,35 +186,46 @@ export default function InsightsScreen({ navigation }) {
       <View style={styles.metaRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.metaTitle}>
-            {hasInsights ? 'Your latest insights' : 'Generate insights'}
+            {isSample ? 'Sample insights' : hasInsights ? 'Your latest insights' : 'Generate insights'}
           </Text>
           {generatedAt && (
             <Text style={styles.metaSub}>
               Updated {relativeAge(generatedAt)}
-              {model ? ` · ${provider}/${model}` : ''}
+              {isSample ? ' · local examples' : model ? ` · ${provider}/${model}` : ''}
             </Text>
           )}
         </View>
         <TouchableOpacity
           style={[styles.refreshBtn, loading && styles.refreshBtnDisabled]}
           disabled={loading}
-          onPress={handleGenerate}
+          onPress={isSample
+            ? () => navigation.navigate('More', { screen: 'Settings' })
+            : handleGenerate}
           activeOpacity={0.8}
         >
           {loading
             ? <ActivityIndicator size="small" color="#fff" />
             : <AppIcon name="sparkles" size={16} color="#fff" strokeWidth={2.4} />}
           <Text style={styles.refreshText}>
-            {loading ? 'Analyzing…' : hasInsights ? 'Refresh' : 'Generate'}
+            {loading ? 'Analyzing…' : isSample ? 'Set up AI' : hasInsights ? 'Refresh' : 'Generate'}
           </Text>
         </TouchableOpacity>
       </View>
+
+      {isSample && (
+        <View style={styles.sampleBanner}>
+          <AppIcon name="info" size={16} color="#4338ca" strokeWidth={2.2} />
+          <Text style={styles.sampleBannerText}>
+            These are example insights only. No financial data was analyzed or sent anywhere.
+          </Text>
+        </View>
+      )}
 
       {/* Preview-data chip — always visible so the user can inspect
           the exact payload at any time, independently of the
           confirmBeforeSend preference. Kept small and secondary so it
           doesn't compete with the primary Generate CTA above. */}
-      <TouchableOpacity
+      {!isSample && <TouchableOpacity
         style={styles.previewChip}
         onPress={openInspectPreview}
         activeOpacity={0.7}
@@ -217,7 +236,7 @@ export default function InsightsScreen({ navigation }) {
         <Text style={styles.previewChipText}>
           Preview data sent to AI
         </Text>
-      </TouchableOpacity>
+      </TouchableOpacity>}
 
       {/* Priority pills — quick severity scan */}
       {hasInsights && (
@@ -280,8 +299,9 @@ export default function InsightsScreen({ navigation }) {
       ) : null}
 
       <Text style={styles.footer}>
-        Insights are AI-generated from a summary of your finances. Always
-        double-check numbers before acting.
+        {isSample
+          ? 'Sample insights are illustrative only and are not based on your finances.'
+          : 'Insights are AI-generated from a summary of your finances. Always double-check numbers before acting.'}
       </Text>
 
       {/* Preview / confirm-before-send modal.
@@ -332,6 +352,18 @@ const makeStyles = (c) => ({
     borderRadius: 12,
   },
   ctaButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  sampleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#6366f1' + '55',
+    marginTop: 10,
+  },
+  sampleButtonText: { color: '#6366f1', fontWeight: '700', fontSize: 14 },
 
   // ---- Meta / refresh ----
   metaRow: {
@@ -353,6 +385,18 @@ const makeStyles = (c) => ({
   },
   refreshBtnDisabled: { opacity: 0.7 },
   refreshText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  sampleBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#6366f1' + '12',
+    borderWidth: 1,
+    borderColor: '#6366f1' + '33',
+    marginBottom: 12,
+  },
+  sampleBannerText: { flex: 1, color: '#4338ca', fontSize: 12, lineHeight: 17 },
 
   // "Preview data sent to AI" chip — a low-key secondary action that
   // opens the PreviewSummaryModal in read-only mode. Kept as a small

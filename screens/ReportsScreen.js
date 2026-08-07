@@ -51,6 +51,16 @@ function toBaseAmountRows(list, fxRates, baseCurrency) {
 
 const CHART_WIDTH = Dimensions.get('window').width - 64; // matches container padding
 
+function latestCompletedFinancialYear() {
+  const now = new Date();
+  const endYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+  return {
+    label: `FY ${endYear - 1}-${String(endYear).slice(-2)}`,
+    start: new Date(endYear - 1, 3, 1),
+    end: new Date(endYear, 3, 1),
+  };
+}
+
 export default function ReportsScreen() {
   const styles = useThemedStyles(makeStyles);
   const { categories, accounts, baseCurrency, fxRates, brokers } = useSettings();
@@ -111,6 +121,27 @@ export default function ReportsScreen() {
     [filtered.expenses],
   );
 
+  // Indian financial year: 1 April through 31 March. This is independent
+  // of the app-wide date filter so the report remains a complete annual view.
+  const financialYear = useMemo(() => {
+    const fy = latestCompletedFinancialYear();
+    const inFY = (tx) => {
+      const date = new Date(tx.createdAt);
+      return date >= fy.start && date < fy.end;
+    };
+    const fyExpenses = toBaseAmountRows(expenses.filter(inFY), fxRates, baseCurrency);
+    const fyIncome = toBaseAmountRows(income.filter(inFY), fxRates, baseCurrency);
+    const fyInvestments = toBaseAmountRows(investments.filter(inFY), fxRates, baseCurrency);
+    const fiscalStats = periodStats(fyExpenses, fyIncome);
+    return {
+      label: fy.label,
+      income: fiscalStats.totalIncome,
+      expenses: fiscalStats.totalExpense,
+      saved: fiscalStats.net,
+      investments: fyInvestments.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0),
+    };
+  }, [expenses, income, investments, fxRates, baseCurrency]);
+
   const savingsPct = Math.round(stats.savingsRate * 100);
   const savingsColor =
     savingsPct >= 20 ? '#059669'
@@ -153,6 +184,19 @@ export default function ReportsScreen() {
           color={savingsColor}
           raw
         />
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{financialYear.label} summary</Text>
+        <Text style={styles.cardSub}>
+          Completed financial year · 1 April to 31 March.
+        </Text>
+        <View style={styles.financialYearGrid}>
+          <YearMetric label="Income" value={financialYear.income} color="#059669" baseCurrency={baseCurrency} />
+          <YearMetric label="Expenses" value={financialYear.expenses} color="#dc2626" baseCurrency={baseCurrency} />
+          <YearMetric label="Saved" value={financialYear.saved} color="#0ea5e9" baseCurrency={baseCurrency} />
+          <YearMetric label="Invested" value={financialYear.investments} color="#7c3aed" baseCurrency={baseCurrency} />
+        </View>
       </View>
 
       {/* CATEGORY BREAKDOWN */}
@@ -310,6 +354,18 @@ function StatCard({ label, value, color, baseCurrency, raw = false }) {
   );
 }
 
+function YearMetric({ label, value, color, baseCurrency }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.financialYearMetric}>
+      <Text style={styles.financialYearLabel}>{label}</Text>
+      <Text style={[styles.financialYearValue, { color }]} numberOfLines={1}>
+        {formatMoneyCurrency(value, baseCurrency, { decimals: 0 })}
+      </Text>
+    </View>
+  );
+}
+
 function formatDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, {
@@ -388,6 +444,31 @@ const makeStyles = (c) => ({
     fontSize: 12,
     color: c.text.secondary,
     marginTop: 2,
+  },
+  financialYearGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  financialYearMetric: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: radii.md,
+    padding: spacing.sm,
+  },
+  financialYearLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.text.secondary,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  financialYearValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 4,
   },
   emptyInline: {
     fontSize: 13,

@@ -123,7 +123,16 @@ export function NetWorthProvider({ children }) {
   }, [history, ready]);
 
   // ---- Assets: CRUD ----
-  const addAsset = useCallback(({ name, categoryId, value, note, currency, valueInBase, fxRate }) => {
+  const addAsset = useCallback(({
+    name,
+    categoryId,
+    value,
+    note,
+    currency,
+    valueInBase,
+    fxRate,
+    linkedAccountId,
+  }) => {
     const trimmed = (name ?? '').trim();
     const amount = Number(value);
     if (!trimmed || !isFinite(amount) || amount < 0) return null;
@@ -145,6 +154,9 @@ export function NetWorthProvider({ children }) {
       // above for the aggregate-side twin of this fix.
       fxRate:      (fxRate      != null && isFinite(Number(fxRate))      && Number(fxRate) > 0) ? Number(fxRate)      : null,
       valueInBase: (valueInBase != null && isFinite(Number(valueInBase)))                       ? Number(valueInBase) : null,
+      // Optional mirror of a Settings account ledger. AccountNetWorthSync
+      // keeps these in lock-step with opening balance + activity.
+      linkedAccountId: linkedAccountId ?? null,
       createdAt: now,
       updatedAt: now,
     };

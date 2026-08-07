@@ -65,7 +65,7 @@ function formatDateTime(iso) {
 export default function PortfolioScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const { holdings, summary, clearAll, refreshLivePrices, pricesUpdatedAt } = usePortfolio();
-  const { investments } = useTransactions();
+  const { investments, income } = useTransactions();
   const { baseCurrency, fxRates, brokers } = useSettings();
   const { showToast } = useToast();
   const [refreshing, setRefreshing] = useState(false);
@@ -109,6 +109,52 @@ export default function PortfolioScreen({ navigation }) {
     () => [...holdings].sort((a, b) => b.currentValue - a.currentValue),
     [holdings],
   );
+
+  // Actual SWP payouts only. Dividends, interest, and other investment
+  // income remain separate income categories and do not affect this card.
+  const swpIncome = useMemo(() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    let thisMonth = 0;
+    let lastSixMonths = 0;
+    let count = 0;
+    for (const tx of income) {
+      if (tx.categoryId !== 'investments' || tx.subCategoryId !== 'income_swp') continue;
+      const amount = baseAmountOf(tx, fxRates, baseCurrency, 'amount');
+      const date = new Date(tx.createdAt);
+      if (date >= sixMonthsAgo) lastSixMonths += amount;
+      if (date >= monthStart) {
+        thisMonth += amount;
+        count += 1;
+      }
+    }
+    return {
+      thisMonth,
+      monthlyAverage: lastSixMonths / 6,
+      count,
+    };
+  }, [income, fxRates, baseCurrency]);
+
+  const misIncome = useMemo(() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    let thisMonth = 0;
+    let lastSixMonths = 0;
+    let count = 0;
+    for (const tx of income) {
+      if (tx.categoryId !== 'investments' || tx.subCategoryId !== 'income_mis') continue;
+      const amount = baseAmountOf(tx, fxRates, baseCurrency, 'amount');
+      const date = new Date(tx.createdAt);
+      if (date >= sixMonthsAgo) lastSixMonths += amount;
+      if (date >= monthStart) {
+        thisMonth += amount;
+        count += 1;
+      }
+    }
+    return { thisMonth, monthlyAverage: lastSixMonths / 6, count };
+  }, [income, fxRates, baseCurrency]);
 
   // Reconciliation: money the user LOGGED into a broker (from
   // investment transactions) vs the invested COST of holdings imported
@@ -293,6 +339,61 @@ export default function PortfolioScreen({ navigation }) {
           {pricesUpdatedAt
             ? `Live prices · ${formatDateTime(pricesUpdatedAt)}`
             : 'Prices from last import — tap Refresh for live quotes'}
+        </Text>
+      </View>
+
+      {/* Actual SWP payouts. Log payouts as Income → Investments → SWP Payout;
+          do not use negative
+          investment entries because investments represent cash contributed. */}
+      <View style={styles.incomeCard}>
+        <View style={styles.incomeHeader}>
+          <View>
+            <Text style={styles.incomeTitle}>SWP payouts</Text>
+            <Text style={styles.incomeSub}>Actual withdrawals received in your cash account</Text>
+          </View>
+          <AppIcon name="wallet" size={18} color="#059669" strokeWidth={2.1} />
+        </View>
+        <View style={styles.incomeMetrics}>
+          <View style={styles.incomeMetric}>
+            <Text style={styles.incomeMetricLabel}>This month</Text>
+            <Text style={styles.incomeMetricValue}>{formatMoney(swpIncome.thisMonth)}</Text>
+          </View>
+          <View style={styles.incomeMetricDivider} />
+          <View style={styles.incomeMetric}>
+            <Text style={styles.incomeMetricLabel}>6-month average</Text>
+            <Text style={styles.incomeMetricValue}>{formatMoney(swpIncome.monthlyAverage)}</Text>
+          </View>
+        </View>
+        <Text style={styles.incomeHint}>
+          {swpIncome.thisMonth > 0
+            ? `${swpIncome.count} SWP payout${swpIncome.count === 1 ? '' : 's'} logged this month.`
+            : 'Log actual payouts as Income → Investments → SWP Payout.'}
+        </Text>
+      </View>
+
+      <View style={[styles.incomeCard, styles.misIncomeCard]}>
+        <View style={styles.incomeHeader}>
+          <View>
+            <Text style={styles.incomeTitle}>MIS interest payouts</Text>
+            <Text style={styles.incomeSub}>Actual fixed-income interest received in your cash account</Text>
+          </View>
+          <AppIcon name="wallet" size={18} color="#0d9488" strokeWidth={2.1} />
+        </View>
+        <View style={styles.incomeMetrics}>
+          <View style={styles.incomeMetric}>
+            <Text style={styles.incomeMetricLabel}>This month</Text>
+            <Text style={[styles.incomeMetricValue, styles.misIncomeValue]}>{formatMoney(misIncome.thisMonth)}</Text>
+          </View>
+          <View style={styles.incomeMetricDivider} />
+          <View style={styles.incomeMetric}>
+            <Text style={styles.incomeMetricLabel}>6-month average</Text>
+            <Text style={[styles.incomeMetricValue, styles.misIncomeValue]}>{formatMoney(misIncome.monthlyAverage)}</Text>
+          </View>
+        </View>
+        <Text style={styles.incomeHint}>
+          {misIncome.thisMonth > 0
+            ? `${misIncome.count} MIS interest payout${misIncome.count === 1 ? '' : 's'} logged this month.`
+            : 'Log actual interest as Income → Investments → MIS Interest Payout.'}
         </Text>
       </View>
 
@@ -519,6 +620,30 @@ const makeStyles = (c) => ({
   heroPnlPct: { fontSize: 12, fontWeight: '700' },
   heroSub:    { color: '#9ca3af', fontSize: 12, marginTop: 10 },
   heroLive:   { color: '#a5b4fc', fontSize: 11, marginTop: 6, fontWeight: '600' },
+
+  incomeCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderLeftWidth: 4,
+    borderLeftColor: c.accent.income,
+  },
+  misIncomeCard: {
+    borderLeftColor: '#0d9488',
+  },
+  incomeHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  incomeTitle: { fontSize: 15, fontWeight: '700', color: c.text.primary },
+  incomeSub: { fontSize: 11, color: c.text.secondary, marginTop: 2 },
+  incomeMetrics: { flexDirection: 'row', marginTop: 14 },
+  incomeMetric: { flex: 1 },
+  incomeMetricLabel: { fontSize: 10, fontWeight: '700', color: c.text.muted, textTransform: 'uppercase', letterSpacing: 0.4 },
+  incomeMetricValue: { fontSize: 17, fontWeight: '800', color: c.accent.income, marginTop: 3 },
+  misIncomeValue: { color: '#0d9488' },
+  incomeMetricDivider: { width: 1, backgroundColor: c.border.subtle, marginHorizontal: 12 },
+  incomeHint: { fontSize: 11, lineHeight: 16, color: c.text.secondary, marginTop: 12 },
 
   // ---- Section titles ----
   sectionTitle: {

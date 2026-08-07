@@ -34,10 +34,12 @@ import { useNetWorth } from '../contexts/NetWorthContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 import {
   computeFire,
   corpusSeries,
   averageMonthlyAmount,
+  effectiveAnnualExpense,
 } from '../lib/fire';
 import { radii, spacing } from '../lib/theme';
 
@@ -63,6 +65,11 @@ export default function FireCalculatorScreen() {
   const [expectedReturn, setExpectedReturn] = useState('12');
   const [inflation,      setInflation]      = useState('6');
   const [withdrawal,     setWithdrawal]     = useState('4');
+  // Modern refinements — hidden behind "Advanced" so defaults stay simple.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [sipStepUp, setSipStepUp] = useState('10');
+  const [retireSpendPct, setRetireSpendPct] = useState('100');
+  const [otherIncome, setOtherIncome] = useState('0');
 
   // ---- Auto-fill --------------------------------------------------------
   const suggestedSavings = useMemo(() => {
@@ -96,42 +103,60 @@ export default function FireCalculatorScreen() {
     setExpectedReturn('12');
     setInflation('6');
     setWithdrawal('4');
+    setSipStepUp('10');
+    setRetireSpendPct('100');
+    setOtherIncome('0');
   };
 
+  const fireInputs = useMemo(() => ({
+    currentAge:          Number(currentAge)     || 0,
+    retirementAge:       Number(retirementAge)  || 0,
+    currentSavings:      Number(currentSavings) || 0,
+    monthlyInvestment:   Number(monthlySIP)     || 0,
+    monthlyExpense:      Number(monthlyExpense) || 0,
+    expectedReturnPct:   Number(expectedReturn) || 0,
+    inflationPct:        Number(inflation)      || 0,
+    withdrawalPct:       Number(withdrawal)     || 0,
+    sipStepUpPct:        Number(sipStepUp)      || 0,
+    retirementSpendPct:  Number(retireSpendPct) || 100,
+    otherMonthlyIncome:  Number(otherIncome)    || 0,
+  }), [
+    currentAge, retirementAge, currentSavings, monthlySIP, monthlyExpense,
+    expectedReturn, inflation, withdrawal, sipStepUp, retireSpendPct, otherIncome,
+  ]);
+
   // ---- Derived -----------------------------------------------------------
-  const result = useMemo(
-    () => computeFire({
-      currentAge:        Number(currentAge)     || 0,
-      retirementAge:     Number(retirementAge)  || 0,
-      currentSavings:    Number(currentSavings) || 0,
-      monthlyInvestment: Number(monthlySIP)     || 0,
-      monthlyExpense:    Number(monthlyExpense) || 0,
-      expectedReturnPct: Number(expectedReturn) || 0,
-      inflationPct:      Number(inflation)      || 0,
-      withdrawalPct:     Number(withdrawal)     || 0,
-    }),
-    [currentAge, retirementAge, currentSavings, monthlySIP, monthlyExpense,
-     expectedReturn, inflation, withdrawal],
+  const result = useMemo(() => computeFire(fireInputs), [fireInputs]);
+
+  const annualForSeries = useMemo(
+    () =>
+      effectiveAnnualExpense({
+        monthlyExpense: fireInputs.monthlyExpense,
+        retirementSpendPct: fireInputs.retirementSpendPct,
+        otherMonthlyIncome: fireInputs.otherMonthlyIncome,
+      }),
+    [fireInputs],
   );
 
   const series = useMemo(
-    () => corpusSeries({
-      currentSavings:    Number(currentSavings) || 0,
-      monthlyInvestment: Number(monthlySIP)     || 0,
-      expectedReturnPct: Number(expectedReturn) || 0,
-      inflationPct:      Number(inflation)      || 0,
-      annualExpense:     (Number(monthlyExpense) || 0) * 12,
-      withdrawalPct:     Number(withdrawal)     || 0,
-      currentAge:        Number(currentAge)     || 0,
-      years:             Math.max(1, (Number(retirementAge) || 0) - (Number(currentAge) || 0)),
-    }),
-    [currentAge, retirementAge, currentSavings, monthlySIP, monthlyExpense,
-     expectedReturn, inflation, withdrawal],
+    () =>
+      corpusSeries({
+        currentSavings:    fireInputs.currentSavings,
+        monthlyInvestment: fireInputs.monthlyInvestment,
+        expectedReturnPct: fireInputs.expectedReturnPct,
+        inflationPct:      fireInputs.inflationPct,
+        annualExpense:     annualForSeries,
+        withdrawalPct:     fireInputs.withdrawalPct,
+        currentAge:        fireInputs.currentAge,
+        years:             Math.max(1, fireInputs.retirementAge - fireInputs.currentAge),
+        sipStepUpPct:      fireInputs.sipStepUpPct,
+      }),
+    [fireInputs, annualForSeries],
   );
 
   const rec = recommendation(result, themeColors);
-  const hasBasicInputs = (Number(monthlyExpense) || 0) > 0
-                     && (Number(retirementAge) || 0) > (Number(currentAge) || 0);
+  const hasBasicInputs = fireInputs.monthlyExpense > 0
+                     && fireInputs.retirementAge > fireInputs.currentAge;
 
   return (
     <ScrollView
@@ -203,16 +228,62 @@ export default function FireCalculatorScreen() {
 
       {/* -- Assumptions card ---------------------------------------------- */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Assumptions</Text>
+        <View style={styles.cardTitleRow}>
+          <Text style={styles.cardTitle}>Assumptions</Text>
+          <HelpSheet
+            title="FIRE assumptions"
+            summary="Your FIRE estimate is a scenario, not a guarantee. Change the assumptions to match your situation."
+            items={['Return is the expected long-term annual growth rate.', 'Inflation reduces future purchasing power.', 'A 4% withdrawal rate equals about 25× annual expenses.', 'SIP step-up increases investments every year; other retirement income reduces the corpus needed.']}
+          />
+        </View>
         <View style={styles.rowInputs}>
           <SmallNumInput label="Return"     value={expectedReturn} onChangeText={setExpectedReturn} suffix="%" />
           <SmallNumInput label="Inflation"  value={inflation}      onChangeText={setInflation}      suffix="%" />
           <SmallNumInput label="Withdraw"   value={withdrawal}     onChangeText={setWithdrawal}     suffix="%" />
         </View>
-        <Text style={styles.assumptionHint}>
-          Defaults: Indian equity long-term (12%), inflation (6%), 4% safe
-          withdrawal (25× annual expense).
-        </Text>
+
+        <TouchableOpacity
+          onPress={() => setShowAdvanced((v) => !v)}
+          activeOpacity={0.7}
+          style={styles.advancedToggle}
+          accessibilityRole="button"
+          accessibilityLabel="Advanced FIRE assumptions"
+        >
+          <Text style={styles.advancedToggleText}>
+            {showAdvanced ? 'Hide' : 'Show'} advanced assumptions
+          </Text>
+          <AppIcon
+            name={showAdvanced ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color="#2563eb"
+            strokeWidth={2.2}
+          />
+        </TouchableOpacity>
+
+        {showAdvanced ? (
+          <View style={styles.advancedBlock}>
+            <View style={styles.rowInputs}>
+              <SmallNumInput
+                label="SIP step-up"
+                value={sipStepUp}
+                onChangeText={setSipStepUp}
+                suffix="%/yr"
+              />
+              <SmallNumInput
+                label="Retire spend"
+                value={retireSpendPct}
+                onChangeText={setRetireSpendPct}
+                suffix="%"
+              />
+            </View>
+            <MoneyInput
+              label="Other retirement income (monthly)"
+              value={otherIncome}
+              onChangeText={setOtherIncome}
+              hint="Pension, rental, part-time — reduces corpus you need"
+            />
+          </View>
+        ) : null}
       </View>
 
       {/* -- Recommendation banner ----------------------------------------- */}
@@ -315,11 +386,43 @@ export default function FireCalculatorScreen() {
               hint={
                 result.requiredSIP === 0
                   ? "You're already there — no more SIP needed"
-                  : `To hit target by age ${retirementAge}`
+                  : fireInputs.sipStepUpPct > 0
+                    ? `Starting SIP (then +${fireInputs.sipStepUpPct}%/yr)`
+                    : `To hit target by age ${retirementAge}`
               }
               tint={themeColors.accent.expense}
             />
           </View>
+
+          <View style={styles.gridRow}>
+            <ResultTile
+              label="Coast FIRE"
+              value={result.coastFire}
+              hint={
+                result.canCoast
+                  ? 'Already there — you can stop SIPs and still hit FI'
+                  : 'Corpus needed today with ₹0 further SIPs'
+              }
+              tint={themeColors.accent.investment}
+            />
+            <ResultTile
+              label="Effective annual spend"
+              value={result.annualExpense}
+              hint={
+                result.annualExpenseToday !== result.annualExpense
+                  ? `After retire-spend % & other income (was ₹${compact(result.annualExpenseToday)})`
+                  : 'Expense used for FIRE number'
+              }
+              tint={themeColors.accent.primary}
+            />
+          </View>
+
+          {fireInputs.sipStepUpPct > 0 && fireInputs.monthlyInvestment > 0 ? (
+            <Text style={styles.stepUpNote}>
+              With {fireInputs.sipStepUpPct}% annual step-up, your SIP grows to about{' '}
+              ₹{compact(result.finalMonthlySIP)}/mo near retirement.
+            </Text>
+          ) : null}
 
           {/* Growth chart */}
           <View style={styles.card}>
@@ -343,7 +446,9 @@ export default function FireCalculatorScreen() {
 
       {/* -- Disclaimer ---------------------------------------------------- */}
       <Text style={styles.footer}>
-        This is a projection based on constant returns and inflation.
+        This is a projection based on constant returns and inflation, with
+        optional SIP step-up and retirement-spend adjustments. Not advice —
+        sequence-of-returns risk and taxes can change outcomes.
         Real markets fluctuate — treat this as directional, not a promise.
       </Text>
     </ScrollView>
@@ -631,6 +736,7 @@ const makeStyles = (c) => ({
     fontWeight: '800',
     color: c.text.primary,
   },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center' },
 
   rowInputs: {
     flexDirection: 'row',
@@ -689,6 +795,28 @@ const makeStyles = (c) => ({
     color: c.text.muted,
     fontStyle: 'italic',
     marginTop: -4,
+  },
+  advancedToggle: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+  },
+  advancedToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#2563eb',
+  },
+  advancedBlock: {
+    gap: 10,
+    paddingTop: 4,
+  },
+  stepUpNote: {
+    fontSize: 12,
+    color: c.text.secondary,
+    lineHeight: 17,
+    marginBottom: 4,
   },
 
   recBanner: {

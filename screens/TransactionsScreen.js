@@ -82,6 +82,18 @@ export default function TransactionsScreen({ route }) {
       : 'expense'),
   );
 
+  // True while either Income or Expense has an add/edit modal open.
+  // Used to hide the FAB so it can't sit above the modal and steal taps.
+  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      'transactions:modalOpen',
+      (open) => setModalOpen(!!open),
+    );
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     const t = route?.params?.initialTab;
     if (TAB_KEYS.includes(t) && t !== activeTab) setActiveTab(t);
@@ -161,8 +173,8 @@ export default function TransactionsScreen({ route }) {
           style={[
             styles.pane,
             activeTab === 'income' ? styles.paneVisible : styles.paneHidden,
+            { pointerEvents: activeTab === 'income' ? 'auto' : 'none' },
           ]}
-          pointerEvents={activeTab === 'income' ? 'auto' : 'none'}
         >
           <IncomeScreen
             route={{
@@ -176,8 +188,8 @@ export default function TransactionsScreen({ route }) {
           style={[
             styles.pane,
             activeTab === 'expense' ? styles.paneVisible : styles.paneHidden,
+            { pointerEvents: activeTab === 'expense' ? 'auto' : 'none' },
           ]}
-          pointerEvents={activeTab === 'expense' ? 'auto' : 'none'}
         >
           <ExpensesScreen
             route={{
@@ -193,21 +205,24 @@ export default function TransactionsScreen({ route }) {
           "+" reads as "add THIS type" — green on income, red on expense.
           Tapping emits `transactions:openAdd` which the mounted child
           TransactionsList picks up and translates into opening its own
-          AddTransactionModal. */}
-      <TouchableOpacity
-        style={[
-          styles.fab,
-          { bottom: fabBottom, right: 20, backgroundColor: activeTint },
-        ]}
-        onPress={() =>
-          DeviceEventEmitter.emit('transactions:openAdd', { type: activeTab })
-        }
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel={`Add ${TAB_META[activeTab].label.toLowerCase()}`}
-      >
-        <AppIcon name="plus" size={26} color="#fff" strokeWidth={2.6} />
-      </TouchableOpacity>
+          AddTransactionModal. Hidden while a modal is open so it can't
+          sit above the form and steal taps (esp. on web). */}
+      {!modalOpen && (
+        <TouchableOpacity
+          style={[
+            styles.fab,
+            { bottom: fabBottom, right: 20, backgroundColor: activeTint },
+          ]}
+          onPress={() =>
+            DeviceEventEmitter.emit('transactions:openAdd', { type: activeTab })
+          }
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={`Add ${TAB_META[activeTab].label.toLowerCase()}`}
+        >
+          <AppIcon name="plus" size={26} color="#fff" strokeWidth={2.6} />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }

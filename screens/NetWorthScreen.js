@@ -39,7 +39,8 @@ import {
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import AppIcon from '../components/AppIcon';
 import NetWorthChart from '../components/NetWorthChart';
 import {
   CURRENCIES,
@@ -163,7 +164,7 @@ export default function NetWorthScreen() {
           onAdd={addAsset}
           onUpdate={updateAsset}
           onDelete={undoableDeleteAsset}
-          emptyMessage="No assets yet. Add cash, property, gold, or anything else you own."
+          emptyMessage="No assets yet. Tap + to add cash, property, gold, or anything else you own."
           accent="#059669"
           baseCurrency={baseCurrency}
           fxRates={fxRates}
@@ -183,7 +184,7 @@ export default function NetWorthScreen() {
           onAdd={addLiability}
           onUpdate={updateLiability}
           onDelete={undoableDeleteLiability}
-          emptyMessage="No liabilities. If you have any loans or credit balances, add them here."
+          emptyMessage="No liabilities. Tap + to add loans or credit balances."
           accent="#dc2626"
           baseCurrency={baseCurrency}
           fxRates={fxRates}
@@ -222,6 +223,7 @@ function ItemSection({
   fxRates,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -235,6 +237,25 @@ function ItemSection({
         <Text style={[styles.sectionTotal, { color: accent }]}>
           {formatMoneyCurrency(total, baseCurrency)}
         </Text>
+        {!adding ? (
+          <TouchableOpacity
+            onPress={() => { setEditingId(null); setAdding(true); }}
+            hitSlop={6}
+            style={[
+              styles.sectionAddBtn,
+              { borderColor: themeColors.accent.income },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Add ${title.toLowerCase().replace(/s$/, '')}`}
+          >
+            <AppIcon
+              name="plus"
+              size={16}
+              color={themeColors.accent.income}
+              strokeWidth={2.4}
+            />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {items.length === 0 && !adding && (
@@ -257,13 +278,31 @@ function ItemSection({
               accent={accent}
               onCancel={() => setEditingId(null)}
               onSubmit={(patch) => {
-                onUpdate(item.id, patch);
+                onUpdate(item.id, {
+                  ...patch,
+                  // Keep the account mirror link even if the form can't edit it.
+                  ...(item.linkedAccountId
+                    ? {
+                        linkedAccountId: item.linkedAccountId,
+                        categoryId: 'cash',
+                        [amountKey]: item[amountKey],
+                      }
+                    : {}),
+                });
                 setEditingId(null);
               }}
               onDelete={() => {
+                if (item.linkedAccountId) {
+                  Alert.alert(
+                    'Synced from account',
+                    'This asset is linked to a bank/cash account. Delete or edit the account instead.',
+                  );
+                  return;
+                }
                 setEditingId(null);
                 onDelete(item);
               }}
+              lockedFromAccount={Boolean(item.linkedAccountId)}
               baseCurrency={baseCurrency}
               fxRates={fxRates}
             />
@@ -282,7 +321,11 @@ function ItemSection({
             <Text style={styles.itemEmoji}>{cat?.emoji ?? '📦'}</Text>
             <View style={styles.itemMiddle}>
               <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemCategory}>{cat?.label ?? 'Other'}</Text>
+              <Text style={styles.itemCategory}>
+                {item.linkedAccountId
+                  ? `${cat?.label ?? 'Other'} · from account`
+                  : (cat?.label ?? 'Other')}
+              </Text>
               {item.note ? (
                 <Text style={styles.itemNote} numberOfLines={1}>{item.note}</Text>
               ) : null}
@@ -320,17 +363,7 @@ function ItemSection({
           baseCurrency={baseCurrency}
           fxRates={fxRates}
         />
-      ) : (
-        <TouchableOpacity
-          style={[styles.addButton, { borderColor: accent + '55' }]}
-          onPress={() => setAdding(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.addButtonText, { color: accent }]}>
-            + Add {title.toLowerCase().replace(/s$/, '')}
-          </Text>
-        </TouchableOpacity>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -350,6 +383,7 @@ function ItemForm({
   onCancel,
   onSubmit,
   onDelete,
+  lockedFromAccount = false,
   baseCurrency,
   fxRates,
 }) {
@@ -426,31 +460,38 @@ function ItemForm({
       />
 
       <Text style={styles.formLabel}>Category</Text>
-      <View style={styles.chipRow}>
-        {categories.map((c) => {
-          const active = categoryId === c.id;
-          return (
-            <TouchableOpacity
-              key={c.id}
-              style={[
-                styles.chip,
-                active && { borderColor: c.color, backgroundColor: c.color + '20' },
-              ]}
-              onPress={() => setCategoryId(c.id)}
-            >
-              <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
-                {c.emoji}  {c.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {lockedFromAccount ? (
+        <Text style={styles.itemNote}>
+          Synced from your account ledger. Balance updates automatically.
+        </Text>
+      ) : (
+        <View style={styles.chipRow}>
+          {categories.map((c) => {
+            const active = categoryId === c.id;
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={[
+                  styles.chip,
+                  active && { borderColor: c.color, backgroundColor: c.color + '20' },
+                ]}
+                onPress={() => setCategoryId(c.id)}
+              >
+                <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
+                  {c.emoji}  {c.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
 
       <Text style={styles.formLabel}>{amountLabel}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, lockedFromAccount && { opacity: 0.6 }]}
         value={amount}
         onChangeText={setAmount}
+        editable={!lockedFromAccount}
         keyboardType="decimal-pad"
         placeholder="0"
         placeholderTextColor="#9ca3af"
@@ -620,10 +661,20 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
+    gap: 8,
   },
   sectionTitle:    { fontSize: 16, fontWeight: '700', color: c.text.primary },
   sectionSubtitle: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
   sectionTotal:    { fontSize: 16, fontWeight: '800' },
+  sectionAddBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
 
   emptyMessage: {
     fontSize: 13, color: c.text.secondary,
@@ -651,17 +702,6 @@ const makeStyles = (c) => ({
   itemNote:     { fontSize: 11, color: c.text.muted, marginTop: 2 },
   itemAmount:   { fontSize: 15, fontWeight: '700', color: c.text.primary, marginLeft: 12 },
   itemAmountSub:{ fontSize: 11, color: c.text.secondary, fontStyle: 'italic', marginTop: 2 },
-
-  // Add button
-  addButton: {
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  addButtonText: { fontSize: 13, fontWeight: '700' },
 
   // Form (add/edit)
   form: {

@@ -28,6 +28,7 @@ import {
 
 import CashFlowChart from '../components/CashFlowChart';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -100,7 +101,14 @@ export default function CashFlowScreen({ navigation }) {
       {/* -- Starting balance ------------------------------------------------ */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Starting balance</Text>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle}>Starting balance</Text>
+            <HelpSheet
+              title="Cash flow forecast"
+              summary="This forecast projects your cash balance from the starting balance and active recurring rules."
+              items={['It is a planning view and does not create transactions.', 'Override the starting balance to test a different scenario.']}
+            />
+          </View>
           {startBalanceText.trim() !== '' && (
             <TouchableOpacity onPress={useAutoStart} style={styles.autoBtn}>
               <View style={styles.autoBtnInner}>
@@ -376,6 +384,7 @@ const makeStyles = (c) => ({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center' },
   cardTitle: {
     fontSize: 15,
     fontWeight: '800',

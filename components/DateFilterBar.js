@@ -6,21 +6,21 @@ import {
   View,
 } from 'react-native';
 import DateTimePicker from './DatePicker';
+import AppIcon from './AppIcon';
 import { useDateFilter } from '../contexts/DateFilterContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
 // ----------------------------------------------------------------------------
-// DateFilterBar — the top-of-screen filter widget.
+// DateFilterBar — slim period control shared by Dashboard + Transactions.
 //
 // Layout:
 //   ┌──────────────────────────────────────┐
-//   │ [Month] [Week] [Custom] [All]        │   ← 4 mode chips
-//   │ ---------------------------------    │
-//   │  ‹  July 2026  ›   Tap = current →   │   ← nav (varies per mode)
+//   │  Month │ Week │ Custom │ All         │  ← segmented pill track
+//   │     ‹    July 2026    ›              │  ← period nav (month/week)
 //   └──────────────────────────────────────┘
 //
-// For 'custom' mode the second row becomes two tappable date chips.
-// For 'all' mode the second row is a friendly hint.
+// Custom → From / To date chips. All → quiet “All time” label.
+// Tap the period label to jump to the current month/week.
 // ----------------------------------------------------------------------------
 
 const MODE_OPTIONS = [
@@ -32,6 +32,7 @@ const MODE_OPTIONS = [
 
 export default function DateFilterBar() {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const {
     kind,
     label,
@@ -46,18 +47,20 @@ export default function DateFilterBar() {
 
   return (
     <View style={styles.container}>
-      {/* Row 1: mode chips */}
-      <View style={styles.modeRow}>
+      <View style={styles.segmentTrack}>
         {MODE_OPTIONS.map((m) => {
           const active = m.kind === kind;
           return (
             <TouchableOpacity
               key={m.kind}
               onPress={() => setKind(m.kind)}
-              style={[styles.modeChip, active && styles.modeChipActive]}
-              activeOpacity={0.7}
+              style={[styles.segment, active && styles.segmentActive]}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`${m.label} period`}
             >
-              <Text style={[styles.modeText, active && styles.modeTextActive]}>
+              <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                 {m.label}
               </Text>
             </TouchableOpacity>
@@ -65,9 +68,8 @@ export default function DateFilterBar() {
         })}
       </View>
 
-      {/* Row 2: navigation, varies by mode */}
       {kind === 'all' && (
-        <Text style={styles.hint}>Showing all entries across all time</Text>
+        <Text style={styles.hint}>All time</Text>
       )}
 
       {(kind === 'month' || kind === 'week') && (
@@ -75,26 +77,41 @@ export default function DateFilterBar() {
           <TouchableOpacity
             onPress={goPrev}
             disabled={!canShift}
-            style={styles.arrowBtn}
-            hitSlop={8}
+            style={[styles.arrowBtn, !canShift && styles.arrowBtnDisabled]}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Previous period"
           >
-            <Text style={styles.arrowText}>‹</Text>
+            <AppIcon
+              name="chevron-left"
+              size={18}
+              color={themeColors.text.secondary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={jumpToCurrent}
             activeOpacity={0.7}
             style={styles.labelBtn}
+            accessibilityRole="button"
+            accessibilityLabel={`${label}. Tap to jump to current`}
           >
             <Text style={styles.label}>{label}</Text>
-            <Text style={styles.labelHint}>Tap = jump to current</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={goNext}
             disabled={!canShift}
-            style={styles.arrowBtn}
-            hitSlop={8}
+            style={[styles.arrowBtn, !canShift && styles.arrowBtnDisabled]}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Next period"
           >
-            <Text style={styles.arrowText}>›</Text>
+            <AppIcon
+              name="chevron-right"
+              size={18}
+              color={themeColors.text.secondary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
         </View>
       )}
@@ -122,7 +139,6 @@ function CustomRangeControls({ startDate, endDate, onChange }) {
     setEditing(null);
     if (event.type === 'dismissed' || !selectedDate) return;
     if (editing === 'start') {
-      // If new start is after current end, push end forward.
       const newEnd = selectedDate > endDate ? selectedDate : endDate;
       onChange(selectedDate, newEnd);
     } else if (editing === 'end') {
@@ -170,75 +186,101 @@ function DateChip({ label, value, onPress }) {
 
 const makeStyles = (c) => ({
   container: {
-    backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 10,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
+    marginBottom: 14,
     gap: 8,
   },
 
-  modeRow: {
+  segmentTrack: {
     flexDirection: 'row',
-    gap: 6,
-  },
-  modeChip: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
     backgroundColor: c.bg.surfaceAlt,
-    alignItems: 'center',
+    borderRadius: 12,
+    padding: 3,
     borderWidth: 1,
     borderColor: c.border.subtle,
   },
-  // Active chip uses the theme's hero (dark on light, near-black on dark)
-  // so the inverse-white text remains legible in both modes.
-  modeChipActive: {
-    backgroundColor: c.bg.hero,
-    borderColor: c.bg.hero,
+  segment: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  modeText: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
-  // Active chip bg is `bg.hero` (dark in both themes) — text must stay light.
-  modeTextActive: { color: c.text.onHero },
+  segmentActive: {
+    backgroundColor: c.bg.hero,
+  },
+  segmentText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.text.secondary,
+  },
+  segmentTextActive: {
+    color: c.text.onHero,
+  },
 
   navRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 2,
+    paddingHorizontal: 2,
   },
   arrowBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: c.bg.surfaceAlt,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  arrowText: { fontSize: 18, fontWeight: '700', color: c.text.secondary, lineHeight: 20 },
-  labelBtn: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
-  label: { fontSize: 14, fontWeight: '700', color: c.text.primary },
-  labelHint: { fontSize: 9, color: c.text.muted, marginTop: 1 },
+  arrowBtnDisabled: {
+    opacity: 0.35,
+  },
+  labelBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  label: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
 
   hint: {
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: '600',
     color: c.text.secondary,
     textAlign: 'center',
     paddingVertical: 6,
   },
 
-  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  customDash: { fontSize: 14, color: c.text.muted, fontWeight: '700' },
+  customRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  customDash: {
+    fontSize: 13,
+    color: c.text.muted,
+    fontWeight: '700',
+  },
   dateChip: {
     flex: 1,
-    backgroundColor: c.bg.surfaceAlt,
+    backgroundColor: c.bg.surface,
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: c.border.subtle,
   },
-  dateChipLabel: { fontSize: 9, color: c.text.secondary, fontWeight: '700', letterSpacing: 0.5 },
-  dateChipValue: { fontSize: 13, color: c.text.primary, fontWeight: '600', marginTop: 2 },
+  dateChipLabel: {
+    fontSize: 9,
+    color: c.text.secondary,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  dateChipValue: {
+    fontSize: 13,
+    color: c.text.primary,
+    fontWeight: '600',
+    marginTop: 2,
+  },
 });

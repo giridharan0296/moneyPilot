@@ -40,12 +40,14 @@ import {
 import DateTimePicker from '../components/DatePicker';
 import LoanForm from '../components/LoanForm';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 import { useLoans } from '../contexts/LoansContext';
 import { useToast } from '../contexts/ToastContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import {
   LOAN_ADJUSTMENT_MODES,
   computePayoffPercent,
+  computePayoffProjection,
   computeTotalInterestPaid,
   computeTotalPrincipalRepaid,
   formatDate,
@@ -67,6 +69,51 @@ const EVENT_META = {
   rate_change: { icon: 'trending-up',      label: 'Rate changed', color: '#8b5cf6' },
   closure:     { icon: 'flag',             label: 'Closed',       color: '#6b7280' },
 };
+
+function buildPrepaymentPlan(loan) {
+  const balance = Number(loan?.currentOutstanding) || 0;
+  const emi = Number(loan?.emiAmount) || 0;
+  const rate = Math.max(0, Number(loan?.ratePct) || 0) / 100 / 12;
+  if (balance <= 0 || emi <= 0 || rate <= 0 || emi <= balance * rate) return null;
+
+  const months = -Math.log(1 - (balance * rate) / emi) / Math.log(1 + rate);
+  const targetAfterOneLessMonth = (emi * (1 - Math.pow(1 + rate, -(months - 1))) / rate);
+  const oneMonthExtra = Math.max(0, balance - targetAfterOneLessMonth);
+
+  let projectedBalance = balance;
+  let projectedInterest = 0;
+  let projectedExtra = 0;
+  let projectedMonths = 0;
+  const monthlyPlan = [];
+  while (projectedBalance > 1 && projectedMonths < 600) {
+    const interest = projectedBalance * rate;
+    const principal = Math.min(emi - interest, projectedBalance);
+    projectedBalance -= principal;
+    projectedInterest += interest;
+    const remaining = projectedBalance > 1
+      ? -Math.log(1 - (projectedBalance * rate) / emi) / Math.log(1 + rate)
+      : 0;
+    const target = remaining > 1
+      ? emi * (1 - Math.pow(1 + rate, -(remaining - 1))) / rate
+      : 0;
+    const extra = projectedBalance > 1
+      ? Math.min(Math.max(0, projectedBalance - target), projectedBalance)
+      : 0;
+    monthlyPlan.push({ month: projectedMonths + 1, extra });
+    projectedBalance -= extra;
+    projectedExtra += extra;
+    projectedMonths += 1;
+  }
+  const baselineInterest = Math.max(0, Math.ceil(months) * emi - balance);
+  return {
+    remainingMonths: Math.ceil(months),
+    oneMonthExtra,
+    projectedMonths,
+    projectedExtra,
+    interestSaved: Math.max(0, baselineInterest - projectedInterest),
+    monthlyPlan,
+  };
+}
 
 export default function LoanDetailScreen({ route, navigation }) {
   const styles = useThemedStyles(makeStyles);
@@ -91,6 +138,7 @@ export default function LoanDetailScreen({ route, navigation }) {
 
   const [emiModal, setEmiModal]           = useState(false);
   const [prepayModal, setPrepayModal]     = useState(false);
+  const [plannedPrepayAmount, setPlannedPrepayAmount] = useState(null);
   const [rateModal, setRateModal]         = useState(false);
   const [editModal, setEditModal]         = useState(false);
   const [fixSetupModal, setFixSetupModal] = useState(false);
@@ -214,6 +262,8 @@ export default function LoanDetailScreen({ route, navigation }) {
   const paid = computeTotalPrincipalRepaid(loan);
   const intPaid = computeTotalInterestPaid(loan);
   const barColor = loan.status === 'closed' ? '#9ca3af' : '#059669';
+  const prepaymentPlan = loan.status !== 'closed' ? buildPrepaymentPlan(loan) : null;
+  const estimatedEnd = loan.status !== 'closed' ? computePayoffProjection(loan) : null;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -261,6 +311,12 @@ export default function LoanDetailScreen({ route, navigation }) {
           <Text style={styles.cardTitle}>Details</Text>
           <DetailRow label="Principal" value={formatMoney(loan.principal)} />
           <DetailRow label="Current schedule" value={formatSchedule(loan) || '—'} />
+          {estimatedEnd?.projectedClosureDate && estimatedEnd.remainingMonths != null && (
+            <DetailRow
+              label={estimatedEnd.includesPrepaymentPlan ? 'Estimated end with active monthly plan' : 'Estimated loan end'}
+              value={`${estimatedEnd.projectedClosureDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })} · ~${estimatedEnd.remainingMonths} EMIs`}
+            />
+          )}
           <DetailRow label="Disbursed" value={formatDate(loan.disburseDate)} />
           <DetailRow label="EMI day" value={`${loan.emiDayOfMonth} of each month`} />
           {loan.direction && (
@@ -276,12 +332,96 @@ export default function LoanDetailScreen({ route, navigation }) {
           )}
         </View>
 
+        {prepaymentPlan && (
+          <View style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle}>Prepayment planner</Text>
+              <HelpSheet
+                title="Monthly tenure plan"
+                summary="This is a planning tool. It calculates the extra principal to pay after each EMI to reduce the remaining tenure by about one month."
+                items={['Activate the plan to keep its forecast visible; it never makes a bank payment automatically.', 'After the EMI and top-up are actually paid, log them so the next month’s estimate reflects the new balance.', 'Choose “Keep EMI” with your lender so the payment reduces tenure.']}
+              />
+            </View>
+            <DetailRow
+              label="Extra principal to cut ~1 month now"
+              value={formatMoney(prepaymentPlan.oneMonthExtra)}
+            />
+            <DetailRow
+              label="Current estimated remaining tenure"
+              value={`${prepaymentPlan.remainingMonths} months`}
+            />
+            <DetailRow
+              label="If you recalculate after every EMI"
+              value={`~${prepaymentPlan.projectedMonths} months remaining`}
+            />
+            <DetailRow
+              label="Estimated interest saved with recurring plan"
+              value={formatMoney(prepaymentPlan.interestSaved)}
+            />
+            <Text style={styles.plannerScheduleTitle}>NEXT MONTHLY TOP-UPS</Text>
+            {prepaymentPlan.monthlyPlan.slice(0, 6).map((item) => (
+              <View key={item.month} style={styles.plannerScheduleRow}>
+                <Text style={styles.plannerScheduleLabel}>EMI {item.month}</Text>
+                <Text style={styles.plannerScheduleValue}>+ {formatMoney(item.extra)}</Text>
+              </View>
+            ))}
+            {!loan.prepaymentPlan?.enabled ? (
+              <TouchableOpacity
+                onPress={() => {
+                  updateLoan(loan.id, {
+                    prepaymentPlan: {
+                      enabled: true,
+                      targetMonthsPerEmi: 1,
+                      startedAt: new Date().toISOString(),
+                    },
+                  });
+                  showToast('Monthly tenure plan activated', { variant: 'success', duration: 1800 });
+                }}
+                style={styles.plannerBtn}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.plannerBtnText}>Activate monthly tenure plan</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.plannerActions}>
+                <TouchableOpacity
+                  onPress={() => {
+                    setPlannedPrepayAmount(prepaymentPlan.oneMonthExtra);
+                    setPrepayModal(true);
+                  }}
+                  style={styles.plannerBtn}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.plannerBtnText}>Log this month’s planned top-up</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    updateLoan(loan.id, { prepaymentPlan: { enabled: false } });
+                    showToast('Monthly tenure plan paused', { variant: 'default', duration: 1800 });
+                  }}
+                  style={styles.plannerPauseBtn}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.plannerPauseText}>Pause plan</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Actions */}
         {loan.status !== 'closed' && (
           <>
             <View style={styles.actionsRow}>
               <ActionBtn label="Log EMI"     icon="upload"       onPress={() => setEmiModal(true)} />
-              <ActionBtn label="Prepay"      icon="zap"          onPress={() => setPrepayModal(true)} />
+              <ActionBtn
+                label="Prepay"
+                icon="zap"
+                onPress={() => {
+                  setPlannedPrepayAmount(null);
+                  setPrepayModal(true);
+                }}
+              />
               <ActionBtn label="Update rate" icon="trending-up"  onPress={() => setRateModal(true)} />
             </View>
             <View style={styles.actionsRow}>
@@ -371,13 +511,18 @@ export default function LoanDetailScreen({ route, navigation }) {
         visible={prepayModal}
         maxAmount={loan.currentOutstanding}
         defaultEmi={loan.emiAmount}
-        onClose={() => setPrepayModal(false)}
+        initialAmount={plannedPrepayAmount}
+        onClose={() => {
+          setPlannedPrepayAmount(null);
+          setPrepayModal(false);
+        }}
         onSubmit={({ amount, date, note, adjustmentMode }) => {
           const res = logPrepayment(loan.id, { amount, date, note, adjustmentMode });
           if (!res.ok) {
             Alert.alert('Could not log prepayment', errorMessage(res.reason));
             return;
           }
+          setPlannedPrepayAmount(null);
           setPrepayModal(false);
           showToast('Prepayment recorded', { variant: 'success', duration: 1500 });
         }}
@@ -678,7 +823,7 @@ function AmountModal({
 
 // Prepay modal — same body as AmountModal but with an adjustmentMode chip
 // row so the user records whether the bank shortens tenure or reduces EMI.
-function PrepayModal({ visible, maxAmount, defaultEmi, onSubmit, onClose }) {
+function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, onClose }) {
   const styles = useThemedStyles(makeStyles);
   const [amount, setAmount] = useState('');
   const [date, setDate]     = useState(new Date());
@@ -688,12 +833,12 @@ function PrepayModal({ visible, maxAmount, defaultEmi, onSubmit, onClose }) {
 
   useEffect(() => {
     if (visible) {
-      setAmount('');
+      setAmount(initialAmount ? String(Math.round(initialAmount)) : '');
       setDate(new Date());
-      setNote('');
+      setNote(initialAmount ? 'Monthly tenure-reduction plan' : '');
       setAdjustmentMode('keep_emi'); // default matches most retail lender behaviour
     }
-  }, [visible]);
+  }, [visible, initialAmount]);
 
   const handleSubmit = () => {
     const amt = Number(amount);
@@ -1228,6 +1373,7 @@ const makeStyles = (c) => ({
     fontSize: 12, fontWeight: '700', color: c.text.muted,
     letterSpacing: 0.5, marginBottom: spacing.sm,
   },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center' },
   detailRow: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'flex-start',   // long values wrap without pushing the label
@@ -1253,6 +1399,34 @@ const makeStyles = (c) => ({
     textAlign: 'right',
   },
   detailFootnote: { fontSize: 11, color: c.text.muted, marginTop: 6, fontStyle: 'italic' },
+  plannerBtn: {
+    marginTop: 14,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: radii.md,
+    backgroundColor: '#f59e0b',
+  },
+  plannerBtnText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  plannerActions: { marginTop: 14, gap: 10 },
+  plannerPauseBtn: { alignItems: 'center', paddingVertical: 5 },
+  plannerPauseText: { color: c.text.secondary, fontSize: 12, fontWeight: '700' },
+  plannerScheduleTitle: {
+    marginTop: 16,
+    marginBottom: 2,
+    color: c.text.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  plannerScheduleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border.subtle,
+  },
+  plannerScheduleLabel: { color: c.text.secondary, fontSize: 12, fontWeight: '600' },
+  plannerScheduleValue: { color: '#d97706', fontSize: 13, fontWeight: '800' },
 
   actionsRow: {
     flexDirection: 'row', gap: 8, marginBottom: spacing.md,

@@ -60,6 +60,7 @@ export default function TransferForm({
     initialValues?.kind ?? initialKind,
   );
   const meta = KIND_META[kind] ?? KIND_META.lend;
+  const isOwnAccountTransfer = kind === 'internal_transfer';
 
   // Common fields.
   const [amount, setAmount] = useState(
@@ -67,6 +68,9 @@ export default function TransferForm({
   );
   const [accountId, setAccountId] = useState(
     initialValues?.accountId ?? accounts[0]?.id ?? null,
+  );
+  const [targetAccountId, setTargetAccountId] = useState(
+    initialValues?.targetAccountId ?? null,
   );
   const [note, setNote] = useState(initialValues?.note ?? '');
   const [date, setDate] = useState(
@@ -145,6 +149,10 @@ export default function TransferForm({
       setError('Pick an account (add one in Settings if needed).');
       return;
     }
+    if (isOwnAccountTransfer && (!targetAccountId || targetAccountId === accountId)) {
+      setError('Choose a different destination account.');
+      return;
+    }
     if ((kind === 'lend' || kind === 'borrow') && !counterpartyName.trim()) {
       setError('Enter a name (e.g. Rahul, HDFC Bank).');
       return;
@@ -181,7 +189,9 @@ export default function TransferForm({
     // linked item (a rename in Net Worth) don't get overwritten here.
     const derivedCounterparty = isEdit
       ? counterpartyName.trim()
-      : (kind === 'lend' || kind === 'borrow')
+      : isOwnAccountTransfer
+        ? meta.label
+        : (kind === 'lend' || kind === 'borrow')
         ? counterpartyName.trim()
         : (linkableItems.find((it) => it.id === linkedNetWorthId)?.label ?? '');
 
@@ -190,6 +200,7 @@ export default function TransferForm({
       kind,
       amount: amt,
       accountId,
+      targetAccountId: isOwnAccountTransfer ? targetAccountId : null,
       counterpartyName: derivedCounterparty,
       // In edit mode the context ignores linkedNetWorthId in the patch
       // (kind/link are structurally locked), so this is informational only.
@@ -293,7 +304,7 @@ export default function TransferForm({
           for Repay/LoanRepay so users can fix a typo without needing to
           navigate to Net Worth (the field on the transfer object is
           independent of the linked item's name). */}
-      {(kind === 'lend' || kind === 'borrow' || isEdit) && (
+      {(kind === 'lend' || kind === 'borrow' || (isEdit && !isOwnAccountTransfer)) && (
         <>
           <Text style={styles.label}>
             {kind === 'lend'
@@ -427,7 +438,9 @@ export default function TransferForm({
         </>
       )}
 
-      <Text style={styles.label}>Account (which one moved the cash?)</Text>
+      <Text style={styles.label}>
+        {isOwnAccountTransfer ? 'From account' : 'Account (which one moved the cash?)'}
+      </Text>
       <GroupedAccountPicker
         accounts={accounts}
         accountGroups={accountGroups}
@@ -435,6 +448,21 @@ export default function TransferForm({
         onSelect={setAccountId}
         accentColor={meta.color}
       />
+
+      {isOwnAccountTransfer && (
+        <>
+          <Text style={styles.label}>
+            To account
+          </Text>
+          <GroupedAccountPicker
+            accounts={accounts.filter((account) => account.id !== accountId)}
+            accountGroups={accountGroups}
+            selectedId={targetAccountId}
+            onSelect={setTargetAccountId}
+            accentColor={meta.color}
+          />
+        </>
+      )}
 
       <Text style={styles.label}>Date</Text>
       <TouchableOpacity

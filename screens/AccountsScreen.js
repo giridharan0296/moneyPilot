@@ -8,31 +8,25 @@
 // finding currency / theme / backup harder.
 //
 // This screen keeps all the semantics of the old section but tidies
-// the surface:
+// the surface toward a cleaner section layout:
 //
-//   * Group cards render exactly like they did — 2-level hierarchy is
-//     the natural shape of accounts (Bank Accounts > HDFC, ICICI, ...).
-//   * Each group header shows an "N accounts" count pill so the eye
-//     can scan the shape before diving in.
-//   * Account rows are SWIPE-LEFT-TO-DELETE (same iOS-Mail gesture
-//     used in CategoriesScreen). The always-visible × delete button
-//     is gone — swipe is the affordance.
-//   * Groups themselves keep their explicit edit / delete icons
-//     because group delete has "must be empty" logic, and you don't
-//     want to swipe-away an entire group by mistake.
-//   * A "+" button in the stack header adds a new group in one tap
-//     (mirrors BudgetScreen / LoansScreen).
-//   * Foreign-currency accounts still show the [USD] / [EUR] etc.
-//     badge on the row.
+//   * Section header outside the card (muted title + green outline "+").
+//   * Accounts live inside one rounded card with hairline dividers.
+//   * Group edit / delete sit behind a ⋮ menu so the header stays calm.
+//   * Account rows are SWIPE-LEFT-TO-DELETE; tap a row to edit.
+//   * A "+" in the stack header adds a new group.
+//   * Currency shows as a pill under the account name.
 // ----------------------------------------------------------------------------
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   Alert,
   Animated,
   PanResponder,
   Platform,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -42,12 +36,15 @@ import {
 import AppIcon from '../components/AppIcon';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { useTransactions } from '../contexts/TransactionsContext';
+import { useTransfers } from '../contexts/TransfersContext';
 import { COLOR_PALETTE } from '../constants';
 // CURRENCIES lives in lib/currency.js (not constants.js). Importing it
 // from '../constants' silently returned `undefined`, which only blew
 // up when the user opened the add/edit account form — the currency
 // chip row runs `CURRENCIES.map(...)` under `showCurrency: true`.
 import { CURRENCIES } from '../lib/currency';
+import { computeAccountBalances } from '../lib/accountBalances';
 
 // Swipe-to-delete tuning — kept identical to CategoriesScreen so the
 // gesture feel is consistent across the app.
@@ -72,6 +69,8 @@ export default function AccountsScreen({ navigation }) {
     updateAccount,
     baseCurrency,
   } = useSettings();
+  const { income, expenses, investments } = useTransactions();
+  const { transfers } = useTransfers();
 
   const [addingGroup, setAddingGroup] = useState(false);
 
@@ -117,17 +116,17 @@ export default function AccountsScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.subtitle}>
-          {totals.groups} group{totals.groups === 1 ? '' : 's'} · {totals.accounts} account{totals.accounts === 1 ? '' : 's'}.
-          Swipe an account left to delete it. Group actions live in the
-          card header.
+          {totals.groups} group{totals.groups === 1 ? '' : 's'} · {totals.accounts}{' '}
+          account{totals.accounts === 1 ? '' : 's'}. Swipe an account left to
+          delete it. Use ⋮ on a group to edit or remove it.
         </Text>
 
         {(accountGroups ?? []).length === 0 && !addingGroup && (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>No account groups yet</Text>
             <Text style={styles.emptyStateBody}>
-              Tap the + in the header (or the button below) to add your
-              first group — e.g. Bank Accounts, Cash, or Wallets.
+              Tap + in the header to add your first group — e.g. Bank
+              Accounts, Cash, or Wallets.
             </Text>
           </View>
         )}
@@ -143,6 +142,10 @@ export default function AccountsScreen({ navigation }) {
             onDeleteGroup={deleteAccountGroup}
             onUpdateGroup={updateAccountGroup}
             baseCurrency={baseCurrency}
+            income={income}
+            expenses={expenses}
+            investments={investments}
+            transfers={transfers}
           />
         ))}
 
@@ -156,15 +159,7 @@ export default function AccountsScreen({ navigation }) {
               if (result) setAddingGroup(false);
             }}
           />
-        ) : (
-          <TouchableOpacity
-            onPress={() => setAddingGroup(true)}
-            style={styles.addGroupButton}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.addGroupButtonText}>+ Add group</Text>
-          </TouchableOpacity>
-        )}
+        ) : null}
 
         {totals.accounts > 0 && (
           <Text style={styles.gestureHint}>
@@ -190,11 +185,20 @@ function GroupCard({
   onDeleteGroup,
   onUpdateGroup,
   baseCurrency,
+  income,
+  expenses,
+  investments,
+  transfers,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const [addingAccount, setAddingAccount] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState(null);
+  const accountBalances = useMemo(
+    () => computeAccountBalances({ accounts, income, expenses, investments, transfers }),
+    [accounts, income, expenses, investments, transfers],
+  );
 
   const confirmDeleteAccount = (item) => {
     Alert.alert(
@@ -236,119 +240,169 @@ function GroupCard({
     );
   };
 
+  // Edit / delete live behind ⋮ so the header stays clean — title +
+  // green outline "+" like the reference layout.
+  const openGroupMenu = () => {
+    const edit = () => setEditingGroup(true);
+    const del = () => confirmDeleteGroup();
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Edit group', 'Delete group', 'Cancel'],
+          destructiveButtonIndex: 1,
+          cancelButtonIndex: 2,
+        },
+        (i) => {
+          if (i === 0) edit();
+          else if (i === 1) del();
+        },
+      );
+    } else {
+      Alert.alert(group.label, undefined, [
+        { text: 'Edit group', onPress: edit },
+        { text: 'Delete group', style: 'destructive', onPress: del },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  };
+
   return (
-    <View style={[styles.groupCard, { borderLeftColor: group.color }]}>
-      {/* ---- Group header ---- */}
+    <View style={styles.groupSection}>
+      {/* ---- Section header (outside the card) ---- */}
       {editingGroup ? (
-        <EditorForm
-          placeholderName="Group name"
-          defaultEmoji={group.emoji}
-          initialLabel={group.label}
-          initialEmoji={group.emoji}
-          initialColor={group.color}
-          submitLabel="Save"
-          onCancel={() => setEditingGroup(false)}
-          onSubmit={(data) => {
-            const ok = onUpdateGroup?.(group.id, data);
-            if (ok) setEditingGroup(false);
-          }}
-        />
+        <View style={styles.groupEditWrap}>
+          <EditorForm
+            placeholderName="Group name"
+            defaultEmoji={group.emoji}
+            initialLabel={group.label}
+            initialEmoji={group.emoji}
+            initialColor={group.color}
+            submitLabel="Save"
+            onCancel={() => setEditingGroup(false)}
+            onSubmit={(data) => {
+              const ok = onUpdateGroup?.(group.id, data);
+              if (ok) setEditingGroup(false);
+            }}
+          />
+        </View>
       ) : (
         <View style={styles.groupHeader}>
           <Text style={styles.groupEmoji}>{group.emoji}</Text>
           <Text style={styles.groupTitle} numberOfLines={1}>
             {group.label}
           </Text>
-          <View style={styles.groupCountPill}>
-            <Text style={styles.groupCountPillText}>
-              {accounts.length}{' '}
-              {accounts.length === 1 ? 'account' : 'accounts'}
-            </Text>
-          </View>
+          {accounts.length > 0 ? (
+            <Text style={styles.groupCount}>{accounts.length}</Text>
+          ) : null}
           <TouchableOpacity
-            onPress={() => setEditingGroup(true)}
+            onPress={openGroupMenu}
             hitSlop={8}
-            style={styles.groupEditBtn}
+            style={styles.groupMoreBtn}
             accessibilityRole="button"
-            accessibilityLabel="Edit group"
+            accessibilityLabel="Group options"
           >
-            <AppIcon name="edit-3" size={13} color="#1d4ed8" strokeWidth={2.2} />
+            <AppIcon
+              name="more-vertical"
+              size={16}
+              color={themeColors.text.muted}
+              strokeWidth={2.2}
+            />
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={confirmDeleteGroup}
-            hitSlop={8}
-            style={styles.groupDeleteBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Delete group"
-          >
-            <AppIcon name="x" size={13} color="#b91c1c" strokeWidth={2.4} />
-          </TouchableOpacity>
+          {!addingAccount ? (
+            <TouchableOpacity
+              onPress={() => setAddingAccount(true)}
+              hitSlop={6}
+              style={[
+                styles.groupAddBtn,
+                { borderColor: themeColors.accent.income },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Add account"
+            >
+              <AppIcon
+                name="plus"
+                size={16}
+                color={themeColors.accent.income}
+                strokeWidth={2.4}
+              />
+            </TouchableOpacity>
+          ) : null}
         </View>
       )}
 
-      {/* ---- Account rows ---- */}
-      {accounts.length === 0 && !addingAccount && !editingGroup && (
-        <Text style={styles.emptyGroupHint}>
-          No accounts in this group yet — tap + Add account below.
-        </Text>
-      )}
+      {/* ---- Account list card ---- */}
+      <View style={styles.groupCard}>
+        {accounts.length === 0 && !addingAccount && !editingGroup && (
+          <Text style={styles.emptyGroupHint}>
+            No accounts yet — tap + to add one.
+          </Text>
+        )}
 
-      {accounts.map((acc) => {
-        if (editingAccountId === acc.id) {
-          const accCurrency = acc.currency ?? baseCurrency;
+        {accounts.map((acc, index) => {
+          const isLast =
+            index === accounts.length - 1 && !addingAccount;
+          if (editingAccountId === acc.id) {
+            const accCurrency = acc.currency ?? baseCurrency;
+            return (
+              <View
+                key={acc.id}
+                style={!isLast ? styles.rowDivider : null}
+              >
+                <EditorForm
+                  placeholderName="Account name"
+                  defaultEmoji={group.emoji}
+                  initialLabel={acc.label}
+                  initialEmoji={acc.emoji}
+                  initialColor={acc.color}
+                  submitLabel="Save"
+                  showCurrency
+                  showOpeningBalance
+                  showReconciliation
+                  initialCurrency={accCurrency}
+                  initialOpeningBalance={acc.openingBalance}
+                  initialReconciliationBalance={acc.reconciliationBalance}
+                  defaultCurrency={baseCurrency}
+                  onCancel={() => setEditingAccountId(null)}
+                  onSubmit={(data) => {
+                    const ok = onUpdateAccount?.(acc.id, data);
+                    if (ok) setEditingAccountId(null);
+                  }}
+                />
+              </View>
+            );
+          }
           return (
-            <EditorForm
+            <View
               key={acc.id}
-              placeholderName="Account name"
-              defaultEmoji={group.emoji}
-              initialLabel={acc.label}
-              initialEmoji={acc.emoji}
-              initialColor={acc.color}
-              submitLabel="Save"
-              showCurrency
-              initialCurrency={accCurrency}
-              defaultCurrency={baseCurrency}
-              onCancel={() => setEditingAccountId(null)}
-              onSubmit={(data) => {
-                const ok = onUpdateAccount?.(acc.id, data);
-                if (ok) setEditingAccountId(null);
-              }}
-            />
+              style={!isLast ? styles.rowDivider : null}
+            >
+              <SwipeableAccountRow
+                account={acc}
+                baseCurrency={baseCurrency}
+                currentBalance={accountBalances.get(acc.id)}
+                onEdit={() => setEditingAccountId(acc.id)}
+                onDelete={() => confirmDeleteAccount(acc)}
+              />
+            </View>
           );
-        }
-        return (
-          <SwipeableAccountRow
-            key={acc.id}
-            account={acc}
-            baseCurrency={baseCurrency}
-            onEdit={() => setEditingAccountId(acc.id)}
-            onDelete={() => confirmDeleteAccount(acc)}
-          />
-        );
-      })}
+        })}
 
-      {addingAccount ? (
-        <EditorForm
-          placeholderName="Account name (e.g. HDFC Savings)"
-          defaultEmoji={group.emoji}
-          defaultColor={group.color}
-          showCurrency
-          defaultCurrency={baseCurrency}
-          onCancel={() => setAddingAccount(false)}
-          onSubmit={(data) => {
-            const result = onAddAccount({ ...data, groupId: group.id });
-            if (result) setAddingAccount(false);
-          }}
-        />
-      ) : (
-        <TouchableOpacity
-          style={styles.addAccountButton}
-          onPress={() => setAddingAccount(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.addAccountButtonText}>+ Add account</Text>
-        </TouchableOpacity>
-      )}
+        {addingAccount ? (
+          <EditorForm
+            placeholderName="Account name (e.g. HDFC Savings)"
+            defaultEmoji={group.emoji}
+            defaultColor={group.color}
+            showCurrency
+            showOpeningBalance
+            defaultCurrency={baseCurrency}
+            onCancel={() => setAddingAccount(false)}
+            onSubmit={(data) => {
+              const result = onAddAccount({ ...data, groupId: group.id });
+              if (result) setAddingAccount(false);
+            }}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -360,11 +414,14 @@ function GroupCard({
 // because the row content is different and inlining keeps the two
 // screens independently maintainable.
 // ----------------------------------------------------------------------------
-function SwipeableAccountRow({ account, baseCurrency, onEdit, onDelete }) {
+function SwipeableAccountRow({ account, baseCurrency, currentBalance, onEdit, onDelete }) {
   const styles = useThemedStyles(makeStyles);
 
   const accCurrency = account.currency ?? baseCurrency;
   const isForeign   = accCurrency !== baseCurrency;
+  const hasOpeningBalance = account.openingBalanceDate != null;
+  const hasReconciliation = account.reconciledAt != null;
+  const reconciliationDelta = (Number(currentBalance) || 0) - (Number(account.reconciliationBalance) || 0);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const openRef    = useRef(false);
@@ -461,17 +518,45 @@ function SwipeableAccountRow({ account, baseCurrency, onEdit, onDelete }) {
           style={styles.rowInner}
         >
           <View style={[styles.rowDot, { backgroundColor: account.color }]} />
-          <Text style={styles.rowEmoji}>{account.emoji}</Text>
-          <Text style={styles.rowLabel} numberOfLines={1}>
-            {account.label}
-          </Text>
-          {isForeign && (
-            <View style={styles.currencyBadge}>
-              <Text style={styles.currencyBadgeText}>{accCurrency}</Text>
+          <View style={styles.rowMain}>
+            <Text style={styles.rowLabel} numberOfLines={1}>
+              {account.label}
+            </Text>
+            <View style={styles.rowMeta}>
+              <Text style={styles.rowEmoji}>{account.emoji}</Text>
+              <View
+                style={[
+                  styles.currencyBadge,
+                  !isForeign && styles.currencyBadgeMuted,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.currencyBadgeText,
+                    !isForeign && styles.currencyBadgeTextMuted,
+                  ]}
+                >
+                  {accCurrency}
+                </Text>
+              </View>
+              {hasOpeningBalance ? (
+                <Text style={styles.openingBalanceText}>
+                  Balance {accCurrency} {(Number(currentBalance) || 0).toLocaleString('en-IN')}
+                </Text>
+              ) : null}
             </View>
-          )}
-          <View style={styles.rowEditBtn}>
-            <AppIcon name="edit-3" size={13} color="#1d4ed8" strokeWidth={2.2} />
+            {hasReconciliation ? (
+              <Text style={[
+                styles.reconciliationText,
+                Math.abs(reconciliationDelta) < 0.01
+                  ? styles.reconciliationMatch
+                  : styles.reconciliationMismatch,
+              ]}>
+                {Math.abs(reconciliationDelta) < 0.01
+                  ? 'Reconciled'
+                  : `Difference ${accCurrency} ${Math.abs(reconciliationDelta).toLocaleString('en-IN')}`}
+              </Text>
+            ) : null}
           </View>
         </TouchableOpacity>
       </Animated.View>
@@ -496,8 +581,12 @@ function EditorForm({
   initialColor,
   submitLabel = 'Add',
   showCurrency = false,
+  showOpeningBalance = false,
+  showReconciliation = false,
   initialCurrency = null,
   defaultCurrency = null,
+  initialOpeningBalance = '',
+  initialReconciliationBalance = '',
 }) {
   const styles = useThemedStyles(makeStyles);
   const [label, setLabel] = useState(initialLabel);
@@ -506,11 +595,21 @@ function EditorForm({
   const [currency, setCurrency] = useState(
     initialCurrency ?? defaultCurrency ?? null,
   );
+  const [openingBalance, setOpeningBalance] = useState(String(initialOpeningBalance ?? ''));
+  const [reconciliationBalance, setReconciliationBalance] = useState(String(initialReconciliationBalance ?? ''));
 
   const handleSubmit = () => {
     const trimmed = label.trim();
     if (!trimmed) {
       Alert.alert('Missing name', 'Please enter a name.');
+      return;
+    }
+    if (
+      showReconciliation
+      && reconciliationBalance.trim()
+      && !Number.isFinite(Number(reconciliationBalance))
+    ) {
+      Alert.alert('Invalid bank balance', 'Enter a valid number to reconcile this account.');
       return;
     }
     const payload = {
@@ -519,6 +618,8 @@ function EditorForm({
       color,
     };
     if (showCurrency && currency) payload.currency = currency;
+    if (showOpeningBalance && openingBalance.trim()) payload.openingBalance = openingBalance.trim();
+    if (showReconciliation && reconciliationBalance.trim()) payload.reconciliationBalance = reconciliationBalance.trim();
     onSubmit(payload);
     setLabel('');
     setEmoji('');
@@ -600,6 +701,40 @@ function EditorForm({
         </>
       )}
 
+      {showOpeningBalance && (
+        <>
+          <Text style={styles.editorPickerLabel}>Current opening balance (optional)</Text>
+          <Text style={styles.editorHelp}>
+            Enter the amount currently in this account. It is not treated as income.
+          </Text>
+          <TextInput
+            style={styles.openingBalanceInput}
+            value={openingBalance}
+            onChangeText={setOpeningBalance}
+            placeholder="0"
+            placeholderTextColor="#9aa0a6"
+            keyboardType="decimal-pad"
+          />
+        </>
+      )}
+
+      {showReconciliation && (
+        <>
+          <Text style={styles.editorPickerLabel}>Bank balance to reconcile (optional)</Text>
+          <Text style={styles.editorHelp}>
+            Enter today’s balance shown by your bank. A difference helps you find missing or duplicate entries.
+          </Text>
+          <TextInput
+            style={styles.openingBalanceInput}
+            value={reconciliationBalance}
+            onChangeText={setReconciliationBalance}
+            placeholder="0"
+            placeholderTextColor="#9aa0a6"
+            keyboardType="decimal-pad"
+          />
+        </>
+      )}
+
       <View style={styles.editorButtons}>
         <TouchableOpacity
           onPress={onCancel}
@@ -658,69 +793,78 @@ const makeStyles = (c) => ({
     lineHeight: 17,
   },
 
-  // ---- Group card ----
-  groupCard: {
-    backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 14,
-    borderLeftWidth: 4,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    gap: 8,
+  // ---- Group section (header outside card, list inside — reference layout) ----
+  groupSection: {
+    marginBottom: 22,
   },
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingBottom: 4,
+    paddingHorizontal: 2,
+    marginBottom: 10,
   },
-  groupEmoji: { fontSize: 20 },
+  groupEmoji: { fontSize: 16 },
   groupTitle: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '700',
-    color: c.text.primary,
-  },
-  groupCountPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 999,
-    backgroundColor: c.bg.surfaceAlt,
-  },
-  groupCountPillText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     color: c.text.secondary,
-    letterSpacing: 0.2,
   },
-  groupEditBtn: {
-    width: 26, height: 26, borderRadius: 13,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center', justifyContent: 'center',
+  groupCount: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: c.text.muted,
+    minWidth: 14,
+    textAlign: 'right',
   },
-  groupDeleteBtn: {
-    width: 26, height: 26, borderRadius: 13,
-    backgroundColor: '#fee2e2',
-    alignItems: 'center', justifyContent: 'center',
+  groupMoreBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Green outline circle — matches the reference "+" affordance.
+  groupAddBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  groupEditWrap: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+
+  groupCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  rowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border.subtle,
   },
 
   emptyGroupHint: {
     fontSize: 12,
     color: c.text.secondary,
     textAlign: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    borderStyle: 'dashed',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
   },
 
   // ---- Swipeable account row ----
   rowWrap: {
-    borderRadius: 10,
     overflow: 'hidden',
   },
   deleteBehind: {
@@ -747,32 +891,56 @@ const makeStyles = (c) => ({
 
   rowSurface: {
     backgroundColor: c.bg.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
   },
   rowInner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    gap: 8,
+    alignItems: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
   },
-  rowDot:   { width: 8, height: 8, borderRadius: 4 },
-  rowEmoji: { fontSize: 18 },
-  rowLabel: { flex: 1, fontSize: 14, fontWeight: '500', color: c.text.primary },
-  rowEditBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  // Foreign-currency badge on account rows.
-  currencyBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  rowDot: {
+    width: 8,
+    height: 8,
     borderRadius: 4,
+    marginTop: 6,
+  },
+  rowMain: {
+    flex: 1,
+    gap: 4,
+  },
+  rowLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  rowMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  openingBalanceText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: c.text.secondary,
+  },
+  reconciliationText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  reconciliationMatch: { color: c.accent.income },
+  reconciliationMismatch: { color: c.accent.expense },
+  rowEmoji: { fontSize: 13 },
+
+  // Currency pill — always shown; muted when matching base currency.
+  currencyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
     backgroundColor: '#eef2ff',
+  },
+  currencyBadgeMuted: {
+    backgroundColor: c.bg.surfaceAlt,
   },
   currencyBadgeText: {
     fontSize: 10,
@@ -780,38 +948,9 @@ const makeStyles = (c) => ({
     color: '#3730a3',
     letterSpacing: 0.4,
   },
-
-  // ---- Add-account button (dashed, subtle) ----
-  addAccountButton: {
-    borderRadius: 10,
-    paddingVertical: 8,
-    backgroundColor: c.bg.surface,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#c7d2fe',
-    marginTop: 4,
+  currencyBadgeTextMuted: {
+    color: c.text.secondary,
   },
-  addAccountButtonText: {
-    color: '#2563eb',
-    fontWeight: '600',
-    fontSize: 12,
-  },
-
-  // ---- Add-group button (solid, foreground) ----
-  addGroupButton: {
-    marginTop: 6,
-    borderRadius: 12,
-    paddingVertical: 12,
-    backgroundColor: '#eef2ff',
-    alignItems: 'center',
-  },
-  addGroupButtonText: {
-    color: '#2563eb',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-
   gestureHint: {
     marginTop: 14,
     fontSize: 11,
@@ -822,12 +961,8 @@ const makeStyles = (c) => ({
 
   // ---- Editor form ----
   editorForm: {
-    marginBottom: 8,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: c.bg.surface,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
+    padding: 14,
+    backgroundColor: c.bg.surfaceAlt,
     gap: 10,
   },
   editorRow: { flexDirection: 'row', gap: 8 },
@@ -855,6 +990,16 @@ const makeStyles = (c) => ({
     lineHeight: 15,
     marginBottom: 2,
     marginTop: -4,
+  },
+  openingBalanceInput: {
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
+    fontSize: 14,
+    color: c.text.primary,
+    backgroundColor: c.bg.canvas,
   },
   editorColorRow: {
     flexDirection: 'row',

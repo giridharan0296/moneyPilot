@@ -13,7 +13,7 @@
 //   │  ⭘ Active toggle · ✎ Edit · ✕ Delete  │
 //   └───────────────────────────────────────┘
 //   ...
-//   [ + New budget ]  (button, or opens inline form)
+//   Header "+" opens the inline create form.
 //
 // Actions:
 //   - Row tap  → inline edit form
@@ -72,7 +72,8 @@ export default function BudgetScreen({ navigation }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
-  // Header "+ New" button, hidden while the create form is open.
+  // Header "+" — same affordance as Accounts / Categories. Hidden while
+  // the create form is open so it doesn't compete with itself.
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () =>
@@ -82,16 +83,21 @@ export default function BudgetScreen({ navigation }) {
               setEditingId(null);
               setCreating(true);
             }}
-            hitSlop={8}
-            style={styles.headerBtn}
+            hitSlop={12}
+            style={{ paddingHorizontal: 8 }}
             accessibilityRole="button"
             accessibilityLabel="Add budget"
           >
-            <Text style={styles.headerBtnText}>+ New</Text>
+            <AppIcon
+              name="plus"
+              size={22}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating]);
+  }, [navigation, creating, themeColors.text.primary]);
 
   // Progress info per budget — memoized so we don't recompute on every render.
   // Depends on `expenses` and `budgets`; both change less frequently than
@@ -203,9 +209,7 @@ export default function BudgetScreen({ navigation }) {
         </View>
       )}
 
-      {budgets.length === 0 && !creating && (
-        <EmptyState onCreate={() => setCreating(true)} />
-      )}
+      {budgets.length === 0 && !creating && <EmptyState />}
 
       {budgets.map((b) => {
         const cat = b.categoryId
@@ -283,21 +287,6 @@ export default function BudgetScreen({ navigation }) {
         );
       })}
 
-      {budgets.length > 0 && !creating && (
-        <TouchableOpacity
-          style={styles.addBtn}
-          activeOpacity={0.7}
-          onPress={() => {
-            setEditingId(null);
-            setCreating(true);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel="Add budget"
-        >
-          <Text style={styles.addBtnText}>+ Add another budget</Text>
-        </TouchableOpacity>
-      )}
-
       <Text style={styles.footer}>
         Budgets track expense transactions only. Change a period to see the
         weekly / yearly view. Inactive budgets stay in the list but don't
@@ -360,7 +349,7 @@ function SummaryPill({ color, count, label }) {
   );
 }
 
-function EmptyState({ onCreate }) {
+function EmptyState() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   return (
@@ -372,14 +361,8 @@ function EmptyState({ onCreate }) {
       <Text style={styles.emptyBody}>
         Pick a category you overspend on (or set an Overall cap) and give it a
         monthly limit. You'll see a live progress bar as expenses come in.
+        Tap + in the header to create one.
       </Text>
-      <TouchableOpacity
-        style={styles.emptyBtn}
-        activeOpacity={0.8}
-        onPress={onCreate}
-      >
-        <Text style={styles.emptyBtnText}>+ Create your first budget</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -412,13 +395,6 @@ function categoryLabel(categories, id) {
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
   container: { padding: spacing.xl, paddingBottom: 60, gap: spacing.md },
-
-  headerBtn: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-  headerBtnText: {
-    color: c.accent.primary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
 
   // Hero
   hero: {
@@ -515,22 +491,6 @@ const makeStyles = (c) => ({
     fontSize: 13,
   },
 
-  // Bottom add
-  addBtn: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: c.border.strong,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.xs,
-  },
-  addBtnText: {
-    color: c.text.secondary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-
   footer: {
     color: c.text.muted,
     fontSize: 11,
@@ -559,13 +519,5 @@ const makeStyles = (c) => ({
     textAlign: 'center',
     lineHeight: 19,
     marginTop: spacing.xs,
-    marginBottom: spacing.lg,
   },
-  emptyBtn: {
-    backgroundColor: c.accent.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: radii.md,
-  },
-  emptyBtnText: { color: c.text.inverse, fontWeight: '700', fontSize: 14 },
 });

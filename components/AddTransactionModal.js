@@ -43,6 +43,7 @@ export default function AddTransactionModal({
   title = 'Add transaction',
   submitLabel = 'Add',
   notePlaceholder = 'e.g. lunch with team',
+  initialValues = null,
   onAdd,
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -70,14 +71,6 @@ export default function AddTransactionModal({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.header}>
-          {/* Back button — arrow-left icon + "Back" label. Previously
-              this was a tiny "Cancel" text link, which most users didn't
-              recognize as the way out of the modal. The explicit arrow
-              matches the platform header pattern users expect (Android
-              AppBar back / iOS chevron), and the larger hitSlop makes
-              it thumb-friendly. Tapping still calls `onClose` — the
-              parent decides whether that means "discard" or "just
-              close the form". */}
           <TouchableOpacity
             onPress={onClose}
             hitSlop={12}
@@ -94,15 +87,20 @@ export default function AddTransactionModal({
             <Text style={styles.headerBackLabel}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-          {/* Spacer to balance the header — Back is an icon+label button
-              on the left, this invisible view keeps the title truly
-              centred across the modal width. Matches EditTransactionModal
-              which has a Delete button in this slot. */}
           <View style={styles.headerSpacer} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={styles.body}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <TransactionForm
+            key={
+              initialValues
+                ? `prefill-${initialValues.amount}-${initialValues.note || ''}`
+                : 'blank'
+            }
             categories={categories}
             accounts={accounts}
             accountGroups={accountGroups}
@@ -110,6 +108,7 @@ export default function AddTransactionModal({
             submitLabel={submitLabel}
             notePlaceholder={notePlaceholder}
             type={type}
+            initialValues={initialValues || undefined}
             onSubmit={handleSubmit}
           />
         </ScrollView>

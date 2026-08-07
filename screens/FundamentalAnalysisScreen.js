@@ -13,6 +13,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
+  Dimensions,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -22,13 +24,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
 import AppIcon from '../components/AppIcon';
+import StockPriceChart from '../components/StockPriceChart';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import {
   fetchFundamentals,
+  fetchPriceHistory,
   searchSymbols,
   formatRatio,
   formatPct,
@@ -39,6 +44,7 @@ import {
   fetchPeerComparison,
   enrichHoldingsProfiles,
   assessPortfolioRisk,
+  baseSymbol,
 } from '../lib/fundamentals';
 
 const QUICK = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'AAPL', 'MSFT'];
@@ -280,12 +286,15 @@ function PortfolioRiskCard({ risk, loading, styles, colors }) {
   );
 }
 
-function InvestGuide({ data, suggestion, styles, colors }) {
+function InvestGuide({ data, suggestion, styles, colors, onLogPress }) {
   const thesis = data?.thesis;
   if (!thesis) return null;
   const pal = thesisPalette(thesis.key);
   const cur = data.currency || 'INR';
   const rangePos = thesis.week52Pos;
+  const canLog = typeof onLogPress === 'function'
+    && suggestion?.amount != null
+    && suggestion.amount > 0;
 
   return (
     <Section title="Invest guide" styles={styles}>
@@ -367,6 +376,21 @@ function InvestGuide({ data, suggestion, styles, colors }) {
           ) : null}
         </View>
 
+        {canLog ? (
+          <TouchableOpacity
+            style={styles.logInvestBtn}
+            onPress={onLogPress}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Log suggested investment"
+          >
+            <AppIcon name="plus" size={16} color="#fff" strokeWidth={2.4} />
+            <Text style={styles.logInvestBtnText}>
+              Log {formatMoney(suggestion.amount, cur)}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+
         <Text style={styles.investDisclaimer}>
           Heuristic from ratios, 52-week range, peers, and your portfolio — not investment advice.
         </Text>
@@ -378,6 +402,7 @@ function InvestGuide({ data, suggestion, styles, colors }) {
 export default function FundamentalAnalysisScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
+  const navigation = useNavigation();
   const { holdings, summary: portfolioSummary } = usePortfolio();
   const { assets } = useNetWorth();
   const initial = route?.params?.symbol ? String(route.params.symbol) : '';
@@ -393,8 +418,19 @@ export default function FundamentalAnalysisScreen({ route }) {
   const [peersError, setPeersError] = useState(null);
   const [enrichedHoldings, setEnrichedHoldings] = useState([]);
   const [riskLoading, setRiskLoading] = useState(false);
+  const [chartRange, setChartRange] = useState('3mo');
+  const [chartPoints, setChartPoints] = useState([]);
+  const [chartCurrency, setChartCurrency] = useState(null);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState(null);
   const searchTimer = useRef(null);
   const reqId = useRef(0);
+  const chartReq = useRef(0);
+
+  const chartWidth = useMemo(
+    () => Dimensions.get('window').width - 16 * 2 - 14 * 2,
+    [],
+  );
 
   const cashAvailable = useMemo(() => {
     return (assets || []).reduce((sum, a) => {
@@ -438,6 +474,51 @@ export default function FundamentalAnalysisScreen({ route }) {
       risk,
     });
   }, [data, holdings, portfolioSummary?.totalValue, cashAvailable, risk]);
+
+  // Price history for the chart — refetch when symbol or range changes.
+  useEffect(() => {
+    if (!data?.symbol) {
+      setChartPoints([]);
+      setChartError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const id = ++chartReq.current;
+    (async () => {
+      setChartLoading(true);
+      setChartError(null);
+      try {
+        const hist = await fetchPriceHistory(data.symbol, { range: chartRange });
+        if (cancelled || id !== chartReq.current) return;
+        setChartPoints(hist.points);
+        setChartCurrency(hist.currency || data.currency || 'INR');
+      } catch (e) {
+        if (cancelled || id !== chartReq.current) return;
+        setChartPoints([]);
+        setChartError(e?.message || 'Chart unavailable.');
+      } finally {
+        if (!cancelled && id === chartReq.current) setChartLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [data?.symbol, data?.currency, chartRange]);
+
+  const logSuggestedInvestment = useCallback(() => {
+    if (!data || !suggestion?.amount || suggestion.amount <= 0) return;
+    const sym = baseSymbol(data.symbol) || data.symbol;
+    const amountStr = String(Math.round(suggestion.amount));
+    navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
+    setTimeout(() => {
+      DeviceEventEmitter.emit('transactions:openAdd', {
+        type: 'investment',
+        prefill: {
+          amount: amountStr,
+          note: `${sym} · fundamentals suggest`,
+          tags: ['fundamentals', String(sym).toLowerCase()],
+        },
+      });
+    }, 80);
+  }, [data, suggestion, navigation]);
 
   const runLookup = useCallback(async (symbol) => {
     const s = String(symbol || '').trim();
@@ -686,11 +767,24 @@ export default function FundamentalAnalysisScreen({ route }) {
               </Text>
             </View>
 
+            <View style={styles.chartCard}>
+              <StockPriceChart
+                points={chartPoints}
+                currency={chartCurrency || data.currency || 'INR'}
+                width={chartWidth}
+                loading={chartLoading}
+                error={chartError}
+                rangeId={chartRange}
+                onRangeChange={setChartRange}
+              />
+            </View>
+
             <InvestGuide
               data={data}
               suggestion={suggestion}
               styles={styles}
               colors={colors}
+              onLogPress={logSuggestedInvestment}
             />
 
             <PortfolioRiskCard
@@ -1138,6 +1232,30 @@ const makeStyles = (c) => ({
     fontSize: 11,
     color: c.text.muted,
     lineHeight: 15,
+  },
+  logInvestBtn: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#7c3aed',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  logInvestBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  chartCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
   },
 
   inlineLoading: {

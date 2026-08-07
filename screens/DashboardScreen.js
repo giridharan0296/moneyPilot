@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -10,8 +10,10 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import DateFilterBar from '../components/DateFilterBar';
+import DashboardCashflowCard from '../components/DashboardCashflowCard';
 import SpendOverTimeChart from '../components/SpendOverTimeChart';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -28,22 +30,31 @@ import AppIcon from '../components/AppIcon';
 import { computeProgress, periodLabel } from '../lib/budget';
 import { goalsSummary } from '../lib/goals';
 import { upcomingOccurrence } from '../lib/recurring';
+import { buildMonthClose } from '../lib/monthClose';
+import { withAlpha } from '../lib/colorAlpha';
+import { STORAGE_KEYS } from '../constants';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
   isForeign,
+  lookupRateOrOne,
 } from '../lib/currency';
+import { computeAccountBalances } from '../lib/accountBalances';
 
 export default function DashboardScreen() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const incomeColor = themeColors.accent.income;
+  const expenseColor = themeColors.accent.expense;
+  const investmentColor = themeColors.accent.investment;
+  const primaryColor = themeColors.accent.primary;
   // Transactions come from context, so the Dashboard updates in real time
   // when the user adds/edits/deletes on the Expenses / Income / Invest
   // tabs (no more useFocusEffect reload dance).
   const { expenses, income, investments, ready } = useTransactions();
 
   // Category + account lookups come from context (user-editable data).
-  const { findCategory, findAccount, baseCurrency, fxRates } = useSettings();
+  const { accounts, findCategory, findAccount, baseCurrency, fxRates } = useSettings();
   // Assets/liabilities live in their own context — separate lifecycle from
   // transactions. We just read the summary here to show a compact strip.
   const netWorth = useNetWorth();
@@ -112,7 +123,7 @@ export default function DashboardScreen() {
   }, [lastSweep, clearLastSweep]);
 
   // ---- Date range filter (shared across the whole app) ----
-  const { filterByRange, isAllTime, label: rangeLabel } = useDateFilter();
+  const { filterByRange, isAllTime, label: rangeLabel, range } = useDateFilter();
   const fIncome = filterByRange(income);
   const fExpenses = filterByRange(expenses);
   const fInvestments = filterByRange(investments);
@@ -127,21 +138,32 @@ export default function DashboardScreen() {
   const totalExpenses = sumInBase(fExpenses);
   const totalInvestments = sumInBase(fInvestments);
 
-  // Two different ways to view "balance" — we show one clearly, and the
-  // other is implied by the summary cards:
-  //   * availableBalance = liquid cash / bank money you can still spend.
-  //                        Investments are subtracted because that money
-  //                        has left your account (it's now an asset).
-  //   * moneySaved       = income - expenses. This is what you kept, cash
-  //                        AND invested combined. Used only for savings rate
-  //                        below because investing IS a form of saving.
-  const availableBalance = totalIncome - totalExpenses - totalInvestments;
+  // Available balance follows the date filter:
+  //   all time  → full account ledgers (opening + all activity)
+  //   month/week/custom → ledger as of the end of that range
+  // In / Out / Invested stay as activity inside the selected range.
+  const availableBalance = useMemo(() => {
+    const now = new Date();
+    const asOf = range ? (range.end < now ? range.end : now) : null;
+    const balances = computeAccountBalances({
+      accounts,
+      income,
+      expenses,
+      investments,
+      transfers,
+      asOf,
+    });
+    let total = 0;
+    for (const account of accounts) {
+      const face = Number(balances.get(account.id)) || 0;
+      const currency = account.currency ?? baseCurrency;
+      total += face * lookupRateOrOne(fxRates, currency, baseCurrency);
+    }
+    return total;
+  }, [accounts, income, expenses, investments, transfers, fxRates, baseCurrency, range]);
   const moneySaved = totalIncome - totalExpenses;
   const savingsRate =
     totalIncome > 0 ? Math.max(0, (moneySaved / totalIncome) * 100) : 0;
-
-  // Bar chart max — scale all three bars to a common width.
-  const barMax = Math.max(totalIncome, totalExpenses, totalInvestments, 1);
 
   // Budget summary for the Dashboard strip. We show the WORST-OFF active
   // budget (highest percent, "over" ranked above "warn" above "safe") so
@@ -285,38 +307,86 @@ export default function DashboardScreen() {
     return rows;
   })();
 
-  // ---- Upcoming bills (next 7 days from recurring rules) --------------
+  // ---- Upcoming bills (next 14 days from recurring rules) -------------
   //
   // Uses the SAME `upcomingOccurrence` helper as the Recurring screen so
-  // "Next: <date>" agrees everywhere. We only include ACTIVE rules that
-  // are due within the next 7 days (inclusive of today) so the strip
-  // doesn't spam with things that are weeks away.
-  //
-  // Grouped by type — expense-side items dominate for most users (rent,
-  // subscriptions, EMIs), but we surface income too (salary) since
-  // "when am I next paid" is genuinely useful for cash-flow planning.
+  // "Next: <date>" agrees everywhere. Window is 14 days so the user can
+  // plan cash for the fortnight; "Today" rows get a stronger badge.
   const upcomingBills = (() => {
     if (!recurringRules || recurringRules.length === 0) return [];
     const now = new Date();
-    const in7 = new Date();
-    in7.setDate(in7.getDate() + 7);
-    in7.setHours(23, 59, 59, 999);
+    const in14 = new Date();
+    in14.setDate(in14.getDate() + 14);
+    in14.setHours(23, 59, 59, 999);
     const out = [];
     for (const r of recurringRules) {
       if (r.active === false) continue;
       const next = upcomingOccurrence(r, now);
       if (!next) continue;
-      if (next > in7) continue;
+      if (next > in14) continue;
       out.push({ rule: r, date: next });
     }
-    // Nearest first.
     out.sort((a, b) => a.date - b.date);
-    return out.slice(0, 4);
+    return out.slice(0, 6);
   })();
   const upcomingBillsTotal = upcomingBills.reduce((s, u) => {
     if (u.rule.type !== 'expense') return s;
     return s + (Number(u.rule.amount) || 0);
   }, 0);
+  const billsDueToday = upcomingBills.filter(({ date }) => {
+    const now = new Date();
+    return (
+      date.getFullYear() === now.getFullYear()
+      && date.getMonth() === now.getMonth()
+      && date.getDate() === now.getDate()
+    );
+  }).length;
+
+  // ---- Month close (calendar month-to-date, ignores date filter) ------
+  const monthClose = useMemo(
+    () =>
+      buildMonthClose({
+        income,
+        expenses,
+        investments,
+        budgets,
+        fxRates,
+        baseCurrency,
+      }),
+    [income, expenses, investments, budgets, fxRates, baseCurrency],
+  );
+
+  // ---- Backup nag (soft banner if last backup > 14 days / never) -----
+  const BACKUP_NAG_DAYS = 14;
+  const [backupNag, setBackupNag] = useState(null); // null | { daysAgo, never }
+  const [backupNagDismissed, setBackupNagDismissed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEYS.last_backup_at);
+        if (cancelled) return;
+        if (!raw) {
+          setBackupNag({ never: true, daysAgo: null });
+          return;
+        }
+        const t = Date.parse(raw);
+        if (!isFinite(t)) {
+          setBackupNag({ never: true, daysAgo: null });
+          return;
+        }
+        const daysAgo = Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000));
+        if (daysAgo >= BACKUP_NAG_DAYS) {
+          setBackupNag({ never: false, daysAgo });
+        } else {
+          setBackupNag(null);
+        }
+      } catch {
+        if (!cancelled) setBackupNag(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // ---- Goals summary ---------------------------------------------------
   //
@@ -456,206 +526,92 @@ export default function DashboardScreen() {
       {/* Global date filter — shared with all other screens */}
       <DateFilterBar />
 
-      {/* AVAILABLE BALANCE — see B6.9 for the label logic below.
-          When the user has a date filter active, this figure is really
-          "net flow for the period", not liquid cash — so we swap the
-          label + helper to match. Only in "All time" does the number
-          truly represent liquid cash still spendable. */}
-      <View
-        style={[
-          styles.netCard,
-          { backgroundColor: isPositive ? '#065f46' : '#7f1d1d' },
-        ]}
-      >
-        <Text style={styles.netLabel}>
-          {isAllTime
-            ? 'AVAILABLE BALANCE'
-            : `NET FOR ${rangeLabel.toUpperCase()}`}
-        </Text>
-        <Text style={styles.netAmount}>
-          {isPositive ? '' : '-'}
-          {formatMoneyCurrency(Math.abs(availableBalance), baseCurrency)}
-        </Text>
+      <DashboardCashflowCard
+        isAllTime={isAllTime}
+        rangeLabel={rangeLabel}
+        isPositive={isPositive}
+        availableBalance={availableBalance}
+        savingsRate={savingsRate}
+        totalIncome={totalIncome}
+        totalExpenses={totalExpenses}
+        totalInvestments={totalInvestments}
+        incomeCount={fIncome.length}
+        expenseCount={fExpenses.length}
+        investmentCount={fInvestments.length}
+        baseCurrency={baseCurrency}
+      />
 
-        {/* Small helper line so the number is unambiguous. */}
-        <Text style={styles.netSub}>
-          {isAllTime
-            ? (totalInvestments > 0
-                ? 'Income − Expenses − Investments (lifetime)'
-                : 'Cash you can still spend')
-            : (totalInvestments > 0
-                ? 'Income − Expenses − Investments this period'
-                : 'Income − Expenses this period')}
-        </Text>
-
-        {/* Savings rate (investments count as savings, so this stays high
-            even when Available Balance is small). */}
-        <Text style={styles.netSubStrong}>
-          {totalIncome > 0
-            ? `${savingsRate.toFixed(0)}% saved${totalInvestments > 0 ? ` · ${formatMoneyCurrency(totalInvestments, baseCurrency)} invested` : ''}`
-            : 'Add some income to see your savings rate'}
-        </Text>
-      </View>
-
-      {/* SUMMARY ROW — 3 compact cards */}
-      <View style={styles.summaryRow}>
-        <SummaryCard
-          label="INCOME"
-          amount={totalIncome}
-          count={fIncome.length}
-          borderColor="#10b981"
-          amountColor="#059669"
-          baseCurrency={baseCurrency}
-        />
-        <SummaryCard
-          label="EXPENSES"
-          amount={totalExpenses}
-          count={fExpenses.length}
-          borderColor="#ef4444"
-          amountColor="#dc2626"
-          baseCurrency={baseCurrency}
-        />
-        <SummaryCard
-          label="INVESTED"
-          amount={totalInvestments}
-          count={fInvestments.length}
-          borderColor="#6366f1"
-          amountColor="#4f46e5"
-          baseCurrency={baseCurrency}
-        />
-      </View>
-
-      {/* SPEND OVER TIME — smooth XY curve of expenses. Uses its own
-          range chips (independent of the global date filter) so users
-          can zoom the graph without reshaping every other card. */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Spend over time</Text>
-        <Text style={styles.spendChartSub}>
-          Smooth curve of your expenses · X = date · Y = amount
-        </Text>
-        <SpendOverTimeChart
-          expenses={expenses}
-          fxRates={fxRates}
-          baseCurrency={baseCurrency}
-          width={Math.max(260, spendChartWidth)}
-        />
-      </View>
-
-      {/* AI INSIGHTS HERO — v4 placement. Sits just below the summary
-          row so it lands in the top third of the dashboard where the
-          user's eye is still fresh. Two visual states:
-            * Full hero (have cached insights) — severity chips + top
-              insight preview + "view all" affordance.
-            * Compact CTA (configured but never generated) — a small
-              "get your first review" card that deep-links to the
-              Insights tab.
-          Hidden entirely when AI Insights is not configured — no nag. */}
-      {aiConfigured && aiGeneratedAt && aiTopInsight ? (
+      {/* MONTH CLOSE — calendar month-to-date snapshot (income / spend /
+          saved / rate). Independent of the date-filter chip so the
+          story stays "how is this month going?". */}
+      {(monthClose.income > 0 || monthClose.expense > 0 || monthClose.invested > 0) && (
         <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => navigation.navigate('Insights')}
-          style={styles.aiHero}
-          accessibilityRole="button"
-          accessibilityLabel={`AI Insights: ${aiInsights.length} to review, top: ${aiTopInsight.title}`}
+          activeOpacity={0.7}
+          onPress={() =>
+            navigation.navigate('More', { screen: 'Reports', initial: false })
+          }
+          style={styles.monthCloseCard}
         >
-          {/* Header — icon + label + "N to review" + refresh affordance */}
-          <View style={styles.aiHeroHeader}>
-            <View style={styles.aiHeroBrand}>
-              <View style={styles.aiHeroIconBadge}>
-                <AppIcon name="sparkles" size={14} color="#fff" strokeWidth={2.4} />
-              </View>
-              <Text style={styles.aiHeroBrandText}>AI INSIGHTS</Text>
-              <View style={styles.aiHeroCountPill}>
-                <Text style={styles.aiHeroCountPillText}>
-                  {aiInsights.length} to review
-                </Text>
-              </View>
+          <View style={styles.monthCloseHeader}>
+            <View style={styles.monthCloseTitleRow}>
+              <AppIcon name="calendar" size={14} color={primaryColor} strokeWidth={2.2} />
+              <Text style={styles.monthCloseTitle}>
+                {monthClose.monthLabel.toUpperCase()} · DAY {monthClose.dayOfMonth}
+              </Text>
             </View>
-            <AppIcon
-              name="chevron-right"
-              size={18}
-              color={themeColors.text.muted}
-              strokeWidth={2}
-            />
-          </View>
-
-          {/* Severity chip row — only render chips with count > 0 so
-              the row stays uncluttered. */}
-          {(aiSeverityCounts.critical + aiSeverityCounts.warn +
-            aiSeverityCounts.info + aiSeverityCounts.good) > 0 && (
-            <View style={styles.aiHeroChipRow}>
-              {aiSeverityCounts.critical > 0 && (
-                <View style={[styles.aiHeroChip, { backgroundColor: '#dc262622' }]}>
-                  <AppIcon name="alert-triangle" size={12} color="#dc2626" strokeWidth={2.4} />
-                  <Text style={[styles.aiHeroChipText, { color: '#dc2626' }]}>
-                    {aiSeverityCounts.critical} critical
-                  </Text>
-                </View>
-              )}
-              {aiSeverityCounts.warn > 0 && (
-                <View style={[styles.aiHeroChip, { backgroundColor: '#f59e0b22' }]}>
-                  <AppIcon name="alert-triangle" size={12} color="#f59e0b" strokeWidth={2.4} />
-                  <Text style={[styles.aiHeroChipText, { color: '#b45309' }]}>
-                    {aiSeverityCounts.warn} warn
-                  </Text>
-                </View>
-              )}
-              {aiSeverityCounts.info > 0 && (
-                <View style={[styles.aiHeroChip, { backgroundColor: '#3b82f622' }]}>
-                  <AppIcon name="info" size={12} color="#3b82f6" strokeWidth={2.4} />
-                  <Text style={[styles.aiHeroChipText, { color: '#1d4ed8' }]}>
-                    {aiSeverityCounts.info} info
-                  </Text>
-                </View>
-              )}
-              {aiSeverityCounts.good > 0 && (
-                <View style={[styles.aiHeroChip, { backgroundColor: '#05966922' }]}>
-                  <AppIcon name="check" size={12} color="#059669" strokeWidth={2.4} />
-                  <Text style={[styles.aiHeroChipText, { color: '#047857' }]}>
-                    {aiSeverityCounts.good} good
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Top insight teaser — title + first line of body. */}
-          <Text style={styles.aiHeroTeaserTitle} numberOfLines={2}>
-            {aiTopInsight.title}
-          </Text>
-          <Text style={styles.aiHeroTeaserBody} numberOfLines={2}>
-            {aiTopInsight.body}
-          </Text>
-
-          <Text style={styles.aiHeroFooter}>
-            View all {aiInsights.length} insight{aiInsights.length === 1 ? '' : 's'} →
-          </Text>
-        </TouchableOpacity>
-      ) : aiConfigured ? (
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => navigation.navigate('Insights')}
-          style={styles.aiEmpty}
-          accessibilityRole="button"
-          accessibilityLabel="Generate your first AI insights"
-        >
-          <View style={styles.aiEmptyIconBadge}>
-            <AppIcon name="sparkles" size={16} color="#fff" strokeWidth={2.4} />
-          </View>
-          <View style={styles.aiEmptyBody}>
-            <Text style={styles.aiEmptyTitle}>Get your first AI review</Text>
-            <Text style={styles.aiEmptyBodyText}>
-              Let AI scan your cash flow, budgets, goals, investments and loans, then surface what needs attention →
+            <Text style={styles.monthCloseDaysLeft}>
+              {monthClose.daysLeft === 0
+                ? 'Last day'
+                : `${monthClose.daysLeft}d left`}
             </Text>
           </View>
-          <AppIcon
-            name="chevron-right"
-            size={18}
-            color={themeColors.text.muted}
-            strokeWidth={2}
-          />
+          <View style={styles.monthCloseGrid}>
+            <View style={styles.monthCloseCell}>
+              <Text style={styles.monthCloseLabel}>In</Text>
+              <Text style={[styles.monthCloseValue, { color: incomeColor }]}>
+                {formatMoneyCurrency(monthClose.income, baseCurrency)}
+              </Text>
+            </View>
+            <View style={styles.monthCloseCell}>
+              <Text style={styles.monthCloseLabel}>Spent</Text>
+              <Text style={[styles.monthCloseValue, { color: expenseColor }]}>
+                {formatMoneyCurrency(monthClose.expense, baseCurrency)}
+              </Text>
+            </View>
+            <View style={styles.monthCloseCell}>
+              <Text style={styles.monthCloseLabel}>Saved</Text>
+              <Text
+                style={[
+                  styles.monthCloseValue,
+                  { color: monthClose.saved >= 0 ? incomeColor : expenseColor },
+                ]}
+              >
+                {formatMoneyCurrency(monthClose.saved, baseCurrency)}
+              </Text>
+            </View>
+            <View style={styles.monthCloseCell}>
+              <Text style={styles.monthCloseLabel}>Rate</Text>
+              <Text style={styles.monthCloseValue}>
+                {monthClose.savingsRate != null
+                  ? `${monthClose.savingsRate.toFixed(0)}%`
+                  : '—'}
+              </Text>
+            </View>
+          </View>
+          {monthClose.invested > 0 ? (
+            <Text style={styles.monthCloseSub}>
+              Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month
+              {monthClose.budget
+                ? ` · Budget “${monthClose.budget.label}” ${Math.round(monthClose.budget.percent)}% (${monthClose.budget.status})`
+                : ''}
+            </Text>
+          ) : monthClose.budget ? (
+            <Text style={styles.monthCloseSub}>
+              Budget “{monthClose.budget.label}” {Math.round(monthClose.budget.percent)}% · {monthClose.budget.status}
+            </Text>
+          ) : null}
         </TouchableOpacity>
-      ) : null}
+      )}
 
       {/* MONTH-OVER-MONTH SPENDING TREND — the single most actionable
           number on the dashboard: "are you spending more or less than
@@ -678,14 +634,12 @@ export default function DashboardScreen() {
               <AppIcon
                 name={momSpending.delta > 0 ? 'trending-up' : 'trending-down'}
                 size={14}
-                color={momSpending.delta > 0 ? '#dc2626' : '#059669'}
+                color={momSpending.delta > 0 ? expenseColor : incomeColor}
                 strokeWidth={2.2}
               />
-              <Text style={styles.momTitle}>
-                {momSpending.thisLabel.toUpperCase()} VS {momSpending.prevLabel.toUpperCase()} · SO FAR
-              </Text>
+              <Text style={styles.momTitle}>Spending vs last month</Text>
             </View>
-            <Text style={styles.momChevron}>›</Text>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
           </View>
           <View style={styles.momRow}>
             <View style={styles.momValueBlock}>
@@ -700,21 +654,23 @@ export default function DashboardScreen() {
               style={[
                 styles.momDeltaPill,
                 {
-                  backgroundColor:
-                    momSpending.delta > 0 ? '#fee2e2' : '#d1fae5',
+                  backgroundColor: withAlpha(
+                    momSpending.delta > 0 ? expenseColor : incomeColor,
+                    0.16,
+                  ),
                 },
               ]}
             >
               <AppIcon
                 name={momSpending.delta > 0 ? 'trending-up' : 'trending-down'}
                 size={12}
-                color={momSpending.delta > 0 ? '#b91c1c' : '#047857'}
+                color={momSpending.delta > 0 ? expenseColor : incomeColor}
                 strokeWidth={2.4}
               />
               <Text
                 style={[
                   styles.momDeltaText,
-                  { color: momSpending.delta > 0 ? '#b91c1c' : '#047857' },
+                  { color: momSpending.delta > 0 ? expenseColor : incomeColor },
                 ]}
               >
                 {momSpending.delta > 0 ? '+' : ''}
@@ -732,6 +688,20 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
+      {/* This chart keeps its own short-range control for trend exploration. */}
+      <View style={[styles.card, styles.chartCard]}>
+        <Text style={styles.cardTitle}>Spend over time</Text>
+        <Text style={styles.spendChartSub}>
+          Your daily spending trend
+        </Text>
+        <SpendOverTimeChart
+          expenses={expenses}
+          fxRates={fxRates}
+          baseCurrency={baseCurrency}
+          width={Math.max(260, spendChartWidth)}
+        />
+      </View>
+
       {/* TOP SPENDING CATEGORIES — "where did the money go?" without
           having to open Reports. Top 3 categories in the current filter
           window, each with a mini progress bar showing its share of
@@ -748,10 +718,10 @@ export default function DashboardScreen() {
         >
           <View style={styles.topCatHeader}>
             <View style={styles.topCatTitleRow}>
-              <AppIcon name="pie-chart" size={14} color="#7c3aed" strokeWidth={2.2} />
-              <Text style={styles.topCatTitle}>WHERE YOUR MONEY WENT</Text>
+              <AppIcon name="pie-chart" size={14} color={investmentColor} strokeWidth={2.2} />
+              <Text style={styles.topCatTitle}>Top categories</Text>
             </View>
-            <Text style={styles.topCatChevron}>›</Text>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
           </View>
           {topExpenseCategories.map((c) => (
             <View key={c.categoryId} style={styles.topCatRow}>
@@ -785,13 +755,10 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
-      {/* UPCOMING BILLS — the next 7 days from active recurring rules.
-          Answers "what's about to hit my account?" without navigating.
-          Sum badge at the top-right totals the EXPENSE-side hits so
-          the user knows the cash outflow to expect this week. Income
-          rules (salary etc.) are still listed so they see the good
-          alongside the bad. Hidden when nothing is due — no clutter. */}
-      {upcomingBills.length > 0 && (
+      {/* UPCOMING BILLS — next 14 days from active recurring rules.
+          "Today" rows get a stronger badge. Empty state nudges the user
+          to set up rent/salary/SIP rules. */}
+      {upcomingBills.length > 0 ? (
         <TouchableOpacity
           activeOpacity={0.7}
           onPress={() =>
@@ -801,8 +768,11 @@ export default function DashboardScreen() {
         >
           <View style={styles.upcomingHeader}>
             <View style={styles.upcomingTitleRow}>
-              <AppIcon name="calendar" size={14} color="#b45309" strokeWidth={2.2} />
-              <Text style={styles.upcomingTitle}>NEXT 7 DAYS</Text>
+              <AppIcon name="calendar" size={14} color={primaryColor} strokeWidth={2.2} />
+              <Text style={styles.upcomingTitle}>
+                Upcoming bills
+                {billsDueToday > 0 ? ` · ${billsDueToday} today` : ''}
+              </Text>
             </View>
             {upcomingBillsTotal > 0 ? (
               <View style={styles.upcomingBadge}>
@@ -811,7 +781,7 @@ export default function DashboardScreen() {
                 </Text>
               </View>
             ) : (
-              <Text style={styles.upcomingChevron}>›</Text>
+              <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
             )}
           </View>
           {upcomingBills.map(({ rule, date }) => {
@@ -821,8 +791,9 @@ export default function DashboardScreen() {
               0,
               Math.ceil((date - new Date()) / (24 * 60 * 60 * 1000)),
             );
+            const isToday = days === 0;
             const whenLabel =
-              days === 0
+              isToday
                 ? 'Today'
                 : days === 1
                   ? 'Tomorrow'
@@ -842,10 +813,15 @@ export default function DashboardScreen() {
                     })}
                   </Text>
                 </View>
+                {isToday ? (
+                  <View style={styles.dueTodayPill}>
+                    <Text style={styles.dueTodayPillText}>Due</Text>
+                  </View>
+                ) : null}
                 <Text
                   style={[
                     styles.upcomingAmount,
-                    { color: isIncome ? '#059669' : '#b91c1c' },
+                    { color: isIncome ? incomeColor : expenseColor },
                   ]}
                 >
                   {isIncome ? '+' : '−'}
@@ -855,7 +831,59 @@ export default function DashboardScreen() {
             );
           })}
         </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() =>
+            navigation.navigate('More', { screen: 'RecurringTransactions', initial: false })
+          }
+          style={styles.upcomingEmpty}
+        >
+          <AppIcon name="calendar" size={16} color={primaryColor} strokeWidth={2.2} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.upcomingEmptyTitle}>No bills due soon</Text>
+            <Text style={styles.upcomingEmptySub}>
+              Add rent, salary, or SIP rules to get reminders here.
+            </Text>
+          </View>
+          <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
+        </TouchableOpacity>
       )}
+
+      {/* BACKUP NAG — soft reminder if export is stale / never done. */}
+      {backupNag && !backupNagDismissed ? (
+        <View style={styles.backupNag}>
+          <TouchableOpacity
+            style={styles.backupNagMain}
+            activeOpacity={0.75}
+            onPress={() =>
+              navigation.navigate('More', { screen: 'Settings', initial: false })
+            }
+          >
+            <AppIcon name="download" size={16} color="#1d4ed8" strokeWidth={2.2} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.backupNagTitle}>
+                {backupNag.never
+                  ? 'Back up your data'
+                  : `Last backup ${backupNag.daysAgo}d ago`}
+              </Text>
+              <Text style={styles.backupNagSub}>
+                Export a JSON backup so you don’t lose transactions.
+              </Text>
+            </View>
+            <Text style={styles.backupNagCta}>Backup</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setBackupNagDismissed(true)}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss backup reminder"
+            style={styles.backupNagDismiss}
+          >
+            <AppIcon name="x" size={14} color={themeColors.text.muted} strokeWidth={2.4} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {/* GOALS HERO — the single most-relevant goal right now. Prefers
           a spend-cap that's ≥60% used (something to watch) over a
@@ -872,12 +900,12 @@ export default function DashboardScreen() {
         >
           <View style={styles.goalsHeader}>
             <View style={styles.goalsTitleRow}>
-              <AppIcon name="flag" size={14} color="#059669" strokeWidth={2.2} />
+              <AppIcon name="flag" size={14} color={incomeColor} strokeWidth={2.2} />
               <Text style={styles.goalsTitle}>
-                GOALS · {goalsRoll?.count ?? 0} active
+                Goals · {goalsRoll?.count ?? 0} active
               </Text>
             </View>
-            <Text style={styles.goalsChevron}>›</Text>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
           </View>
           <View style={styles.goalsBody}>
             <Text style={styles.goalsLabel} numberOfLines={1}>
@@ -892,11 +920,11 @@ export default function DashboardScreen() {
                     backgroundColor:
                       heroGoal.kind === 'spend_cap'
                         ? heroGoal.status === 'over'
-                          ? '#dc2626'
+                          ? expenseColor
                           : heroGoal.status === 'warn'
-                            ? '#f59e0b'
-                            : '#059669'
-                        : '#059669',
+                            ? primaryColor
+                            : incomeColor
+                        : incomeColor,
                   },
                 ]}
               />
@@ -915,7 +943,7 @@ export default function DashboardScreen() {
                 </Text>
               )}
               {heroGoal.daysLeft != null && heroGoal.daysLeft <= 0 && (
-                <Text style={[styles.goalsMetaSub, { color: '#b91c1c' }]}>
+                <Text style={[styles.goalsMetaSub, { color: expenseColor }]}>
                   Deadline passed
                 </Text>
               )}
@@ -941,15 +969,15 @@ export default function DashboardScreen() {
         >
           <View style={styles.networthLeft}>
             <View style={styles.networthLabelRow}>
-              <Text style={styles.networthLabel}>NET WORTH</Text>
-              <AppIcon name="gem" size={12} color="#14b8a6" strokeWidth={2} />
+              <Text style={styles.networthLabel}>Net worth</Text>
+              <AppIcon name="gem" size={12} color={investmentColor} strokeWidth={2} />
             </View>
             <Text
               style={[
                 styles.networthValue,
                 {
                   color:
-                    netWorth.summary.netWorth >= 0 ? '#065f46' : '#7f1d1d',
+                    netWorth.summary.netWorth >= 0 ? incomeColor : expenseColor,
                 },
               ]}
             >
@@ -959,13 +987,13 @@ export default function DashboardScreen() {
           </View>
           <View style={styles.networthRight}>
             <View style={styles.networthSubRow}>
-              <View style={[styles.networthDot, { backgroundColor: '#10b981' }]} />
+              <View style={[styles.networthDot, { backgroundColor: incomeColor }]} />
               <Text style={styles.networthSub}>
                 {formatMoneyCurrency(netWorth.summary.totalAssets, baseCurrency)} assets
               </Text>
             </View>
             <View style={styles.networthSubRow}>
-              <View style={[styles.networthDot, { backgroundColor: '#dc2626' }]} />
+              <View style={[styles.networthDot, { backgroundColor: expenseColor }]} />
               <Text style={styles.networthSub}>
                 {formatMoneyCurrency(netWorth.summary.totalLiabilities, baseCurrency)} debt
               </Text>
@@ -984,7 +1012,7 @@ export default function DashboardScreen() {
           style={styles.networthEmpty}
         >
           <View style={styles.networthEmptyTitleRow}>
-            <AppIcon name="gem" size={16} color="#5b21b6" strokeWidth={2.2} />
+            <AppIcon name="gem" size={16} color={investmentColor} strokeWidth={2.2} />
             <Text style={styles.networthEmptyTitle}>Track your Net Worth</Text>
           </View>
           <Text style={styles.networthEmptySub}>
@@ -1007,12 +1035,12 @@ export default function DashboardScreen() {
         >
           <View style={styles.budgetStripHeader}>
             <View style={styles.budgetStripTitleRow}>
-              <AppIcon name="target" size={14} color="#0f766e" strokeWidth={2.2} />
+              <AppIcon name="target" size={14} color={primaryColor} strokeWidth={2.2} />
               <Text style={styles.budgetStripTitle}>
-                BUDGETS · {budgetSummary.safe}/{budgetSummary.total} on track
+                Budgets · {budgetSummary.safe}/{budgetSummary.total} on track
               </Text>
             </View>
-            <Text style={styles.budgetStripChevron}>›</Text>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
           </View>
           {budgetSummary.worst && (
             <View style={styles.budgetStripInner}>
@@ -1046,7 +1074,7 @@ export default function DashboardScreen() {
           style={styles.budgetEmpty}
         >
           <View style={styles.budgetEmptyTitleRow}>
-            <AppIcon name="target" size={16} color="#991b1b" strokeWidth={2.2} />
+            <AppIcon name="target" size={16} color={expenseColor} strokeWidth={2.2} />
             <Text style={styles.budgetEmptyTitle}>Set a spending budget</Text>
           </View>
           <Text style={styles.budgetEmptySub}>
@@ -1068,22 +1096,22 @@ export default function DashboardScreen() {
         >
           <View style={styles.transfersHeader}>
             <View style={styles.transfersTitleRow}>
-              <AppIcon name="arrow-right-left" size={14} color="#0369a1" strokeWidth={2.2} />
-              <Text style={styles.transfersTitle}>LOANS &amp; LENDING</Text>
+              <AppIcon name="arrow-right-left" size={14} color={primaryColor} strokeWidth={2.2} />
+              <Text style={styles.transfersTitle}>Loans &amp; lending</Text>
             </View>
-            <Text style={styles.transfersChevron}>›</Text>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
           </View>
           <View style={styles.transfersRow}>
             <View style={styles.transfersCell}>
               <Text style={styles.transfersCellLabel}>Owed to you</Text>
-              <Text style={[styles.transfersCellValue, { color: '#065f46' }]}>
+              <Text style={[styles.transfersCellValue, { color: incomeColor }]}>
                 {formatMoneyCurrency(transfersSummary.owedToYou, baseCurrency)}
               </Text>
             </View>
             <View style={styles.transfersDivider} />
             <View style={styles.transfersCell}>
               <Text style={styles.transfersCellLabel}>You owe</Text>
-              <Text style={[styles.transfersCellValue, { color: '#7f1d1d' }]}>
+              <Text style={[styles.transfersCellValue, { color: expenseColor }]}>
                 {formatMoneyCurrency(transfersSummary.youOwe, baseCurrency)}
               </Text>
             </View>
@@ -1091,31 +1119,78 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
-      {/* COMPARISON BAR CHART */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Money Flow</Text>
-        <ComparisonBar
-          label="Income"
-          value={totalIncome}
-          max={barMax}
-          color="#10b981"
-          baseCurrency={baseCurrency}
-        />
-        <ComparisonBar
-          label="Spent"
-          value={totalExpenses}
-          max={barMax}
-          color="#ef4444"
-          baseCurrency={baseCurrency}
-        />
-        <ComparisonBar
-          label="Invested"
-          value={totalInvestments}
-          max={barMax}
-          color="#6366f1"
-          baseCurrency={baseCurrency}
-        />
-      </View>
+      {/* AI is intentionally lower: money movement and planning stay first. */}
+      {aiConfigured && aiGeneratedAt && aiTopInsight ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('Insights')}
+          style={styles.aiHero}
+          accessibilityRole="button"
+          accessibilityLabel={`AI Insights: ${aiInsights.length} to review, top: ${aiTopInsight.title}`}
+        >
+          <View style={styles.aiHeroHeader}>
+            <View style={styles.aiHeroBrand}>
+              <View style={styles.aiHeroIconBadge}>
+                <AppIcon name="sparkles" size={14} color={themeColors.text.onHero} strokeWidth={2.4} />
+              </View>
+              <Text style={styles.aiHeroBrandText}>AI insights</Text>
+              <View style={[styles.aiHeroCountPill, { backgroundColor: withAlpha(investmentColor, 0.16) }]}>
+                <Text style={[styles.aiHeroCountPillText, { color: investmentColor }]}>
+                  {aiInsights.length} to review
+                </Text>
+              </View>
+            </View>
+            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
+          </View>
+
+          {(aiSeverityCounts.critical + aiSeverityCounts.warn +
+            aiSeverityCounts.info + aiSeverityCounts.good) > 0 && (
+            <View style={styles.aiHeroChipRow}>
+              {aiSeverityCounts.critical > 0 && (
+                <SeverityChip count={aiSeverityCounts.critical} label="critical" icon="alert-triangle" color={expenseColor} />
+              )}
+              {aiSeverityCounts.warn > 0 && (
+                <SeverityChip count={aiSeverityCounts.warn} label="watch" icon="alert-triangle" color={primaryColor} />
+              )}
+              {aiSeverityCounts.info > 0 && (
+                <SeverityChip count={aiSeverityCounts.info} label="info" icon="info" color={primaryColor} />
+              )}
+              {aiSeverityCounts.good > 0 && (
+                <SeverityChip count={aiSeverityCounts.good} label="good" icon="check" color={incomeColor} />
+              )}
+            </View>
+          )}
+
+          <Text style={styles.aiHeroTeaserTitle} numberOfLines={2}>
+            {aiTopInsight.title}
+          </Text>
+          <Text style={styles.aiHeroTeaserBody} numberOfLines={2}>
+            {aiTopInsight.body}
+          </Text>
+          <Text style={[styles.aiHeroFooter, { color: investmentColor }]}>
+            View all {aiInsights.length} insight{aiInsights.length === 1 ? '' : 's'}
+          </Text>
+        </TouchableOpacity>
+      ) : aiConfigured ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('Insights')}
+          style={styles.aiEmpty}
+          accessibilityRole="button"
+          accessibilityLabel="Generate your first AI insights"
+        >
+          <View style={styles.aiEmptyIconBadge}>
+            <AppIcon name="sparkles" size={16} color={themeColors.text.onHero} strokeWidth={2.4} />
+          </View>
+          <View style={styles.aiEmptyBody}>
+            <Text style={styles.aiEmptyTitle}>Get your first AI review</Text>
+            <Text style={styles.aiEmptyBodyText}>
+              Let AI scan your cash flow, budgets, goals, investments and loans.
+            </Text>
+          </View>
+          <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
+        </TouchableOpacity>
+      ) : null}
 
       {/* RECENT ACTIVITY */}
       <View style={styles.card}>
@@ -1140,47 +1215,6 @@ export default function DashboardScreen() {
         )}
       </View>
     </ScrollView>
-  );
-}
-
-// A compact summary card. Three of these sit side-by-side.
-function SummaryCard({ label, amount, count, borderColor, amountColor, baseCurrency }) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <View style={[styles.summaryCard, { borderColor }]}>
-      <Text style={styles.summaryLabel}>{label}</Text>
-      <Text style={[styles.summaryAmount, { color: amountColor }]}>
-        {formatMoneyCurrency(amount, baseCurrency)}
-      </Text>
-      <Text style={styles.summaryMeta}>
-        {count} {count === 1 ? 'entry' : 'entries'}
-      </Text>
-    </View>
-  );
-}
-
-// ----------------------------------------------------------------------------
-// Comparison bar — the "poor man's bar chart" using only <View> width%.
-// No SVG needed: a colored inner View inside a gray track.
-// ----------------------------------------------------------------------------
-function ComparisonBar({ label, value, max, color, baseCurrency }) {
-  const styles = useThemedStyles(makeStyles);
-  const pct = max > 0 ? (value / max) * 100 : 0;
-  return (
-    <View style={styles.barBlock}>
-      <View style={styles.barTopRow}>
-        <Text style={styles.barLabel}>{label}</Text>
-        <Text style={styles.barValue}>{formatMoneyCurrency(value, baseCurrency)}</Text>
-      </View>
-      <View style={styles.barTrack}>
-        <View
-          style={[
-            styles.barFill,
-            { width: `${pct}%`, backgroundColor: color },
-          ]}
-        />
-      </View>
-    </View>
   );
 }
 
@@ -1248,6 +1282,18 @@ function ActivityRow({ item, findCategory, findAccount, baseCurrency, fxRates })
   );
 }
 
+function SeverityChip({ count, label, icon, color }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={[styles.aiHeroChip, { backgroundColor: withAlpha(color, 0.16) }]}>
+      <AppIcon name={icon} size={12} color={color} strokeWidth={2.4} />
+      <Text style={[styles.aiHeroChipText, { color }]}>
+        {count} {label}
+      </Text>
+    </View>
+  );
+}
+
 // Resolves a display label for a budget row on the Dashboard strip.
 // Overall budgets (categoryId == null) get a distinct emoji + label so
 // they don't look like a nameless category.
@@ -1279,10 +1325,8 @@ function formatDate(iso) {
 // ----------------------------------------------------------------------------
 // Theme-aware style factory.
 //
-// Only the *primary* theme tokens (canvas / surface / text / border / muted)
-// are swapped based on the active theme; accent hues (recurring-banner amber,
-// networth violet, budgets red, transfers cyan, etc.) stay as literals so
-// each colored strip keeps its identity across light and dark modes.
+// Layout, surfaces, text, borders, and semantic accents all derive from the
+// active theme so the Dashboard stays coherent in both light and dark mode.
 // ----------------------------------------------------------------------------
 const makeStyles = (c) => ({
   root: { flex: 1, backgroundColor: c.bg.canvas },
@@ -1321,75 +1365,14 @@ const makeStyles = (c) => ({
     fontWeight: '700',
   },
 
-  netCard: {
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  netLabel: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    letterSpacing: 1,
-    fontWeight: '600',
-  },
-  netAmount: {
-    color: '#fff',
-    fontSize: 40,
-    fontWeight: '700',
-    marginTop: 8,
-  },
-  netSub: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
-  netSubStrong: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 6,
-  },
-
-  summaryRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 20,
-  },
-  summaryCard: {
-    flex: 1,
-    backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderLeftWidth: 4,
-  },
-  summaryLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: c.text.secondary,
-    letterSpacing: 0.8,
-  },
-  summaryAmount: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 4,
-  },
-  summaryMeta: {
-    fontSize: 10,
-    color: c.text.muted,
-    marginTop: 2,
-  },
-
   // Month-over-month spending trend card.
   momStrip: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#f59e0b',
+    borderLeftWidth: 4, borderLeftColor: c.accent.expense,
     gap: 8,
   },
   momHeader: {
@@ -1404,7 +1387,6 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     letterSpacing: 0.5,
   },
-  momChevron: { fontSize: 24, color: c.text.muted, lineHeight: 24 },
   momRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -1444,11 +1426,11 @@ const makeStyles = (c) => ({
   // Top spending categories card
   topCatCard: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#7c3aed',
+    borderLeftWidth: 4, borderLeftColor: c.accent.investment,
     gap: 10,
   },
   topCatHeader: {
@@ -1463,7 +1445,6 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     letterSpacing: 0.5,
   },
-  topCatChevron: { fontSize: 24, color: c.text.muted, lineHeight: 24 },
   topCatRow: { gap: 4 },
   topCatRowHead: {
     flexDirection: 'row',
@@ -1498,15 +1479,142 @@ const makeStyles = (c) => ({
     fontWeight: '600',
   },
 
-  // Upcoming bills (next 7 days)
+  // Upcoming bills (next 14 days)
   upcomingCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1, borderColor: c.border.subtle,
+    borderLeftWidth: 4, borderLeftColor: c.accent.primary,
+    gap: 8,
+  },
+  upcomingEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     backgroundColor: c.bg.surface,
     borderRadius: 14,
     padding: 14,
     marginBottom: 20,
-    borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#f59e0b',
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderStyle: 'dashed',
+  },
+  upcomingEmptyTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  upcomingEmptySub: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  dueTodayPill: {
+    backgroundColor: c.bg.surfaceAlt,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginRight: 4,
+  },
+  dueTodayPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: c.accent.primary,
+  },
+
+  // Month close snapshot
+  monthCloseCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderLeftWidth: 4,
+    borderLeftColor: c.accent.primary,
+    gap: 10,
+  },
+  monthCloseHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  monthCloseTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  monthCloseTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.text.muted,
+    letterSpacing: 0.6,
+  },
+  monthCloseDaysLeft: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.accent.primary,
+  },
+  monthCloseGrid: {
+    flexDirection: 'row',
     gap: 8,
+  },
+  monthCloseCell: { flex: 1, gap: 2 },
+  monthCloseLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  monthCloseValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: c.text.primary,
+  },
+  monthCloseSub: {
+    fontSize: 11,
+    color: c.text.secondary,
+    lineHeight: 15,
+  },
+
+  // Backup nag
+  backupNag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingLeft: 12,
+    paddingRight: 6,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    gap: 4,
+  },
+  backupNagMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  backupNagTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e3a8a',
+  },
+  backupNagSub: {
+    fontSize: 11,
+    color: '#1d4ed8',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  backupNagCta: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1d4ed8',
+  },
+  backupNagDismiss: {
+    padding: 8,
   },
   upcomingHeader: {
     flexDirection: 'row',
@@ -1521,17 +1629,16 @@ const makeStyles = (c) => ({
     letterSpacing: 0.5,
   },
   upcomingBadge: {
-    backgroundColor: '#fef3c7',
+    backgroundColor: c.bg.surfaceAlt,
     paddingHorizontal: 10, paddingVertical: 3,
     borderRadius: 999,
   },
   upcomingBadgeText: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#92400e',
+    color: c.accent.primary,
     letterSpacing: 0.2,
   },
-  upcomingChevron: { fontSize: 24, color: c.text.muted, lineHeight: 24 },
   upcomingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1560,11 +1667,11 @@ const makeStyles = (c) => ({
   // Goals strip
   goalsStrip: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#059669',
+    borderLeftWidth: 4, borderLeftColor: c.accent.income,
     gap: 8,
   },
   goalsHeader: {
@@ -1579,7 +1686,6 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     letterSpacing: 0.5,
   },
-  goalsChevron: { fontSize: 24, color: c.text.muted, lineHeight: 24 },
   goalsBody: { gap: 6 },
   goalsLabel: {
     fontSize: 13,
@@ -1617,11 +1723,11 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#8b5cf6',
+    borderLeftWidth: 4, borderLeftColor: c.accent.investment,
   },
   networthLeft:  { flex: 1 },
   networthRight: { alignItems: 'flex-end' },
@@ -1635,18 +1741,20 @@ const makeStyles = (c) => ({
   networthSub:   { fontSize: 11, color: c.text.secondary, fontWeight: '600' },
 
   networthEmpty: {
-    backgroundColor: '#f5f3ff',
-    borderRadius: 14,
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
-    borderWidth: 1.5,
-    borderColor: '#c4b5fd',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
     borderStyle: 'dashed',
     alignItems: 'center',
+    borderLeftWidth: 4,
+    borderLeftColor: c.accent.investment,
   },
   networthEmptyTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  networthEmptyTitle: { fontSize: 14, fontWeight: '700', color: '#5b21b6' },
-  networthEmptySub:   { fontSize: 11, color: '#7c3aed', marginTop: 4 },
+  networthEmptyTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
+  networthEmptySub:   { fontSize: 11, color: c.text.secondary, marginTop: 4 },
 
   // AI Insights hero card — the promoted v4 placement. Sits between
   // the summary row and net worth strip. Bigger than the old strip so
@@ -1656,16 +1764,9 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surface,
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#6366f1',
-    // Slightly more presence than a regular strip — the shadow tells
-    // the eye "I'm a card, not a divider".
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+    borderLeftWidth: 4, borderLeftColor: c.accent.investment,
     gap: 10,
   },
   aiHeroHeader: {
@@ -1684,7 +1785,7 @@ const makeStyles = (c) => ({
   aiHeroIconBadge: {
     width: 26, height: 26,
     borderRadius: 8,
-    backgroundColor: '#6366f1',
+    backgroundColor: c.accent.investment,
     alignItems: 'center', justifyContent: 'center',
   },
   aiHeroBrandText: {
@@ -1694,14 +1795,13 @@ const makeStyles = (c) => ({
     letterSpacing: 0.8,
   },
   aiHeroCountPill: {
-    backgroundColor: '#6366f122',
     paddingHorizontal: 8, paddingVertical: 2,
     borderRadius: 999,
   },
   aiHeroCountPillText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#4338ca',
+    color: c.accent.investment,
   },
 
   // Severity chip row — hidden entirely when all buckets are zero
@@ -1739,7 +1839,6 @@ const makeStyles = (c) => ({
   aiHeroFooter: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#6366f1',
     marginTop: 2,
   },
 
@@ -1750,17 +1849,17 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#6366f1',
+    borderLeftWidth: 4, borderLeftColor: c.accent.investment,
     gap: 12,
   },
   aiEmptyIconBadge: {
     width: 32, height: 32,
     borderRadius: 10,
-    backgroundColor: '#6366f1',
+    backgroundColor: c.accent.investment,
     alignItems: 'center', justifyContent: 'center',
   },
   aiEmptyBody: { flex: 1 },
@@ -1780,11 +1879,11 @@ const makeStyles = (c) => ({
   // rhythm as the net-worth strip so the eye flows through them.
   budgetStrip: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#dc2626',
+    borderLeftWidth: 4, borderLeftColor: c.accent.expense,
     gap: 8,
   },
   budgetStripHeader: {
@@ -1799,11 +1898,6 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     letterSpacing: 0.5,
   },
-  budgetStripChevron: {
-    fontSize: 24,
-    color: c.text.muted,
-    lineHeight: 24,
-  },
   budgetStripInner: { gap: 4 },
   budgetStripWorstLabel: {
     fontSize: 12,
@@ -1812,32 +1906,34 @@ const makeStyles = (c) => ({
   },
   budgetStripAlert: {
     fontSize: 11,
-    color: '#b91c1c',
+    color: c.accent.expense,
     fontWeight: '700',
     marginTop: 2,
   },
   budgetEmpty: {
-    backgroundColor: '#fef2f2',
-    borderRadius: 14,
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
-    borderWidth: 1.5,
-    borderColor: '#fca5a5',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
     borderStyle: 'dashed',
     alignItems: 'center',
+    borderLeftWidth: 4,
+    borderLeftColor: c.accent.expense,
   },
   budgetEmptyTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  budgetEmptyTitle: { fontSize: 14, fontWeight: '700', color: '#991b1b' },
-  budgetEmptySub:   { fontSize: 11, color: '#dc2626', marginTop: 4 },
+  budgetEmptyTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
+  budgetEmptySub:   { fontSize: 11, color: c.text.secondary, marginTop: 4 },
 
   // Transfers (loans & lending) summary strip
   transfersStrip: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: '#0ea5e9',
+    borderLeftWidth: 4, borderLeftColor: c.accent.primary,
     gap: 10,
   },
   transfersHeader: {
@@ -1851,11 +1947,6 @@ const makeStyles = (c) => ({
     fontWeight: '700',
     color: c.text.primary,
     letterSpacing: 0.5,
-  },
-  transfersChevron: {
-    fontSize: 24,
-    color: c.text.muted,
-    lineHeight: 24,
   },
   transfersRow: {
     flexDirection: 'row',
@@ -1884,10 +1975,14 @@ const makeStyles = (c) => ({
   card: {
     backgroundColor: c.bg.surface,
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: c.border.subtle,
+  },
+  chartCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: c.accent.primary,
   },
   cardTitle: {
     fontSize: 14,
@@ -1901,26 +1996,6 @@ const makeStyles = (c) => ({
     marginTop: -6,
     marginBottom: 12,
     lineHeight: 17,
-  },
-
-  // Comparison bar chart
-  barBlock: { marginTop: 8 },
-  barTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  barLabel: { fontSize: 13, color: c.text.secondary, fontWeight: '600' },
-  barValue: { fontSize: 13, color: c.text.primary, fontWeight: '700' },
-  barTrack: {
-    height: 12,
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 6,
   },
 
   // Activity list

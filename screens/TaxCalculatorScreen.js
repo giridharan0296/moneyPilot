@@ -48,6 +48,7 @@ import { pickFile } from '../lib/openFile';
 import { extractPdfText } from '../lib/pdfExtract';
 import { parsePayslip, PAYSLIP_FIELDS } from '../lib/parsePayslip';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 
 // FY dropdown values (only 2025-26 is modeled today; a v2 could extend
 // SLABS by FY and switch based on the selection).
@@ -319,7 +320,14 @@ export default function TaxCalculatorScreen() {
       {/* INCOME */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Income</Text>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle}>Income</Text>
+            <HelpSheet
+              title="Tax estimate"
+              summary="This calculator compares estimated Indian old and new regime tax from the information you enter."
+              items={['Choose the salary source that best matches your documents.', 'Deductions apply only to the old regime.', 'Use the result for planning; confirm filing details with current tax guidance or a professional.']}
+            />
+          </View>
           <TouchableOpacity
             onPress={openAutoFill}
             style={styles.autoFillBtn}
@@ -401,9 +409,6 @@ export default function TaxCalculatorScreen() {
       >
         <Text style={styles.deductionsToggleText}>
           {showDeductions ? '▾' : '▸'}  Deductions (old regime only)
-        </Text>
-        <Text style={styles.deductionsHint}>
-          Skip if you're planning to pick the new regime.
         </Text>
       </TouchableOpacity>
 
@@ -1281,6 +1286,7 @@ const makeStyles = (c) => ({
     fontWeight: '800',
     color: c.text.primary,
   },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center' },
   autoFillBtn: {
     paddingHorizontal: 10,
     paddingVertical: 6,

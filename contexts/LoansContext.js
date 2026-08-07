@@ -80,6 +80,13 @@ function normalizeLoan(l) {
     disbursementAccountId:  l.disbursementAccountId ?? null,
     linkedLiabilityId:      l.linkedLiabilityId ?? null,
     currentOutstanding:     Number(l.currentOutstanding) || 0,
+    prepaymentPlan:         l.prepaymentPlan?.enabled
+      ? {
+        enabled: true,
+        targetMonthsPerEmi: Math.max(1, Number(l.prepaymentPlan.targetMonthsPerEmi) || 1),
+        startedAt: l.prepaymentPlan.startedAt ?? new Date().toISOString(),
+      }
+      : { enabled: false, targetMonthsPerEmi: 1, startedAt: null },
     events:                 Array.isArray(l.events) ? l.events.map(normalizeEvent) : [],
     status:                 l.status ?? 'active',
     closedAt:               l.closedAt ?? null,

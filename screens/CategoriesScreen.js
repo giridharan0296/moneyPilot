@@ -61,19 +61,16 @@ const TYPES = [
 const TYPE_COPY = {
   income:     {
     subtitle:      'Sources of money coming in. Tap a row to add sub-sources.',
-    addLabel:      '+ Add income category',
     resetLabel:    'Reset income categories to defaults',
     deleteWarning: "Past income entries in this category will show 'Unknown'.",
   },
   expense:    {
     subtitle:      'How money is spent. Tap a row to add sub-categories.',
-    addLabel:      '+ Add expense category',
     resetLabel:    'Reset expense categories to defaults',
     deleteWarning: "Past expenses in this category will show 'Unknown'.",
   },
   investment: {
     subtitle:      'Asset classes. Tap a row to add sub-asset types.',
-    addLabel:      '+ Add investment category',
     resetLabel:    'Reset investment categories to defaults',
     deleteWarning: "Past investments in this category will show 'Unknown'.",
   },
@@ -132,29 +129,46 @@ export default function CategoriesScreen({ navigation }) {
   const items = categories?.[activeType] ?? [];
   const copy  = TYPE_COPY[activeType];
 
-  // Header overflow button (3-dots). Rendered via setOptions so it
-  // sits inside the native stack header rather than as a fake header
-  // inside the ScrollView.
+  // Header: + to add a category, ⋮ for overflow (reset). Hide + while
+  // the add form is open so the affordance doesn't compete with itself.
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity
-          onPress={() => setMenuOpen(true)}
-          hitSlop={12}
-          style={{ paddingHorizontal: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel="More options"
-        >
-          <AppIcon
-            name="more-vertical"
-            size={20}
-            color={themeColors.text.primary}
-            strokeWidth={2.4}
-          />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 4 }}>
+          {!adding ? (
+            <TouchableOpacity
+              onPress={() => setAdding(true)}
+              hitSlop={12}
+              style={{ paddingHorizontal: 8, paddingVertical: 4 }}
+              accessibilityRole="button"
+              accessibilityLabel="Add category"
+            >
+              <AppIcon
+                name="plus"
+                size={22}
+                color={themeColors.text.primary}
+                strokeWidth={2.4}
+              />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            onPress={() => setMenuOpen(true)}
+            hitSlop={12}
+            style={{ paddingHorizontal: 8, paddingVertical: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel="More options"
+          >
+            <AppIcon
+              name="more-vertical"
+              size={20}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
+          </TouchableOpacity>
+        </View>
       ),
     });
-  }, [navigation, themeColors.text.primary]);
+  }, [navigation, adding, themeColors.text.primary]);
 
   const confirmReset = () => {
     setMenuOpen(false);
@@ -259,7 +273,7 @@ export default function CategoriesScreen({ navigation }) {
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>No categories yet</Text>
             <Text style={styles.emptyStateBody}>
-              Tap the button below to add your first one, or use the overflow
+              Tap + in the header to add your first one, or use the overflow
               menu (⋮) to load the built-in defaults.
             </Text>
           </View>
@@ -302,7 +316,7 @@ export default function CategoriesScreen({ navigation }) {
           ),
         )}
 
-        {/* ---- Add-new area at the bottom ---- */}
+        {/* ---- Add-new form (opened from header +) ---- */}
         {adding ? (
           <EditorForm
             onCancel={() => setAdding(false)}
@@ -311,15 +325,7 @@ export default function CategoriesScreen({ navigation }) {
               if (created) setAdding(false);
             }}
           />
-        ) : (
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => setAdding(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.addButtonText}>{copy.addLabel}</Text>
-          </TouchableOpacity>
-        )}
+        ) : null}
 
         {/* Small hint on the very first render so users discover the
             swipe gesture without stumbling. */}
@@ -396,6 +402,10 @@ function SwipeableCategoryRow({
   // or to the right of 0.
   const translateX = useRef(new Animated.Value(0)).current;
   const openRef    = useRef(false);
+  // While a TextInput form is open inside this row, refuse to claim the
+  // pan — otherwise swipe handlers steal touches and typing breaks.
+  const formOpenRef = useRef(false);
+  formOpenRef.current = addingSub || editingSubId != null;
 
   const snapClosed = () => {
     openRef.current = false;
@@ -429,12 +439,14 @@ function SwipeableCategoryRow({
       // vertical) and past the small dead-zone. This keeps the outer
       // ScrollView usable in the vertical axis.
       onMoveShouldSetPanResponder: (_, g) => {
+        if (formOpenRef.current) return false;
         return (
           Math.abs(g.dx) > SWIPE_THRESHOLD &&
           Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_ANGLE_BIAS
         );
       },
       onMoveShouldSetPanResponderCapture: (_, g) => {
+        if (formOpenRef.current) return false;
         return (
           Math.abs(g.dx) > SWIPE_THRESHOLD &&
           Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_ANGLE_BIAS
@@ -637,9 +649,19 @@ function SwipeableCategoryRow({
               <TouchableOpacity
                 onPress={() => setAddingSub(true)}
                 activeOpacity={0.7}
-                style={styles.addSubButton}
+                style={[
+                  styles.addSubButton,
+                  { borderColor: themeColors.accent.income },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Add sub-category"
               >
-                <Text style={styles.addSubButtonText}>+ Add sub-category</Text>
+                <AppIcon
+                  name="plus"
+                  size={14}
+                  color={themeColors.accent.income}
+                  strokeWidth={2.4}
+                />
               </TouchableOpacity>
             )}
           </View>
@@ -941,33 +963,15 @@ const makeStyles = (c) => ({
   },
 
   addSubButton: {
-    borderRadius: 8,
-    paddingVertical: 8,
-    backgroundColor: c.bg.surface,
+    alignSelf: 'flex-start',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    backgroundColor: 'transparent',
     alignItems: 'center',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#c7d2fe',
+    justifyContent: 'center',
     marginTop: 4,
-  },
-  addSubButtonText: {
-    color: '#2563eb',
-    fontWeight: '600',
-    fontSize: 12,
-  },
-
-  // ---- Add-new button ----
-  addButton: {
-    marginTop: 6,
-    borderRadius: 12,
-    paddingVertical: 12,
-    backgroundColor: '#eef2ff',
-    alignItems: 'center',
-  },
-  addButtonText: {
-    color: '#2563eb',
-    fontWeight: '700',
-    fontSize: 13,
   },
 
   gestureHint: {

@@ -48,6 +48,11 @@ import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 // coming back" regardless of which side.
 const GROUPS = [
   {
+    id: 'internal',
+    title: 'Between your accounts',
+    kinds: ['internal_transfer'],
+  },
+  {
     id: 'outstanding',
     title: 'Outstanding (Lend + Borrow)',
     kinds: ['lend', 'borrow'],
@@ -61,6 +66,7 @@ const GROUPS = [
 
 export default function TransfersScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { transfers, addTransfer, updateTransfer, deleteTransfer } =
     useTransfers();
   const { accounts, accountGroups, baseCurrency } = useSettings();
@@ -87,16 +93,21 @@ export default function TransfersScreen({ navigation }) {
         !creating && !editing ? (
           <TouchableOpacity
             onPress={() => setCreating(true)}
-            hitSlop={8}
-            style={styles.headerBtn}
+            hitSlop={12}
+            style={{ paddingHorizontal: 8 }}
             accessibilityRole="button"
             accessibilityLabel="Add transfer"
           >
-            <Text style={styles.headerBtnText}>+ New</Text>
+            <AppIcon
+              name="plus"
+              size={22}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating, editing]);
+  }, [navigation, creating, editing, themeColors.text.primary]);
 
   const handleAdd = (values) => {
     const res = addTransfer(values);
@@ -145,6 +156,7 @@ export default function TransfersScreen({ navigation }) {
           kind: removed.kind,
           amount: removed.amount,
           accountId: removed.accountId,
+          targetAccountId: removed.targetAccountId,
           counterpartyName: removed.counterpartyName,
           linkedNetWorthId: removed.linkedNetWorthId,
           interestAmount: removed.interestAmount,
@@ -169,11 +181,14 @@ export default function TransfersScreen({ navigation }) {
   // can show a scannable subtitle like "OUTSTANDING (3) · ₹42,000".
   const grouped = useMemo(() => {
     const g = {
+      internal:     { items: [], total: 0 },
       outstanding: { items: [], total: 0 },
       repayments:  { items: [], total: 0 },
     };
     for (const t of transfers) {
-      const bucket = (t.kind === 'lend' || t.kind === 'borrow')
+      const bucket = t.kind === 'internal_transfer'
+        ? g.internal
+        : (t.kind === 'lend' || t.kind === 'borrow')
         ? g.outstanding
         : g.repayments;
       bucket.items.push(t);
@@ -226,9 +241,7 @@ export default function TransfersScreen({ navigation }) {
           />
         )}
 
-        {transfers.length === 0 && !creating && (
-          <EmptyState onCreate={() => setCreating(true)} />
-        )}
+        {transfers.length === 0 && !creating && <EmptyState />}
 
         {GROUPS.map((g) => {
           const bucket = grouped[g.id];
@@ -256,18 +269,6 @@ export default function TransfersScreen({ navigation }) {
             </View>
           );
         })}
-
-        {transfers.length > 0 && !creating && (
-          <TouchableOpacity
-            style={styles.addBtn}
-            activeOpacity={0.7}
-            onPress={() => setCreating(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Add transfer"
-          >
-            <Text style={styles.addBtnText}>+ New transfer</Text>
-          </TouchableOpacity>
-        )}
 
         <Text style={styles.footer}>
           Transfers don't count as income or expenses. They record cash
@@ -338,8 +339,10 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const km = KIND_META[transfer.kind];
-  const cashPrefix = km?.cashDirection === 'out' ? '−' : '+';
-  const cashColor = km?.cashDirection === 'out'
+  const cashPrefix = km?.cashDirection === 'between' ? '↔' : km?.cashDirection === 'out' ? '−' : '+';
+  const cashColor = km?.cashDirection === 'between'
+    ? km?.color
+    : km?.cashDirection === 'out'
     ? themeColors.accent.expense
     : themeColors.accent.income;
 
@@ -367,7 +370,9 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
       <View style={styles.rowMiddle}>
         <Text style={styles.rowKind} numberOfLines={1}>
           {kindLabel(transfer.kind)}
-          {transfer.counterpartyName ? ` · ${transfer.counterpartyName}` : ''}
+          {transfer.kind !== 'internal_transfer' && transfer.counterpartyName
+            ? ` · ${transfer.counterpartyName}`
+            : ''}
         </Text>
         <Text style={styles.rowSub} numberOfLines={1}>
           {transferSubtitle(transfer, accounts)}
@@ -400,7 +405,7 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
   );
 }
 
-function EmptyState({ onCreate }) {
+function EmptyState() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   return (
@@ -410,16 +415,9 @@ function EmptyState({ onCreate }) {
       </View>
       <Text style={styles.emptyTitle}>No transfers yet</Text>
       <Text style={styles.emptyBody}>
-        Record a loan you gave or received without messing up your income /
-        expense totals. Net Worth updates automatically.
+        Move money between your accounts, or record a loan you gave or
+        received, without affecting income or expense totals. Tap + to add one.
       </Text>
-      <TouchableOpacity
-        style={styles.emptyBtn}
-        activeOpacity={0.8}
-        onPress={onCreate}
-      >
-        <Text style={styles.emptyBtnText}>+ Add your first transfer</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -432,6 +430,7 @@ function errorMessage(reason) {
   return {
     invalid_amount:       'Enter a positive amount.',
     invalid_kind:         'Unknown transfer kind.',
+    invalid_account_pair: 'Choose two different accounts.',
     missing_linked:       'Pick which asset / liability this affects.',
     linked_not_found:     'That linked item no longer exists.',
     interest_exceeds_amount: 'Interest cannot exceed the total.',
@@ -474,16 +473,6 @@ const makeStyles = (c) => ({
     padding: spacing.xl,
     paddingBottom: 60,
     gap: spacing.md,
-  },
-
-  headerBtn: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  headerBtnText: {
-    color: c.accent.primary,
-    fontWeight: '700',
-    fontSize: 14,
   },
 
   hero: {
@@ -614,20 +603,6 @@ const makeStyles = (c) => ({
     fontWeight: '700',
   },
 
-  addBtn: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: c.border.strong,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.xs,
-  },
-  addBtnText: {
-    color: c.text.secondary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
   footer: {
     color: c.text.muted,
     fontSize: 11,
@@ -655,18 +630,6 @@ const makeStyles = (c) => ({
     textAlign: 'center',
     lineHeight: 19,
     marginTop: spacing.xs,
-    marginBottom: spacing.lg,
-  },
-  emptyBtn: {
-    backgroundColor: c.accent.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: radii.md,
-  },
-  emptyBtnText: {
-    color: c.text.inverse,
-    fontWeight: '700',
-    fontSize: 14,
   },
 
   // ---- Edit modal ----

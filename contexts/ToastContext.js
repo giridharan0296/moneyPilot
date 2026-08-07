@@ -264,8 +264,7 @@ function ToastView({ payload, anim, visible, onDismiss, variants }) {
 
   return (
     <View
-      pointerEvents={visible ? 'box-none' : 'none'}
-      style={[styles.wrap, { bottom: bottomOffset }]}
+      style={[styles.wrap, { bottom: bottomOffset, pointerEvents: visible ? 'box-none' : 'none' }]}
     >
       <Animated.View
         style={[

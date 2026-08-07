@@ -206,6 +206,9 @@ const ICONS = {
   'chevron-right': (p) => [
     <Polyline key="a" points="9 6 15 12 9 18" {...p} />,
   ],
+  'chevron-left': (p) => [
+    <Polyline key="a" points="15 6 9 12 15 18" {...p} />,
+  ],
   // Vertical chevrons — used by collapsible sections (e.g. the
   // "View raw JSON" toggle in PreviewSummaryModal). Same visual
   // weight as chevron-right so an expand/collapse row reads uniformly.

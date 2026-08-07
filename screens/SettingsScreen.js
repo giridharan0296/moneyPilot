@@ -41,6 +41,7 @@ import {
 } from '../lib/voiceNotes';
 import { buildDemoData } from '../lib/demoData';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 
 // Bump when the backup shape changes in an incompatible way. Older
 // versions of the app will refuse to restore a file with a higher
@@ -242,6 +243,20 @@ export default function SettingsScreen({ navigation }) {
 
   const [exporting, setExporting] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
+  const [lastBackupAt, setLastBackupAt] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEYS.last_backup_at);
+        if (!cancelled && raw) setLastBackupAt(raw);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [restoring, setRestoring] = useState(false);
 
   // ---- Export all transactions to a CSV file and open native share sheet ----
@@ -346,8 +361,15 @@ export default function SettingsScreen({ navigation }) {
       });
       if (!result.ok) {
         Alert.alert('Backup failed', result.reason ?? 'Unknown error');
-      } else if (result.reason === 'no_share' && result.savedTo) {
-        Alert.alert('Backup saved', `Saved to:\n${result.savedTo}`);
+      } else {
+        const iso = new Date().toISOString();
+        setLastBackupAt(iso);
+        AsyncStorage.setItem(STORAGE_KEYS.last_backup_at, iso).catch(() => {});
+        if (result.reason === 'no_share' && result.savedTo) {
+          Alert.alert('Backup saved', `Saved to:\n${result.savedTo}`);
+        } else {
+          Alert.alert('Backup exported', 'Keep the JSON file somewhere safe.');
+        }
       }
     } catch (e) {
       console.warn('Backup failed:', e);
@@ -702,11 +724,14 @@ export default function SettingsScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.pageHint}>
-          Set up your master data, opt-in intelligence features, and
-          manage backups. Preferences and destructive actions live near
-          the bottom.
-        </Text>
+        <View style={styles.settingsHelpRow}>
+          <Text style={styles.settingsHelpLabel}>Settings</Text>
+          <HelpSheet
+            title="Settings"
+            summary="Set up the app’s master data and preferences here."
+            items={['Categories, accounts, brokers, and currency affect entry forms.', 'Backups, privacy controls, and destructive actions are further down this page.']}
+          />
+        </View>
 
         {/* ============================================================
             YOUR DATA
@@ -1021,6 +1046,17 @@ export default function SettingsScreen({ navigation }) {
               </View>
             </TouchableOpacity>
           </View>
+          <Text style={styles.backupLastHint}>
+            {lastBackupAt
+              ? `Last backup ${new Date(lastBackupAt).toLocaleString(undefined, {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : 'No backup on this device yet — export a JSON copy periodically.'}
+          </Text>
           {/* The old "Backup includes …" paragraph + orange "NOT
               included" warning that used to live here have moved into
               the InfoChip in the section header — tap ⓘ to read them.
@@ -1152,21 +1188,21 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </View>
 
-        {/* FONT */}
+        {/* FONT — compact chips; name rendered in its own typeface */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.sectionTitle}>Font</Text>
               <Text style={styles.sectionSubtitle}>
-                Choose the typeface used across the app.
+                Typeface used across the app.
               </Text>
             </View>
           </View>
-          <View style={styles.fontGrid}>
+          <View style={styles.fontRow}>
             {FONT_OPTIONS.map((f) => {
               const active = f.id === fontId;
-              const sampleFamily = f.weights
-                ? (f.weights['700'] || f.weights['400'])
+              const labelFamily = f.weights
+                ? (f.weights['600'] || f.weights['400'])
                 : undefined;
               return (
                 <TouchableOpacity
@@ -1176,29 +1212,17 @@ export default function SettingsScreen({ navigation }) {
                   accessibilityRole="button"
                   accessibilityLabel={`Font: ${f.label}`}
                   accessibilityState={{ selected: active }}
-                  style={[styles.fontCard, active && styles.fontCardActive]}
+                  style={[styles.fontChip, active && styles.fontChipActive]}
                 >
                   <Text
                     style={[
-                      styles.fontSample,
-                      sampleFamily ? { fontFamily: sampleFamily } : null,
-                      active && styles.fontSampleActive,
-                    ]}
-                  >
-                    {f.sample}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.fontCardLabel,
-                      sampleFamily ? { fontFamily: f.weights?.['600'] || sampleFamily } : null,
-                      active && styles.fontCardLabelActive,
+                      styles.fontChipText,
+                      labelFamily ? { fontFamily: labelFamily } : null,
+                      active && styles.fontChipTextActive,
                     ]}
                     numberOfLines={1}
                   >
                     {f.label}
-                  </Text>
-                  <Text style={styles.fontCardDesc} numberOfLines={2}>
-                    {f.description}
                   </Text>
                 </TouchableOpacity>
               );
@@ -2161,6 +2185,8 @@ const makeStyles = (c) => ({
     marginBottom: 20,
     lineHeight: 18,
   },
+  settingsHelpRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  settingsHelpLabel: { color: c.text.secondary, fontSize: 13, fontWeight: '700' },
 
   // Group header — the little "YOUR DATA", "INTELLIGENCE", ...
   // uppercase caption above each chapter of the Settings screen. Mirrors
@@ -2638,6 +2664,12 @@ const makeStyles = (c) => ({
     fontWeight: '700',
     fontSize: 13,
   },
+  backupLastHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: c.text.secondary,
+    lineHeight: 16,
+  },
   backupHelp: {
     fontSize: 11,
     color: c.text.secondary,
@@ -2729,50 +2761,31 @@ const makeStyles = (c) => ({
     color: '#1d4ed8',
   },
 
-  // Font picker grid (Appearance → Font)
-  fontGrid: {
+  // Font picker chips (Look & feel → Font) — compact wrap, like theme chips
+  fontRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  fontCard: {
-    width: '48%',
-    flexGrow: 1,
-    minWidth: 140,
-    paddingVertical: 12,
+  fontChip: {
+    paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1.5,
     borderColor: c.border.subtle,
     backgroundColor: c.bg.surfaceAlt,
   },
-  fontCardActive: {
+  fontChipActive: {
     borderColor: '#2563eb',
     backgroundColor: '#eff6ff',
   },
-  fontSample: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: c.text.primary,
-    lineHeight: 34,
-  },
-  fontSampleActive: {
-    color: '#1d4ed8',
-  },
-  fontCardLabel: {
+  fontChipText: {
     fontSize: 13,
-    fontWeight: '700',
-    color: c.text.primary,
-    marginTop: 4,
-  },
-  fontCardLabelActive: {
-    color: '#1d4ed8',
-  },
-  fontCardDesc: {
-    fontSize: 11,
+    fontWeight: '600',
     color: c.text.secondary,
-    marginTop: 2,
-    lineHeight: 14,
+  },
+  fontChipTextActive: {
+    color: '#1d4ed8',
   },
 
   addForm: {

@@ -53,6 +53,7 @@ import { usePortfolio }     from './PortfolioContext';
 
 import { buildFinancialSummary } from '../lib/financialSummary';
 import { generateInsights }       from '../lib/aiInsights';
+import { DEMO_INSIGHTS }          from '../lib/demoInsights';
 
 const AiInsightsContext = createContext(null);
 
@@ -233,6 +234,20 @@ export function AiInsightsProvider({ children }) {
     }
   }, []);
 
+  // Lets people explore the finished Insights experience without an API key.
+  // This never calls an AI provider and is intentionally kept out of the
+  // persistent cache so a sample cannot be mistaken for a live analysis.
+  const showSampleInsights = useCallback(() => {
+    setError(null);
+    setCache({
+      insights: DEMO_INSIGHTS,
+      generatedAt: new Date().toISOString(),
+      provider: 'Sample',
+      model: null,
+      isSample: true,
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       ready,
@@ -244,6 +259,8 @@ export function AiInsightsProvider({ children }) {
       error,
       generate,
       clearCache,
+      showSampleInsights,
+      isSample:     !!cache?.isSample,
       // Handy for the Dashboard "no config" state so we can tell it
       // whether to nudge the user to Settings vs. to just generate.
       configured:   !!(aiConfig?.enabled
@@ -261,7 +278,7 @@ export function AiInsightsProvider({ children }) {
       // to reach into aiConfig separately.
       confirmBeforeSend: !!aiConfig?.confirmBeforeSend,
     }),
-    [ready, cache, loading, error, generate, clearCache, aiConfig, aiApiKey, summary],
+    [ready, cache, loading, error, generate, clearCache, showSampleInsights, aiConfig, aiApiKey, summary],
   );
 
   return (

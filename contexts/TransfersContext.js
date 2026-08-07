@@ -82,11 +82,15 @@ const TransfersContext = createContext(null);
 
 
 function normalize(t) {
+  const kind = ['cash_withdrawal', 'cash_deposit'].includes(t.kind)
+    ? 'internal_transfer'
+    : t.kind;
   return {
     id:               t.id ?? `xfer_${shortId()}`,
-    kind:             t.kind,
+    kind,
     amount:           Number(t.amount) || 0,
     accountId:        t.accountId ?? null,
+    targetAccountId:  t.targetAccountId ?? null,
     counterpartyName: (t.counterpartyName ?? '').trim(),
     linkedNetWorthId: t.linkedNetWorthId ?? null,
     interestAmount:   Number(t.interestAmount) || 0,
@@ -181,6 +185,7 @@ export function TransfersProvider({ children }) {
       kind,
       amount,
       accountId,
+      targetAccountId,
       counterpartyName,
       linkedNetWorthId,
       interestAmount,
@@ -191,6 +196,12 @@ export function TransfersProvider({ children }) {
       if (!KIND_META[kind]) return { ok: false, reason: 'invalid_kind' };
       const amt = Number(amount);
       if (!isFinite(amt) || amt <= 0) return { ok: false, reason: 'invalid_amount' };
+      if (
+        kind === 'internal_transfer'
+        && (!accountId || !targetAccountId || accountId === targetAccountId)
+      ) {
+        return { ok: false, reason: 'invalid_account_pair' };
+      }
 
       const isCreator = KIND_META[kind].creates; // lend/borrow create
       let newLinkedId = linkedNetWorthId ?? null;
@@ -204,7 +215,10 @@ export function TransfersProvider({ children }) {
       const transferId = `xfer_${shortId()}`;
 
       // ---- Auto-manage NetWorth side ----
-      if (isCreator) {
+      if (kind === 'internal_transfer') {
+        // This moves cash only. It deliberately creates no income, expense,
+        // or Net Worth item.
+      } else if (isCreator) {
         // Lend / Borrow: create a new asset or liability tied to this transfer.
         const catId = defaultNetWorthCategoryId(kind);
         if (kind === 'lend') {
@@ -297,6 +311,7 @@ export function TransfersProvider({ children }) {
         kind,
         amount: amt,
         accountId,
+        targetAccountId,
         counterpartyName: cpName,
         linkedNetWorthId: newLinkedId,
         interestAmount: interestAmount ?? 0,
@@ -356,6 +371,16 @@ export function TransfersProvider({ children }) {
 
       // Validation.
       if (next.amount <= 0) return { ok: false, reason: 'invalid_amount' };
+      if (
+        next.kind === 'internal_transfer'
+        && (!next.accountId || !next.targetAccountId || next.accountId === next.targetAccountId)
+      ) {
+        return { ok: false, reason: 'invalid_account_pair' };
+      }
+      if (current.kind === 'internal_transfer') {
+        setTransfers((prev) => prev.map((t) => (t.id === id ? next : t)));
+        return { ok: true, transfer: next };
+      }
       if (next.kind === 'loan_repayment' && next.interestAmount > next.amount) {
         return { ok: false, reason: 'interest_exceeds_amount' };
       }

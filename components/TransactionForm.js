@@ -78,6 +78,10 @@ export default function TransactionForm({
     const isValidSub = initParent?.subCategories?.some((s) => s.id === initSub);
     return isValidSub ? initSub : null;
   });
+  // Expense splits create separate linked expense rows on save. This keeps
+  // budgets, reports, search, and account balances correct without adding a
+  // special aggregate transaction type.
+  const [splitRows, setSplitRows] = useState([]);
   const [accountId, setAccountId] = useState(
     initialValues?.accountId ?? accounts[0]?.id
   );
@@ -143,6 +147,7 @@ export default function TransactionForm({
   // Android can't show date+time in one dialog — step through date, then time.
   // null | 'date' | 'time' | 'datetime' (iOS / web single-shot).
   const [pickerStep, setPickerStep] = useState(null);
+  const maxDateRef = useRef(new Date());
   const [manualTranscript, setManualTranscript] = useState(null); // null | string  → also controls modal visibility
   const {
     whisperApiKey,
@@ -303,6 +308,17 @@ export default function TransactionForm({
       Alert.alert('No account', 'Add an account in Settings first.');
       return;
     }
+    const splitTotal = splitRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    if (splitRows.length > 0) {
+      if (splitRows.some((row) => !row.categoryId || !Number.isFinite(Number(row.amount)) || Number(row.amount) <= 0)) {
+        Alert.alert('Complete every split', 'Choose a category and enter a positive amount for each split.');
+        return;
+      }
+      if (Math.abs(splitTotal - parsed) > 0.01) {
+        Alert.alert('Split total does not match', `Split lines total ₹${splitTotal.toLocaleString('en-IN')}; the receipt amount is ₹${parsed.toLocaleString('en-IN')}.`);
+        return;
+      }
+    }
     // Freeze the currency + rate at add time so aggregates never drift
     // when the FX table changes later (see NetWorthContext.summary for
     // the aggregation contract).
@@ -336,6 +352,9 @@ export default function TransactionForm({
       // doesn't need to know about `type`; non-investment paths ignore
       // brokerId and it stays null (its initial value).
       brokerId,
+      splits: splitRows.length > 0
+        ? splitRows.map((row) => ({ categoryId: row.categoryId, amount: Number(row.amount) }))
+        : null,
     });
 
     // Commit-time voice-note sweep. The saved row now points at
@@ -487,6 +506,9 @@ export default function TransactionForm({
   };
 
   const openTimestampPicker = () => {
+    // Freeze "now" for maximumDate so the picker doesn't re-render on
+    // every parent tick while open (which can steal focus from inputs).
+    maxDateRef.current = new Date();
     if (Platform.OS === 'android') {
       setPickerStep('date');
       setShowPicker(true);
@@ -593,6 +615,57 @@ export default function TransactionForm({
             accentColor={accentColor}
           />
         </>
+      )}
+
+      {type === 'expense' && (
+        <View style={styles.splitSection}>
+          <TouchableOpacity
+            onPress={() => setSplitRows((rows) => rows.length ? [] : [{ id: Date.now().toString(), categoryId, amount: '' }])}
+            style={styles.splitToggle}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.splitToggleText}>
+              {splitRows.length ? 'Remove expense split' : 'Split this expense'}
+            </Text>
+          </TouchableOpacity>
+          {splitRows.length > 0 && (
+            <>
+              <Text style={styles.splitHint}>Assign the full receipt amount across categories.</Text>
+              {splitRows.map((row, index) => (
+                <View key={row.id} style={styles.splitRow}>
+                  <View style={styles.splitCategory}>
+                    <ChipRow
+                      items={categories}
+                      selectedId={row.categoryId}
+                      onSelect={(id) => setSplitRows((rows) => rows.map((item) => item.id === row.id ? { ...item, categoryId: id } : item))}
+                      accentColor={accentColor}
+                      emptyText="No categories"
+                    />
+                  </View>
+                  <TextInput
+                    style={styles.splitAmount}
+                    value={row.amount}
+                    onChangeText={(value) => setSplitRows((rows) => rows.map((item) => item.id === row.id ? { ...item, amount: value } : item))}
+                    keyboardType="decimal-pad"
+                    placeholder="Amount"
+                    placeholderTextColor="#9aa0a6"
+                  />
+                  {splitRows.length > 1 && (
+                    <TouchableOpacity onPress={() => setSplitRows((rows) => rows.filter((item) => item.id !== row.id))} style={styles.splitRemove}>
+                      <Text style={styles.splitRemoveText}>×</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+              <TouchableOpacity
+                onPress={() => setSplitRows((rows) => [...rows, { id: `${Date.now()}_${rows.length}`, categoryId: categories[0]?.id ?? null, amount: '' }])}
+                style={styles.splitAdd}
+              >
+                <Text style={[styles.splitAddText, { color: accentColor }]}>+ Add category</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       )}
 
       <Text style={styles.label}>
@@ -716,7 +789,7 @@ export default function TransactionForm({
           value={date}
           mode={pickerMode}
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          maximumDate={new Date()}
+          maximumDate={maxDateRef.current}
           onChange={handleDateChange}
         />
       )}
@@ -1212,6 +1285,17 @@ const makeStyles = (c) => ({
     fontStyle: 'italic',
     paddingVertical: 8,
   },
+  splitSection: { marginTop: 14, padding: 12, borderRadius: 10, backgroundColor: c.bg.surfaceAlt },
+  splitToggle: { alignSelf: 'flex-start' },
+  splitToggleText: { color: c.accent.primary, fontSize: 13, fontWeight: '700' },
+  splitHint: { color: c.text.secondary, fontSize: 11, marginTop: 6, marginBottom: 4 },
+  splitRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  splitCategory: { flex: 1 },
+  splitAmount: { width: 92, backgroundColor: c.bg.surface, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 9, color: c.text.primary, borderWidth: 1, borderColor: c.border.subtle },
+  splitRemove: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  splitRemoveText: { color: c.accent.expense, fontSize: 22, fontWeight: '600' },
+  splitAdd: { marginTop: 8, alignSelf: 'flex-start' },
+  splitAddText: { fontSize: 12, fontWeight: '700' },
   dateChip: {
     flexDirection: 'row',
     alignItems: 'center',

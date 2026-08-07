@@ -9,11 +9,11 @@
 //
 // Section rationale (5 groups, ~14 items):
 //
-//   1. Analyze     — "Show me trends / history" (Reports, Cash Flow, Search)
+//   1. Analyze     — "Show me trends / history" (Reports, Search)
 //   2. Track & rules — "Set ongoing rules or accounts" (Budgets, Loans,
 //                    Goals, Recurring, Transfers)
 //   3. Import      — Bulk data-in flows (Bank statement, Transactions CSV)
-//   4. Calculators — One-shot what-if tools (EMI, SIP, Tax, FIRE)
+//   4. Financial tools — Calculators, forecasts, and stock research
 //   5. App         — Configuration (Settings)
 //
 // Grouping five sections rather than one flat list of fourteen items
@@ -48,11 +48,11 @@ const SECTIONS = [
         tint: '#7c3aed',
       },
       {
-        route: 'CashFlow',
+        route: 'AccountActivity',
         icon: 'activity',
-        name: 'Cash Flow Forecast',
-        desc: 'Project your balance for the next 30–180 days using recurring rules.',
-        tint: '#14b8a6',
+        name: 'Account Activity',
+        desc: 'Opening balance, money in, money out, closing balance, and recent movements per account.',
+        tint: '#0ea5e9',
       },
       {
         route: 'Search',
@@ -125,43 +125,28 @@ const SECTIONS = [
     ],
   },
   {
-    title: 'Calculators',
-    caption: 'What-if tools and on-demand stock research.',
+    title: 'Stock market',
+    caption: 'Market overview and stock research.',
     items: [
       {
-        route: 'EMICalculator',
-        icon: 'calculator',
-        name: 'EMI Calculator',
-        desc: 'Monthly loan payment, total interest, and cost breakdown.',
-        tint: '#3b82f6',
-      },
-      {
-        route: 'SIPCalculator',
+        route: 'StockMarket',
         icon: 'trending-up',
-        name: 'SIP Calculator',
-        desc: 'Future value of a monthly systematic investment.',
-        tint: '#10b981',
+        name: 'Stock Market',
+        desc: 'Nifty indices, top gainers, top losers, and stock fundamentals.',
+        tint: '#0f766e',
       },
+    ],
+  },
+  {
+    title: 'Financial tools',
+    caption: 'Calculators, forecasts, and investment research in one place.',
+    items: [
       {
-        route: 'TaxCalculator',
-        icon: 'receipt',
-        name: 'Tax Calculator',
-        desc: 'Compare old vs new regime for FY 2025-26 and estimate your annual tax.',
-        tint: '#f97316',
-      },
-      {
-        route: 'FireCalculator',
-        icon: 'flame',
-        name: 'FIRE Calculator',
-        desc: 'Retirement corpus, years to FI, and required SIP for early retirement.',
-        tint: '#ef4444',
-      },
-      {
-        route: 'FundamentalAnalysis',
-        icon: 'search',
-        name: 'Stock Fundamentals',
-        desc: 'On-demand P/E, ROE, margins, debt, and growth ratios for any ticker.',
-        tint: '#7c3aed',
+        route: 'FinancialTools',
+        icon: 'calculator',
+        name: 'Financial Tools',
+        desc: 'SIP, FIRE, cash flow, EMI, and tax calculators.',
+        tint: '#3b82f6',
       },
     ],
   },

@@ -199,9 +199,8 @@ export default function BrokersScreen({ navigation }) {
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>No brokers yet</Text>
             <Text style={styles.emptyStateBody}>
-              Tap the + in the header (or the button below) to add a
-              broker, or open the overflow menu to restore the built-in
-              defaults.
+              Tap the + in the header to add a broker, or open the overflow
+              menu to restore the built-in defaults.
             </Text>
           </View>
         )}
@@ -244,16 +243,7 @@ export default function BrokersScreen({ navigation }) {
               if (created) setAdding(false);
             }}
           />
-        ) : (
-          <TouchableOpacity
-            onPress={() => setAdding(true)}
-            style={styles.addButton}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.addButtonText}>+ Add custom broker</Text>
-          </TouchableOpacity>
-        )}
-
+        ) : null}
         {counts.custom > 0 && (
           <Text style={styles.gestureHint}>
             Tip: swipe a custom broker left to delete it.
@@ -667,20 +657,7 @@ const makeStyles = (c) => ({
     alignItems: 'center', justifyContent: 'center',
   },
 
-  // ---- Add-broker button ----
-  addButton: {
-    marginTop: 6,
-    borderRadius: 12,
-    paddingVertical: 12,
-    backgroundColor: '#eef2ff',
-    alignItems: 'center',
-  },
-  addButtonText: {
-    color: '#2563eb',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-
+  // ---- Gesture hint ----
   gestureHint: {
     marginTop: 14,
     fontSize: 11,

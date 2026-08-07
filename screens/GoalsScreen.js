@@ -49,14 +49,21 @@ export default function GoalsScreen({ navigation }) {
         !creating && !editingId ? (
           <TouchableOpacity
             onPress={() => { setCreating(true); setEditingId(null); }}
-            style={{ paddingHorizontal: 12 }}
-            hitSlop={8}
+            style={{ paddingHorizontal: 8 }}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Add goal"
           >
-            <Text style={{ color: themeColors.accent.primary, fontWeight: '700' }}>+ New</Text>
+            <AppIcon
+              name="plus"
+              size={22}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating, editingId]);
+  }, [navigation, creating, editingId, themeColors.text.primary]);
 
   const handleAdd = (values) => {
     const res = addGoal(values);
@@ -137,9 +144,7 @@ export default function GoalsScreen({ navigation }) {
         />
       )}
 
-      {goals.length === 0 && !creating && (
-        <EmptyState onCreate={() => setCreating(true)} />
-      )}
+      {goals.length === 0 && !creating && <EmptyState />}
 
       {activeGoals.length > 0 && (
         <>
@@ -186,15 +191,6 @@ export default function GoalsScreen({ navigation }) {
         </>
       )}
 
-      {goals.length > 0 && !creating && (
-        <TouchableOpacity
-          style={styles.addBtn}
-          activeOpacity={0.7}
-          onPress={() => setCreating(true)}
-        >
-          <Text style={styles.addBtnText}>+ New goal</Text>
-        </TouchableOpacity>
-      )}
     </ScrollView>
   );
 }
@@ -318,7 +314,7 @@ function GoalCard({
   );
 }
 
-function EmptyState({ onCreate }) {
+function EmptyState() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   return (
@@ -329,11 +325,8 @@ function EmptyState({ onCreate }) {
       <Text style={styles.emptyTitle}>No goals yet</Text>
       <Text style={styles.emptyBody}>
         Set a savings target or a spending cap and watch progress tick up
-        automatically as you add transactions.
+        automatically as you add transactions. Tap + in the header to add one.
       </Text>
-      <TouchableOpacity style={styles.emptyBtn} onPress={onCreate}>
-        <Text style={styles.emptyBtnText}>+ Add your first goal</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -444,21 +437,6 @@ const makeStyles = (c) => ({
     color: c.palette.n700,
   },
 
-  addBtn: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: c.border.strong,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.md,
-  },
-  addBtnText: {
-    color: c.text.secondary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-
   empty: {
     backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
@@ -479,17 +457,5 @@ const makeStyles = (c) => ({
     textAlign: 'center',
     lineHeight: 19,
     marginTop: spacing.xs,
-    marginBottom: spacing.lg,
-  },
-  emptyBtn: {
-    backgroundColor: c.accent.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: radii.md,
-  },
-  emptyBtnText: {
-    color: c.text.inverse,
-    fontWeight: '700',
-    fontSize: 14,
   },
 });

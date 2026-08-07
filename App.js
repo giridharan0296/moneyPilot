@@ -60,11 +60,13 @@ import InvestmentsScreen      from './screens/InvestmentsScreen';
 import SettingsScreen         from './screens/SettingsScreen';
 import CategoriesScreen       from './screens/CategoriesScreen';
 import AccountsScreen         from './screens/AccountsScreen';
+import AccountActivityScreen  from './screens/AccountActivityScreen';
 import BrokersScreen          from './screens/BrokersScreen';
 // v4 restructure — MoreMenuScreen absorbs the old Analysis + Tools menus
 // into a single sectioned hub. ToolsMenuScreen + AnalysisMenuScreen were
 // deleted; if you need to recover them, see git history for App.js v3.
 import MoreMenuScreen             from './screens/MoreMenuScreen';
+import FinancialToolsScreen       from './screens/FinancialToolsScreen';
 import InsightsScreen             from './screens/InsightsScreen';
 import EMICalculatorScreen       from './screens/EMICalculatorScreen';
 import SIPCalculatorScreen       from './screens/SIPCalculatorScreen';
@@ -79,7 +81,11 @@ import GoalsScreen               from './screens/GoalsScreen';
 import TaxCalculatorScreen       from './screens/TaxCalculatorScreen';
 import CashFlowScreen            from './screens/CashFlowScreen';
 import FireCalculatorScreen      from './screens/FireCalculatorScreen';
+import SWPCalculatorScreen       from './screens/SWPCalculatorScreen';
+import MISCalculatorScreen       from './screens/MISCalculatorScreen';
 import FundamentalAnalysisScreen from './screens/FundamentalAnalysisScreen';
+import StockMarketScreen         from './screens/StockMarketScreen';
+import MarketBoardScreen         from './screens/MarketBoardScreen';
 import PortfolioScreen        from './screens/PortfolioScreen';
 import ImportHoldingsScreen   from './screens/ImportHoldingsScreen';
 import NetWorthScreen         from './screens/NetWorthScreen';
@@ -87,6 +93,7 @@ import LoansScreen            from './screens/LoansScreen';
 import LoanDetailScreen       from './screens/LoanDetailScreen';
 
 import AppIcon                  from './components/AppIcon';
+import AccountNetWorthSync      from './components/AccountNetWorthSync';
 import HeaderTitleWithIcon      from './components/HeaderTitleWithIcon';
 import { DateFilterProvider }   from './contexts/DateFilterContext';
 import { SettingsProvider }     from './contexts/SettingsContext';
@@ -207,11 +214,18 @@ const HEADER_TINTS = {
   ImportTransactions:  '#8b5cf6',      // violet
   ImportBankStatement: '#8b5cf6',      // violet — same family
   // (Calculators)
+  FinancialTools: '#2563eb',      // unified calculator and research hub
   EMICalculator: '#3b82f6',            // blue
   SIPCalculator: '#10b981',            // emerald
   TaxCalculator: '#f97316',            // orange
   FireCalculator:'#ef4444',            // red-orange
+  SWPCalculator: '#10b981',            // monthly income / withdrawals
+  MISCalculator: '#0d9488',            // fixed-income monthly interest
   FundamentalAnalysis: '#7c3aed',      // violet — stock research
+  StockMarket: '#0f766e',              // teal — live market overview
+  MarketIndices: '#0f766e',
+  MarketGainers: '#059669',
+  MarketLosers: '#dc2626',
   // (App)
   Settings:      '#64748b',            // slate — quiet system chrome
   Categories:    '#0891b2',            // cyan — matches the "tag" glyph and
@@ -363,7 +377,12 @@ function MoreStack() {
         options={{ headerTitle: hdr('download', 'Import Transactions', HEADER_TINTS.ImportTransactions) }}
       />
 
-      {/* ---- Calculators ---- */}
+      {/* ---- Financial tools ---- */}
+      <Stack.Screen
+        name="FinancialTools"
+        component={FinancialToolsScreen}
+        options={{ headerTitle: hdr('calculator', 'Financial Tools', HEADER_TINTS.FinancialTools) }}
+      />
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
@@ -385,9 +404,42 @@ function MoreStack() {
         options={{ headerTitle: hdr('flame', 'FIRE Calculator', HEADER_TINTS.FireCalculator) }}
       />
       <Stack.Screen
+        name="SWPCalculator"
+        component={SWPCalculatorScreen}
+        options={{ headerTitle: hdr('trending-down', 'SWP Calculator', HEADER_TINTS.SWPCalculator) }}
+      />
+      <Stack.Screen
+        name="MISCalculator"
+        component={MISCalculatorScreen}
+        options={{ headerTitle: hdr('wallet', 'MIS Calculator', HEADER_TINTS.MISCalculator) }}
+      />
+      <Stack.Screen
         name="FundamentalAnalysis"
         component={FundamentalAnalysisScreen}
         options={{ headerTitle: hdr('search', 'Fundamentals', HEADER_TINTS.FundamentalAnalysis) }}
+      />
+      <Stack.Screen
+        name="StockMarket"
+        component={StockMarketScreen}
+        options={{ headerTitle: hdr('trending-up', 'Stock Market', HEADER_TINTS.StockMarket) }}
+      />
+      <Stack.Screen
+        name="MarketIndices"
+        component={MarketBoardScreen}
+        initialParams={{ board: 'indices' }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Nifty Indices', HEADER_TINTS.MarketIndices) }}
+      />
+      <Stack.Screen
+        name="MarketGainers"
+        component={MarketBoardScreen}
+        initialParams={{ board: 'gainers' }}
+        options={{ headerTitle: hdr('trending-up', 'Top Gainers', HEADER_TINTS.MarketGainers) }}
+      />
+      <Stack.Screen
+        name="MarketLosers"
+        component={MarketBoardScreen}
+        initialParams={{ board: 'losers' }}
+        options={{ headerTitle: hdr('trending-down', 'Top Losers', HEADER_TINTS.MarketLosers) }}
       />
 
       {/* ---- App ---- */}
@@ -413,6 +465,11 @@ function MoreStack() {
         name="Accounts"
         component={AccountsScreen}
         options={{ headerTitle: hdr('credit-card', 'Accounts', HEADER_TINTS.Accounts) }}
+      />
+      <Stack.Screen
+        name="AccountActivity"
+        component={AccountActivityScreen}
+        options={{ headerTitle: hdr('activity', 'Account Activity', '#0ea5e9') }}
       />
       {/* Brokers — the same v4-polish pattern applied to broker
           management. Accounts hold CASH (HDFC Savings, Cash wallet);
@@ -592,6 +649,7 @@ export default function App() {
                               can honour the user's active date window. */}
                           <AiInsightsProvider>
                             <DateFilterProvider>
+                              <AccountNetWorthSync />
                               <ThemedApp />
                             </DateFilterProvider>
                           </AiInsightsProvider>

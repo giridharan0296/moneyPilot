@@ -51,7 +51,7 @@ function isSameDay(a, b) {
 }
 
 // Canonical range as [start, end) so a simple `d >= start && d < end` works.
-function getRange(filter) {
+export function getRange(filter) {
   if (filter.kind === 'all') return null;
 
   if (filter.kind === 'month') {
@@ -189,11 +189,14 @@ export function DateFilterProvider({ children }) {
     [filter],
   );
 
+  const range = useMemo(() => getRange(filter), [filter]);
+
   const value = useMemo(
     () => ({
       filter,
       kind: filter.kind,
       label: labelFor(filter),
+      range,
       isAllTime: filter.kind === 'all',
       canShift: filter.kind === 'month' || filter.kind === 'week',
       setKind,
@@ -207,6 +210,7 @@ export function DateFilterProvider({ children }) {
     }),
     [
       filter,
+      range,
       setKind,
       shift,
       jumpToCurrent,

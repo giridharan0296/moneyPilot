@@ -25,6 +25,10 @@ export const STORAGE_KEYS = {
   portfolio_holdings:             '@financeApp/portfolio/holdings/v1',
   portfolio_prices_updated_at:    '@financeApp/portfolio/pricesUpdatedAt/v1',
 
+  // Last successful Backup export (ISO). Device-local nag only — not
+  // required inside the backup JSON itself.
+  last_backup_at:                 '@financeApp/backup/lastAt/v1',
+
   // Net worth: what you own (assets) and what you owe (liabilities)
   assets:                         '@financeApp/networth/assets/v1',
   liabilities:                    '@financeApp/networth/liabilities/v1',
@@ -456,6 +460,8 @@ export const DEFAULT_INCOME_CATEGORIES = [
       { id: 'income_rental',   label: 'Rental Income',  emoji: '🏠', color: '#059669' },
       { id: 'income_coupon',   label: 'Bond Coupon',    emoji: '📃', color: '#6366f1' },
       { id: 'income_maturity', label: 'FD / RD Maturity', emoji: '🏦', color: '#0369a1' },
+      { id: 'income_swp',      label: 'SWP Payout', emoji: '🔄', color: '#059669' },
+      { id: 'income_mis',      label: 'MIS Interest Payout', emoji: '💵', color: '#0d9488' },
     ],
   },
   {

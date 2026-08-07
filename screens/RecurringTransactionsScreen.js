@@ -24,9 +24,10 @@ import {
 
 import RecurringForm from '../components/RecurringForm';
 import AppIcon from '../components/AppIcon';
+import HelpSheet from '../components/HelpSheet';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useSettings } from '../contexts/SettingsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 import {
@@ -42,6 +43,7 @@ const TYPE_META = {
 
 export default function RecurringTransactionsScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const {
     rules,
     addRule,
@@ -64,7 +66,7 @@ export default function RecurringTransactionsScreen({ navigation }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
-  // Header "+ New" button. Only rendered when the inline form isn't open.
+  // Header "+" — same affordance as Accounts / Categories / Budgets.
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () =>
@@ -74,14 +76,21 @@ export default function RecurringTransactionsScreen({ navigation }) {
               setEditingId(null);
               setCreating(true);
             }}
-            hitSlop={8}
-            style={styles.headerBtn}
+            hitSlop={12}
+            style={{ paddingHorizontal: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Add recurring rule"
           >
-            <Text style={styles.headerBtnText}>+ New</Text>
+            <AppIcon
+              name="plus"
+              size={22}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating]);
+  }, [navigation, creating, themeColors.text.primary]);
 
   // Group rules by type so we can render three tidy sections.
   const grouped = {
@@ -166,11 +175,14 @@ export default function RecurringTransactionsScreen({ navigation }) {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.pageHint}>
-        Rules that automatically add transactions on a schedule. Perfect for
-        salary, rent, subscriptions, and SIPs. Missed occurrences (e.g. after
-        not opening the app for a while) are back-filled on next launch.
-      </Text>
+      <View style={styles.helpRow}>
+        <Text style={styles.helpLabel}>Recurring rules</Text>
+        <HelpSheet
+          title="Recurring rules"
+          summary="Rules automatically create transactions on their schedule."
+          items={['Use them for salary, rent, subscriptions, and SIPs.', 'Missed occurrences are back-filled the next time you open the app.']}
+        />
+      </View>
 
       {creating && (
         <View style={styles.card}>
@@ -192,14 +204,8 @@ export default function RecurringTransactionsScreen({ navigation }) {
           <Text style={styles.emptySub}>
             Set up rules for things that repeat — salary, rent, Netflix, SIPs,
             gym membership. They'll get added automatically each period.
+            Tap + in the header to create one.
           </Text>
-          <TouchableOpacity
-            onPress={() => setCreating(true)}
-            style={styles.emptyBtn}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.emptyBtnText}>+ Create your first rule</Text>
-          </TouchableOpacity>
         </View>
       )}
 
@@ -354,15 +360,8 @@ const makeStyles = (c) => ({
     lineHeight: 19,
     marginBottom: 16,
   },
-
-  headerBtn: {
-    paddingHorizontal: 8, paddingVertical: 6,
-  },
-  headerBtnText: {
-    color: '#2563eb',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  helpRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  helpLabel: { color: c.text.secondary, fontSize: 13, fontWeight: '700' },
 
   // ---- Section header (per type) ----
   section: { marginBottom: 20 },
@@ -447,12 +446,4 @@ const makeStyles = (c) => ({
     marginTop: 6,
     lineHeight: 19,
   },
-  emptyBtn: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginTop: 14,
-  },
-  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });
