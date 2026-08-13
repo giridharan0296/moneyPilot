@@ -14,6 +14,7 @@ function loadExportedFunction(relativePath, functionName) {
 
 const computeAccountBalances = loadExportedFunction('../lib/accountBalances.js', 'computeAccountBalances');
 const accountDeltaForTransfer = loadExportedFunction('../lib/accountBalances.js', 'accountDeltaForTransfer');
+const computeAccountPeriodActivity = loadExportedFunction('../lib/accountBalances.js', 'computeAccountPeriodActivity');
 const netWorthDelta = loadExportedFunction('../lib/transfers.js', 'netWorthDelta');
 const computeReducingBalanceEMI = loadExportedFunction('../lib/emi.js', 'computeReducingBalanceEMI');
 const buildAmortizationSchedule = loadExportedFunction('../lib/emi.js', 'buildAmortizationSchedule');
@@ -34,6 +35,35 @@ assert.equal(netWorthDelta('loan_repayment', 120, 20), -100);
 assert.equal(netWorthDelta('loan_disbursement', 1000), 0);
 assert.equal(accountDeltaForTransfer({ kind: 'loan_disbursement', accountId: 'bank', amount: 1000 }, 'bank'), 1000);
 assert.equal(accountDeltaForTransfer({ kind: 'loan_repayment', accountId: 'bank', amount: 120, interestAmount: 20 }, 'bank'), -100);
+
+const periodAccount = { id: 'bank', openingBalance: 10000 };
+const periodIncome = [{ id: 'i1', accountId: 'bank', amount: 5000, createdAt: '2025-06-15T10:00:00.000Z' }];
+const periodExpense = [{ id: 'e1', accountId: 'bank', amount: 2000, createdAt: '2025-06-20T10:00:00.000Z' }];
+const allTime = computeAccountPeriodActivity({
+  account: periodAccount,
+  income: periodIncome,
+  expenses: periodExpense,
+});
+assert.equal(allTime.opening, 10000);
+assert.equal(allTime.moneyIn, 5000);
+assert.equal(allTime.moneyOut, 2000);
+assert.equal(allTime.closing, 13000);
+assert.equal(allTime.opening + allTime.moneyIn - allTime.moneyOut, allTime.closing);
+
+const monthStart = new Date('2025-06-01T00:00:00.000Z');
+const monthEnd = new Date('2025-07-01T00:00:00.000Z');
+const june = computeAccountPeriodActivity({
+  account: periodAccount,
+  income: periodIncome,
+  expenses: periodExpense,
+  rangeStart: monthStart,
+  rangeEnd: monthEnd,
+});
+assert.equal(june.opening, 10000);
+assert.equal(june.moneyIn, 5000);
+assert.equal(june.moneyOut, 2000);
+assert.equal(june.closing, 13000);
+assert.equal(june.opening + june.moneyIn - june.moneyOut, june.closing);
 
 const emiInput = { principal: 1_000_000, annualRatePct: 9, months: 120 };
 const emiResult = computeReducingBalanceEMI(emiInput);

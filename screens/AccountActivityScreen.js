@@ -8,7 +8,7 @@ import { useThemedStyles } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { formatMoney } from '../lib/currency';
-import { accountDeltaForTransfer } from '../lib/accountBalances';
+import { computeAccountPeriodActivity } from '../lib/accountBalances';
 
 function periodRange(period) {
   const now = new Date();
@@ -30,41 +30,24 @@ export default function AccountActivityScreen() {
   // / last-month chips still work for focused reviews.
   const [period, setPeriod] = useState('all');
   const [accountId, setAccountId] = useState(null);
+  const [showAllRows, setShowAllRows] = useState(false);
   const activeAccount = accounts.find((account) => account.id === accountId) ?? accounts[0] ?? null;
   const range = periodRange(period);
 
   const activity = useMemo(() => {
     if (!activeAccount) return null;
-    const movements = [];
-    const add = (items, direction, label) => items.forEach((tx) => {
-      if (tx.accountId === activeAccount.id) movements.push({ ...tx, delta: direction * (Number(tx.amount) || 0), label });
+    return computeAccountPeriodActivity({
+      account: activeAccount,
+      income,
+      expenses,
+      investments,
+      transfers,
+      rangeStart: range.start,
+      rangeEnd: range.end,
     });
-    add(income, 1, 'Income');
-    add(expenses, -1, 'Expense');
-    add(investments, -1, 'Investment');
-    transfers.forEach((tx) => {
-      const delta = accountDeltaForTransfer(tx, activeAccount.id);
-      if (delta !== 0) movements.push({ ...tx, delta, label: delta > 0 ? 'Transfer in' : 'Transfer out' });
-    });
-    // Every assigned movement counts — including dates before the account
-    // was created — so backdated salary/income updates the ledger.
-    const inPeriod = movements.filter((item) => {
-      const date = new Date(item.createdAt);
-      return (!range.start || date >= range.start) && (!range.end || date < range.end);
-    });
-    const balanceBefore = (Number(activeAccount.openingBalance) || 0)
-      + movements.filter((item) => !range.start || new Date(item.createdAt) < range.start)
-        .reduce((sum, item) => sum + item.delta, 0);
-    const moneyIn = inPeriod.filter((item) => item.delta > 0).reduce((sum, item) => sum + item.delta, 0);
-    const moneyOut = Math.abs(inPeriod.filter((item) => item.delta < 0).reduce((sum, item) => sum + item.delta, 0));
-    return {
-      opening: balanceBefore,
-      moneyIn,
-      moneyOut,
-      closing: balanceBefore + moneyIn - moneyOut,
-      rows: inPeriod.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50),
-    };
   }, [activeAccount, income, expenses, investments, transfers, range.start, range.end]);
+
+  const visibleRows = showAllRows ? (activity?.rows ?? []) : (activity?.rows ?? []).slice(0, 50);
 
   if (!activeAccount || !activity) {
     return (
@@ -93,14 +76,14 @@ export default function AccountActivityScreen() {
       <Text style={styles.heading}>Account activity</Text>
       <Text style={styles.subheading}>Track money moving in and out of each account.</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {accounts.map((account) => <TouchableOpacity key={account.id} onPress={() => setAccountId(account.id)}
+        {accounts.map((account) => <TouchableOpacity key={account.id} onPress={() => { setAccountId(account.id); setShowAllRows(false); }}
           style={[styles.chip, account.id === activeAccount.id && styles.chipActive]}>
           <Text style={[styles.chipText, account.id === activeAccount.id && styles.chipTextActive]}>{account.emoji} {account.label}</Text>
         </TouchableOpacity>)}
       </ScrollView>
       <View style={styles.periodRow}>
         {[['month', 'This month'], ['last', 'Last month'], ['all', 'All time']].map(([id, label]) => (
-          <TouchableOpacity key={id} onPress={() => setPeriod(id)} style={[styles.period, period === id && styles.periodActive]}>
+          <TouchableOpacity key={id} onPress={() => { setPeriod(id); setShowAllRows(false); }} style={[styles.period, period === id && styles.periodActive]}>
             <Text style={[styles.periodText, period === id && styles.periodTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}
@@ -112,13 +95,23 @@ export default function AccountActivityScreen() {
         <Metric label="Money out" value={activity.moneyOut} color={styles.expense.color} currency={currency} />
         <Metric label="Closing" value={activity.closing} color={styles.closing.color} currency={currency} />
       </View>
-      <Text style={styles.sectionTitle}>Activity</Text>
-      {activity.rows.length === 0 ? <Text style={styles.emptyText}>No activity in this period.</Text> : activity.rows.map((row, index) => (
-        <View key={`${row.id}_${row.delta}`} style={[styles.row, index < activity.rows.length - 1 && styles.rowDivider]}>
+      {period === 'all' && (
+        <Text style={styles.balanceHint}>
+          Closing matches the balance shown on Settings → Accounts for this account.
+        </Text>
+      )}
+      <Text style={styles.sectionTitle}>Activity ({activity.rows.length})</Text>
+      {activity.rows.length === 0 ? <Text style={styles.emptyText}>No activity in this period.</Text> : visibleRows.map((row, index) => (
+        <View key={`${row.id}_${row.delta}_${row.createdAt}`} style={[styles.row, index < visibleRows.length - 1 && styles.rowDivider]}>
           <View style={styles.rowMain}><Text style={styles.rowTitle}>{row.note || row.label}</Text><Text style={styles.rowMeta}>{row.label} · {new Date(row.createdAt).toLocaleDateString()}</Text></View>
           <Text style={[styles.rowAmount, { color: row.delta >= 0 ? styles.income.color : styles.expense.color }]}>{row.delta >= 0 ? '+' : '−'}{formatMoney(Math.abs(row.delta), currency, { decimals: 0 })}</Text>
         </View>
       ))}
+      {activity.rows.length > 50 && !showAllRows && (
+        <TouchableOpacity style={styles.showMoreBtn} onPress={() => setShowAllRows(true)}>
+          <Text style={styles.showMoreText}>Show all {activity.rows.length} movements</Text>
+        </TouchableOpacity>
+      )}
     </ScrollView>
   );
 }
@@ -134,7 +127,10 @@ const makeStyles = (c) => ({
   chips: { gap: 8, paddingVertical: 18 }, chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 99, borderWidth: 1, borderColor: c.border.subtle }, chipActive: { backgroundColor: c.accent.primary, borderColor: c.accent.primary }, chipText: { color: c.text.secondary, fontWeight: '600', fontSize: 12 }, chipTextActive: { color: c.text.inverse },
   periodRow: { flexDirection: 'row', gap: 8 }, period: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 9, backgroundColor: c.bg.surfaceAlt }, periodActive: { backgroundColor: c.accent.primary }, periodText: { fontSize: 12, fontWeight: '700', color: c.text.secondary }, periodTextActive: { color: c.text.inverse }, periodLabel: { marginTop: 14, marginBottom: 8, color: c.text.secondary, fontWeight: '700', fontSize: 12 },
   summary: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, metric: { flexBasis: '48%', flexGrow: 1, padding: 12, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle, borderRadius: 12 }, metricLabel: { color: c.text.secondary, fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }, metricValue: { marginTop: 4, fontSize: 16, fontWeight: '800' },
-  sectionTitle: { marginTop: 24, marginBottom: 8, fontSize: 15, fontWeight: '800', color: c.text.primary }, row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 }, rowDivider: { borderBottomWidth: 1, borderBottomColor: c.border.subtle }, rowMain: { flex: 1, paddingRight: 10 }, rowTitle: { color: c.text.primary, fontWeight: '600', fontSize: 13 }, rowMeta: { color: c.text.muted, fontSize: 11, marginTop: 3 }, rowAmount: { fontSize: 13, fontWeight: '800' },
+  sectionTitle: { marginTop: 24, marginBottom: 8, fontSize: 15, fontWeight: '800', color: c.text.primary },
+  balanceHint: { marginTop: 8, fontSize: 11, color: c.text.secondary, fontStyle: 'italic' },
+  showMoreBtn: { marginTop: 8, paddingVertical: 10, alignItems: 'center' },
+  showMoreText: { fontSize: 13, fontWeight: '700', color: c.accent.primary }, row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 }, rowDivider: { borderBottomWidth: 1, borderBottomColor: c.border.subtle }, rowMain: { flex: 1, paddingRight: 10 }, rowTitle: { color: c.text.primary, fontWeight: '600', fontSize: 13 }, rowMeta: { color: c.text.muted, fontSize: 11, marginTop: 3 }, rowAmount: { fontSize: 13, fontWeight: '800' },
   opening: { color: c.text.primary }, income: { color: c.accent.income }, expense: { color: c.accent.expense }, closing: { color: c.accent.primary },
   empty: {
     flex: 1,
