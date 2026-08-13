@@ -26,11 +26,10 @@ import {
   ScrollView,
   View,
   Text,
-  TouchableOpacity,
 } from 'react-native';
 
-import AppIcon from '../components/AppIcon';
-import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import MenuRow from '../components/MenuRow';
+import { useThemedStyles } from '../contexts/ThemeContext';
 
 // Section data. Each `items[i]` mirrors the shape used by the old
 // ToolsMenuScreen entries so the card renderer is identical — porting
@@ -60,6 +59,13 @@ const SECTIONS = [
         name: 'Search',
         desc: 'Find transactions by note, category, tag, account, or amount.',
         tint: '#0891b2',
+      },
+      {
+        route: 'CashFlow',
+        icon: 'trending-up',
+        name: 'Cash Flow Forecast',
+        desc: 'Project your balance from recurring rules over the next 30–180 days.',
+        tint: '#2563eb',
       },
     ],
   },
@@ -94,13 +100,6 @@ const SECTIONS = [
         name: 'Recurring',
         desc: 'Auto-add salary, rent, subscriptions, and SIPs on a schedule.',
         tint: '#f59e0b',
-      },
-      {
-        route: 'Transfers',
-        icon: 'arrow-right-left',
-        name: 'Transfers (informal)',
-        desc: 'Freeform lend / borrow / repay entries without EMI schedules.',
-        tint: '#0ea5e9',
       },
     ],
   },
@@ -167,7 +166,6 @@ const SECTIONS = [
 
 export default function MoreMenuScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
-  const themeColors = useThemeColors();
 
   return (
     <ScrollView
@@ -189,26 +187,14 @@ export default function MoreMenuScreen({ navigation }) {
           </View>
 
           {section.items.map((item) => (
-            <TouchableOpacity
+            <MenuRow
               key={item.route}
-              style={styles.card}
-              activeOpacity={0.7}
+              icon={item.icon}
+              title={item.name}
+              description={item.desc}
+              tint={item.tint}
               onPress={() => navigation.navigate(item.route)}
-            >
-              <View style={[styles.iconBadge, { backgroundColor: item.tint + '22' }]}>
-                <AppIcon name={item.icon} size={22} color={item.tint} strokeWidth={2} />
-              </View>
-              <View style={styles.cardBody}>
-                <Text style={styles.cardTitle}>{item.name}</Text>
-                <Text style={styles.cardDesc}>{item.desc}</Text>
-              </View>
-              <AppIcon
-                name="chevron-right"
-                size={18}
-                color={themeColors.text.muted}
-                strokeWidth={2}
-              />
-            </TouchableOpacity>
+            />
           ))}
         </View>
       ))}
@@ -238,27 +224,4 @@ const makeStyles = (c) => ({
     marginTop: 3,
     lineHeight: 16,
   },
-
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  iconBadge: {
-    width: 44, height: 44,
-    borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12,
-  },
-  cardBody:  { flex: 1, marginRight: 8 },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: c.text.primary },
-  cardDesc:  { fontSize: 13, color: c.text.secondary, marginTop: 2 },
 });

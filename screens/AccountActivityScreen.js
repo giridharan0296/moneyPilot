@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
 import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
+import AppIcon from '../components/AppIcon';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { formatMoney } from '../lib/currency';
+import { accountDeltaForTransfer } from '../lib/accountBalances';
 
 function periodRange(period) {
   const now = new Date();
@@ -19,6 +22,7 @@ function periodRange(period) {
 
 export default function AccountActivityScreen() {
   const styles = useThemedStyles(makeStyles);
+  const navigation = useNavigation();
   const { accounts, baseCurrency } = useSettings();
   const { income, expenses, investments } = useTransactions();
   const { transfers } = useTransfers();
@@ -39,13 +43,8 @@ export default function AccountActivityScreen() {
     add(expenses, -1, 'Expense');
     add(investments, -1, 'Investment');
     transfers.forEach((tx) => {
-      const amount = Number(tx.amount) || 0;
-      if (tx.kind === 'internal_transfer') {
-        if (tx.accountId === activeAccount.id) movements.push({ ...tx, delta: -amount, label: 'Transfer out' });
-        if (tx.targetAccountId === activeAccount.id) movements.push({ ...tx, delta: amount, label: 'Transfer in' });
-      } else if (tx.accountId === activeAccount.id) {
-        movements.push({ ...tx, delta: ['borrow', 'repay_received'].includes(tx.kind) ? amount : -amount, label: 'Transfer' });
-      }
+      const delta = accountDeltaForTransfer(tx, activeAccount.id);
+      if (delta !== 0) movements.push({ ...tx, delta, label: delta > 0 ? 'Transfer in' : 'Transfer out' });
     });
     // Every assigned movement counts — including dates before the account
     // was created — so backdated salary/income updates the ledger.
@@ -68,7 +67,24 @@ export default function AccountActivityScreen() {
   }, [activeAccount, income, expenses, investments, transfers, range.start, range.end]);
 
   if (!activeAccount || !activity) {
-    return <View style={styles.empty}><Text style={styles.emptyText}>Add an account to view its activity.</Text></View>;
+    return (
+      <View style={styles.empty}>
+        <AppIcon name="wallet" size={40} color={styles.emptyIcon.color} strokeWidth={1.8} />
+        <Text style={styles.emptyTitle}>No accounts yet</Text>
+        <Text style={styles.emptyText}>
+          Add a bank, wallet, or cash account to see opening balance, money in/out, and closing balance.
+        </Text>
+        <TouchableOpacity
+          style={styles.emptyBtn}
+          onPress={() => navigation.navigate('Accounts')}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Go to Accounts"
+        >
+          <Text style={styles.emptyBtnText}>Go to Accounts</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   const currency = activeAccount.currency ?? baseCurrency;
@@ -120,5 +136,37 @@ const makeStyles = (c) => ({
   summary: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, metric: { flexBasis: '48%', flexGrow: 1, padding: 12, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle, borderRadius: 12 }, metricLabel: { color: c.text.secondary, fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }, metricValue: { marginTop: 4, fontSize: 16, fontWeight: '800' },
   sectionTitle: { marginTop: 24, marginBottom: 8, fontSize: 15, fontWeight: '800', color: c.text.primary }, row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 }, rowDivider: { borderBottomWidth: 1, borderBottomColor: c.border.subtle }, rowMain: { flex: 1, paddingRight: 10 }, rowTitle: { color: c.text.primary, fontWeight: '600', fontSize: 13 }, rowMeta: { color: c.text.muted, fontSize: 11, marginTop: 3 }, rowAmount: { fontSize: 13, fontWeight: '800' },
   opening: { color: c.text.primary }, income: { color: c.accent.income }, expense: { color: c.accent.expense }, closing: { color: c.accent.primary },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.bg.canvas }, emptyText: { color: c.text.secondary, fontSize: 13 },
+  empty: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: c.bg.canvas,
+    padding: 24,
+  },
+  emptyIcon: { color: c.text.muted },
+  emptyTitle: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '800',
+    color: c.text.primary,
+  },
+  emptyText: {
+    color: c.text.secondary,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginTop: 8,
+  },
+  emptyBtn: {
+    marginTop: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: c.accent.primary,
+  },
+  emptyBtnText: {
+    color: c.text.inverse,
+    fontWeight: '700',
+    fontSize: 14,
+  },
 });

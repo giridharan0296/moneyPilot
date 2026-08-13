@@ -34,6 +34,8 @@ import {
 } from 'react-native';
 
 import AppIcon from '../components/AppIcon';
+import AmountCalculatorButton from '../components/AmountCalculatorButton';
+import DateTimePicker from '../components/DatePicker';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
@@ -360,6 +362,7 @@ function GroupCard({
                   showReconciliation
                   initialCurrency={accCurrency}
                   initialOpeningBalance={acc.openingBalance}
+                  initialOpeningBalanceDate={acc.openingBalanceDate}
                   initialReconciliationBalance={acc.reconciliationBalance}
                   defaultCurrency={baseCurrency}
                   onCancel={() => setEditingAccountId(null)}
@@ -542,6 +545,9 @@ function SwipeableAccountRow({ account, baseCurrency, currentBalance, onEdit, on
               {hasOpeningBalance ? (
                 <Text style={styles.openingBalanceText}>
                   Balance {accCurrency} {(Number(currentBalance) || 0).toLocaleString('en-IN')}
+                  {account.openingBalanceDate
+                    ? ` · as of ${formatShortDate(account.openingBalanceDate)}`
+                    : ''}
                 </Text>
               ) : null}
             </View>
@@ -586,9 +592,11 @@ function EditorForm({
   initialCurrency = null,
   defaultCurrency = null,
   initialOpeningBalance = '',
+  initialOpeningBalanceDate = null,
   initialReconciliationBalance = '',
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const [label, setLabel] = useState(initialLabel);
   const [emoji, setEmoji] = useState(initialEmoji);
   const [color, setColor] = useState(initialColor ?? defaultColor);
@@ -596,6 +604,14 @@ function EditorForm({
     initialCurrency ?? defaultCurrency ?? null,
   );
   const [openingBalance, setOpeningBalance] = useState(String(initialOpeningBalance ?? ''));
+  const [openingBalanceDate, setOpeningBalanceDate] = useState(() => {
+    if (initialOpeningBalanceDate) {
+      const d = new Date(initialOpeningBalanceDate);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  });
+  const [showBalanceDatePicker, setShowBalanceDatePicker] = useState(false);
   const [reconciliationBalance, setReconciliationBalance] = useState(String(initialReconciliationBalance ?? ''));
 
   const handleSubmit = () => {
@@ -619,6 +635,7 @@ function EditorForm({
     };
     if (showCurrency && currency) payload.currency = currency;
     if (showOpeningBalance && openingBalance.trim()) payload.openingBalance = openingBalance.trim();
+    if (showOpeningBalance) payload.openingBalanceDate = openingBalanceDate.toISOString();
     if (showReconciliation && reconciliationBalance.trim()) payload.reconciliationBalance = reconciliationBalance.trim();
     onSubmit(payload);
     setLabel('');
@@ -707,14 +724,44 @@ function EditorForm({
           <Text style={styles.editorHelp}>
             Enter the amount currently in this account. It is not treated as income.
           </Text>
-          <TextInput
-            style={styles.openingBalanceInput}
-            value={openingBalance}
-            onChangeText={setOpeningBalance}
-            placeholder="0"
-            placeholderTextColor="#9aa0a6"
-            keyboardType="decimal-pad"
-          />
+          <AmountCalculatorButton value={openingBalance} onChangeText={setOpeningBalance}>
+            <TextInput
+              style={styles.openingBalanceInput}
+              value={openingBalance}
+              onChangeText={setOpeningBalance}
+              placeholder="0"
+              placeholderTextColor="#9aa0a6"
+              keyboardType="decimal-pad"
+            />
+          </AmountCalculatorButton>
+          <Text style={styles.editorPickerLabel}>Balance as of</Text>
+          <Text style={styles.editorHelp}>
+            When this balance was accurate — useful for backdating a new account.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowBalanceDatePicker(true)}
+            activeOpacity={0.7}
+            style={styles.balanceDateChip}
+          >
+            <AppIcon name="calendar" size={16} color={themeColors.accent.primary} strokeWidth={2.2} />
+            <Text style={styles.balanceDateChipText}>
+              {formatShortDate(openingBalanceDate.toISOString())}
+            </Text>
+            <Text style={styles.balanceDateChipHint}>Tap to change</Text>
+          </TouchableOpacity>
+          {showBalanceDatePicker && (
+            <DateTimePicker
+              value={openingBalanceDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              maximumDate={new Date()}
+              onChange={(event, selected) => {
+                if (Platform.OS !== 'ios') setShowBalanceDatePicker(false);
+                if (event?.type === 'dismissed') return;
+                if (selected) setOpeningBalanceDate(selected);
+              }}
+            />
+          )}
         </>
       )}
 
@@ -724,14 +771,16 @@ function EditorForm({
           <Text style={styles.editorHelp}>
             Enter today’s balance shown by your bank. A difference helps you find missing or duplicate entries.
           </Text>
-          <TextInput
-            style={styles.openingBalanceInput}
-            value={reconciliationBalance}
-            onChangeText={setReconciliationBalance}
-            placeholder="0"
-            placeholderTextColor="#9aa0a6"
-            keyboardType="decimal-pad"
-          />
+          <AmountCalculatorButton value={reconciliationBalance} onChangeText={setReconciliationBalance}>
+            <TextInput
+              style={styles.openingBalanceInput}
+              value={reconciliationBalance}
+              onChangeText={setReconciliationBalance}
+              placeholder="0"
+              placeholderTextColor="#9aa0a6"
+              keyboardType="decimal-pad"
+            />
+          </AmountCalculatorButton>
         </>
       )}
 
@@ -1001,6 +1050,27 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     backgroundColor: c.bg.canvas,
   },
+  balanceDateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: c.bg.canvas,
+  },
+  balanceDateChipText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: c.text.primary,
+  },
+  balanceDateChipHint: {
+    fontSize: 11,
+    color: c.text.secondary,
+  },
   editorColorRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1061,3 +1131,13 @@ const makeStyles = (c) => ({
   editorBtnSave:       { backgroundColor: '#2563eb' },
   editorBtnSaveText:   { color: '#fff', fontWeight: '700', fontSize: 13 },
 });
+
+function formatShortDate(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}

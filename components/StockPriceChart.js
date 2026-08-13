@@ -61,6 +61,7 @@ export default function StockPriceChart({
   error = null,
   rangeId = '3mo',
   onRangeChange,
+  ranges = RANGES,
 }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
@@ -91,7 +92,7 @@ export default function StockPriceChart({
       <View style={styles.header}>
         <Text style={styles.title}>Price</Text>
         <View style={styles.rangeRow}>
-          {RANGES.map((r) => {
+          {ranges.map((r) => {
             const active = r.id === activeRange;
             return (
               <TouchableOpacity

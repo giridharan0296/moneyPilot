@@ -14,6 +14,14 @@ import { fetchIndianMarketBoard } from '../lib/fundamentals';
 
 const money = (value) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const percent = (value) => `${Number(value || 0) >= 0 ? '+' : ''}${Number(value || 0).toFixed(2)}%`;
+const CAP_SEGMENTS = [
+  { id: 'large', label: 'Large Cap', detail: '₹20,000 Cr+' },
+  { id: 'mid', label: 'Mid Cap', detail: '₹5,000–20,000 Cr' },
+  { id: 'small', label: 'Small Cap', detail: 'Below ₹5,000 Cr' },
+];
+const marketCap = (value) => value
+  ? `M-cap ₹${(Number(value) / 10_000_000).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`
+  : 'Market cap unavailable';
 
 const BOARD_META = {
   indices: {
@@ -53,12 +61,16 @@ export default function MarketBoardScreen({ route, navigation }) {
   const [fetchedAt, setFetchedAt] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [segment, setSegment] = useState('large');
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchIndianMarketBoard(resolvedBoard);
+      const result = await fetchIndianMarketBoard(
+        resolvedBoard,
+        resolvedBoard === 'indices' ? {} : { segment },
+      );
       setRows(result.rows || []);
       setFetchedAt(result.fetchedAt);
     } catch (e) {
@@ -66,7 +78,7 @@ export default function MarketBoardScreen({ route, navigation }) {
     } finally {
       setLoading(false);
     }
-  }, [resolvedBoard]);
+  }, [resolvedBoard, segment]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -91,6 +103,29 @@ export default function MarketBoardScreen({ route, navigation }) {
           <Text style={styles.refreshText}>Refresh</Text>
         </TouchableOpacity>
       </View>
+
+      {resolvedBoard !== 'indices' ? (
+        <View style={styles.segmentWrap}>
+          <View style={styles.segmentRow}>
+            {CAP_SEGMENTS.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => setSegment(item.id)}
+                style={[styles.segmentChip, segment === item.id && styles.segmentChipActive]}
+                accessibilityRole={'button'}
+                accessibilityState={{ selected: segment === item.id }}
+              >
+                <Text style={[styles.segmentLabel, segment === item.id && styles.segmentLabelActive]}>
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.segmentDetail}>
+            {CAP_SEGMENTS.find((item) => item.id === segment)?.detail} market capitalisation
+          </Text>
+        </View>
+      ) : null}
 
       {loading && !fetchedAt ? (
         <View style={styles.loading}>
@@ -165,6 +200,7 @@ function MoverList({ rows, empty, onPress }) {
             <View style={styles.moverName}>
               <Text numberOfLines={1} style={styles.stockName}>{row.name}</Text>
               <Text style={styles.symbol}>{row.symbol.replace(/\.(NS|BO)$/i, '')}</Text>
+              <Text style={styles.marketCap}>{marketCap(row.marketCap)}</Text>
             </View>
             <View style={styles.moverValue}>
               <Text style={styles.price}>₹ {money(row.price)}</Text>
@@ -202,6 +238,22 @@ const makeStyles = (c) => ({
   refreshText: { color: c.accent.primary, fontSize: 12, fontWeight: '800' },
   loading: { paddingVertical: 40, alignItems: 'center', gap: 12 },
   muted: { color: c.text.secondary, fontSize: 13, lineHeight: 19 },
+  segmentWrap: { marginBottom: 16 },
+  segmentRow: { flexDirection: 'row', gap: 7 },
+  segmentChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 9,
+    paddingHorizontal: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surface,
+  },
+  segmentChipActive: { borderColor: c.accent.primary, backgroundColor: c.bg.surfaceAlt },
+  segmentLabel: { color: c.text.secondary, fontSize: 11, fontWeight: '700' },
+  segmentLabelActive: { color: c.accent.primary },
+  segmentDetail: { color: c.text.muted, fontSize: 10, marginTop: 6 },
   error: { padding: 16, borderRadius: 14, backgroundColor: c.state.errorBg },
   errorText: { color: c.state.errorFg, fontSize: 13, lineHeight: 19 },
   retry: { color: c.accent.primary, fontWeight: '800', marginTop: 10 },
@@ -235,6 +287,7 @@ const makeStyles = (c) => ({
   moverName: { flex: 1, paddingRight: 12 },
   stockName: { color: c.text.primary, fontSize: 13, fontWeight: '700' },
   symbol: { color: c.text.muted, fontSize: 11, marginTop: 2 },
+  marketCap: { color: c.text.muted, fontSize: 10, marginTop: 2 },
   moverValue: { alignItems: 'flex-end' },
   price: { color: c.text.primary, fontSize: 12, fontWeight: '700' },
   up: { color: c.accent.income },

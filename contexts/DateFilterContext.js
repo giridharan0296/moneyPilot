@@ -5,6 +5,11 @@ import {
   useMemo,
   useState,
 } from 'react';
+import {
+  financialYearLabel,
+  financialYearRange,
+  financialYearStartYear,
+} from '../lib/financialYear';
 
 // ----------------------------------------------------------------------------
 // DateFilterContext — a single piece of app-wide state describing "what
@@ -12,6 +17,7 @@ import {
 //
 //   month  { kind: 'month',  year, month }        e.g. Jul 2026
 //   week   { kind: 'week',   weekStart }          Monday-anchored 7-day span
+//   fy     { kind: 'fy',     startYear }          Indian FY Apr 1 → Mar 31 (YTD if current)
 //   custom { kind: 'custom', startDate, endDate } inclusive both ends
 //   all    { kind: 'all' }                        no filter
 //
@@ -66,6 +72,14 @@ export function getRange(filter) {
     return { start, end };
   }
 
+  if (filter.kind === 'fy') {
+    const fy = financialYearRange(filter.startYear);
+    const end = new Date(fy.end);
+    end.setHours(0, 0, 0, 0);
+    end.setDate(end.getDate() + 1);
+    return { start: fy.start, end };
+  }
+
   // custom: endDate is INCLUSIVE, so push to next-day midnight for [start, end).
   if (filter.kind === 'custom') {
     const start = new Date(filter.startDate);
@@ -98,6 +112,11 @@ function labelFor(filter) {
     return `${start.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`;
   }
 
+  if (filter.kind === 'fy') {
+    const fy = financialYearRange(filter.startYear);
+    return financialYearLabel(filter.startYear, { isPartial: fy.isPartial });
+  }
+
   if (filter.kind === 'custom') {
     const opts = { day: 'numeric', month: 'short', year: 'numeric' };
     return `${filter.startDate.toLocaleDateString(undefined, opts)} – ${filter.endDate.toLocaleDateString(undefined, opts)}`;
@@ -111,6 +130,7 @@ function defaultsForKind(kind) {
   const now = new Date();
   if (kind === 'month') return { kind, year: now.getFullYear(), month: now.getMonth() };
   if (kind === 'week') return { kind, weekStart: startOfWeek(now) };
+  if (kind === 'fy') return { kind, startYear: financialYearStartYear(now) };
   if (kind === 'custom') {
     // Last 7 days by default.
     const endDate = new Date();
@@ -137,6 +157,12 @@ export function DateFilterProvider({ children }) {
       if (prev.kind === 'week') {
         const start = new Date(prev.weekStart.getTime() + delta * 7 * ONE_DAY_MS);
         return { kind: 'week', weekStart: start };
+      }
+      if (prev.kind === 'fy') {
+        const currentStart = financialYearStartYear();
+        const nextYear = prev.startYear + delta;
+        if (nextYear > currentStart) return prev;
+        return { kind: 'fy', startYear: nextYear };
       }
       return prev;
     });
@@ -190,6 +216,8 @@ export function DateFilterProvider({ children }) {
   );
 
   const range = useMemo(() => getRange(filter), [filter]);
+  const currentFyStartYear = useMemo(() => financialYearStartYear(), []);
+  const isAtCurrentFy = filter.kind === 'fy' && filter.startYear >= currentFyStartYear;
 
   const value = useMemo(
     () => ({
@@ -198,10 +226,15 @@ export function DateFilterProvider({ children }) {
       label: labelFor(filter),
       range,
       isAllTime: filter.kind === 'all',
-      canShift: filter.kind === 'month' || filter.kind === 'week',
+      canShift: filter.kind === 'month' || filter.kind === 'week' || filter.kind === 'fy',
+      canShiftForward: filter.kind !== 'fy' || !isAtCurrentFy,
+      currentFyStartYear,
       setKind,
       goPrev: () => shift(-1),
-      goNext: () => shift(1),
+      goNext: () => {
+        if (filter.kind === 'fy' && isAtCurrentFy) return;
+        shift(1);
+      },
       jumpToCurrent,
       setCustomRange,
       showMonthOf,
@@ -211,6 +244,8 @@ export function DateFilterProvider({ children }) {
     [
       filter,
       range,
+      isAtCurrentFy,
+      currentFyStartYear,
       setKind,
       shift,
       jumpToCurrent,

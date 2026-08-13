@@ -6,8 +6,6 @@ export default function IncomeScreen({ route }) {
     <TransactionsList
       type="income"
       amountPrefix="+"
-      amountColor="#059669"
-      accentColor="#059669"
       focusId={focusId}
       copy={{
         totalLabel: 'TOTAL EARNED',
@@ -17,7 +15,7 @@ export default function IncomeScreen({ route }) {
         notePlaceholder: 'e.g. October paycheck',
         emptyIcon: 'wallet',
         emptyTitle: 'No income yet.',
-        emptySub: 'Add your first entry above.',
+        emptySub: 'Tap + to add your first entry.',
         clearAllTitle: 'Clear all income?',
         clearAllMessage: 'This cannot be undone.',
       }}

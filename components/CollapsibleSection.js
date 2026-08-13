@@ -1,29 +1,32 @@
 // ----------------------------------------------------------------------------
 // CollapsibleSection — a card that starts collapsed and expands on tap.
 //
-// Used all over the EMI calculator to keep the screen manageable: each
-// "what-if" tool (fees, prepayment, moratorium, rate change, balance
-// transfer) is a section, and users expand only what they need.
-//
-// Props:
-//   title      – section heading text (required)
-//   icon       – AppIcon registry name for the leading glyph (optional).
-//                Replaces the legacy `emoji` prop; if both are set,
-//                `icon` wins.
-//   emoji      – legacy string prop (kept only for backwards-compat with
-//                any caller not yet migrated). Prefer `icon`.
-//   subtitle   – small helper line under title (optional)
-//   defaultOpen – whether the section starts expanded (default false)
-//   accent     – accent color for the header bar; also tints the icon so
-//                each section reads as its own coloured landmark
-//   children   – rendered inside when expanded
+// Used on EMI calculator, Dashboard, etc. Optional `persistKey` remembers
+// open/closed state in AsyncStorage.
 // ----------------------------------------------------------------------------
 
-import { useState } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  Platform,
+  Text,
+  UIManager,
+  View,
+} from 'react-native';
 
 import AppIcon from './AppIcon';
+import PressableScale from './PressableScale';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { withAlpha } from '../lib/colorAlpha';
+import { animateLayout } from '../lib/motion';
+import { elevation, radii, spacing } from '../lib/theme';
+import {
+  readCollapsibleSectionState,
+  writeCollapsibleSectionState,
+} from '../lib/collapsibleSectionState';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 export default function CollapsibleSection({
   title,
@@ -31,23 +34,53 @@ export default function CollapsibleSection({
   emoji,
   subtitle,
   defaultOpen = false,
+  persistKey = null,
   accent = '#2563eb',
+  compactBody = false,
   children,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const [open, setOpen] = useState(defaultOpen);
+  const [hydrated, setHydrated] = useState(!persistKey);
+
+  useEffect(() => {
+    if (!persistKey) return undefined;
+    let cancelled = false;
+    readCollapsibleSectionState(persistKey, defaultOpen).then((storedOpen) => {
+      if (!cancelled) {
+        setOpen(storedOpen);
+        setHydrated(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [persistKey, defaultOpen]);
+
+  const toggle = () => {
+    animateLayout();
+    setOpen((value) => {
+      const next = !value;
+      if (persistKey) writeCollapsibleSectionState(persistKey, next);
+      return next;
+    });
+  };
+
+  if (!hydrated) return null;
 
   return (
-    <View style={styles.wrap}>
-      <TouchableOpacity
-        style={[styles.header, open && styles.headerOpen, { borderLeftColor: accent }]}
-        onPress={() => setOpen((v) => !v)}
-        activeOpacity={0.7}
+    <View style={[styles.wrap, { borderLeftColor: withAlpha(accent, open ? 0.55 : 0.35) }]}>
+      <PressableScale
+        onPress={toggle}
+        haptic
+        scaleTo={0.992}
+        contentStyle={[styles.header, open && styles.headerOpen]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={title}
       >
         <View style={styles.headerLeft}>
           {icon ? (
-            <View style={styles.iconWrap}>
+            <View style={[styles.iconBadge, { backgroundColor: withAlpha(accent, 0.14) }]}>
               <AppIcon name={icon} size={18} color={accent} strokeWidth={2.1} />
             </View>
           ) : emoji ? (
@@ -58,21 +91,19 @@ export default function CollapsibleSection({
             {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           </View>
         </View>
-        <View style={styles.chevronWrap}>
-          <AppIcon
-            name="chevron-right"
-            size={14}
-            color={themeColors.text.secondary}
-            strokeWidth={2.2}
-            // Rotate the same chevron 90° when open — cheaper than
-            // shipping an extra "chevron-down" glyph and matches the
-            // convention used by Material/iOS-native disclosure rows.
-            style={open ? { transform: [{ rotate: '90deg' }] } : null}
-          />
-        </View>
-      </TouchableOpacity>
+        <AppIcon
+          name={open ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={themeColors.text.muted}
+          strokeWidth={2.2}
+        />
+      </PressableScale>
 
-      {open && <View style={styles.body}>{children}</View>}
+      {open && (
+        <View style={[styles.body, compactBody && styles.bodyCompact]}>
+          {children}
+        </View>
+      )}
     </View>
   );
 }
@@ -80,27 +111,37 @@ export default function CollapsibleSection({
 const makeStyles = (c) => ({
   wrap: {
     backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    borderWidth: 1, borderColor: c.border.subtle,
-    marginBottom: 12,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderLeftWidth: 3,
+    marginBottom: spacing.md,
     overflow: 'hidden',
+    ...elevation.card,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14, paddingVertical: 14,
-    borderLeftWidth: 3, borderLeftColor: '#2563eb',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   headerOpen: {
     backgroundColor: c.bg.surfaceAlt,
-    borderBottomWidth: 1, borderBottomColor: c.border.subtle,
+    borderBottomWidth: 1,
+    borderBottomColor: c.border.subtle,
   },
-  headerLeft:  { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  iconWrap:    { width: 26, alignItems: 'center', marginRight: 8 },
-  emoji:       { fontSize: 18, marginRight: 10 },
-  title:       { fontSize: 14, fontWeight: '700', color: c.text.primary },
-  subtitle:    { fontSize: 11, color: c.text.secondary, marginTop: 2 },
-  chevronWrap: { marginLeft: 8 },
-  body:        { padding: 14, gap: 10 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: spacing.sm },
+  iconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emoji: { fontSize: 18, marginRight: 4 },
+  title: { fontSize: 14, fontWeight: '700', color: c.text.primary, letterSpacing: -0.1 },
+  subtitle: { fontSize: 11, color: c.text.secondary, marginTop: 2, lineHeight: 15 },
+  body: { padding: spacing.lg, gap: spacing.sm },
+  bodyCompact: { padding: 0, gap: 0 },
 });

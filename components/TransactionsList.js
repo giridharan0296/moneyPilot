@@ -1,32 +1,35 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-  Alert,
   DeviceEventEmitter,
   FlatList,
   Platform,
+  Pressable,
   ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import CategoryPieChart from './CategoryPieChart';
+import CategoryPieChart, { PieLegendList } from './CategoryPieChart';
 import DateFilterBar from './DateFilterBar';
 import EditTransactionModal from './EditTransactionModal';
 import AddTransactionModal from './AddTransactionModal';
 import VoicePlayer from './VoicePlayer';
 import AppIcon from './AppIcon';
+import PressableScale from './PressableScale';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useToast } from '../contexts/ToastContext';
+import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { deleteVoiceNote } from '../lib/voiceNotes';
-import { radii, spacing } from '../lib/theme';
+import { radii, spacing, elevation } from '../lib/theme';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
   isForeign,
 } from '../lib/currency';
+import { formatChitGrams, GOLD_CHIT_SUB_ID, isClosedGoldChitTx } from '../lib/goldChit';
 
 // ----------------------------------------------------------------------------
 // TransactionsList — the reusable "list of transactions of one type" screen.
@@ -50,23 +53,36 @@ import {
 // mislabelled rows (a coffee purchase showed up as "🎁 Gift" purely because
 // Gift happened to be at the tail). This synthetic value is never mistaken
 // for a real category — it has a reserved id prefix and neutral styling.
-const UNKNOWN_CATEGORY = {
+// Synthetic "unknown" category — color resolved at render from theme.
+const UNKNOWN_CATEGORY_BASE = {
   id: '__unknown__',
   label: 'Unknown',
   emoji: '📌',
-  color: '#9ca3af',
 };
 
 export default function TransactionsList({
   type,
   amountPrefix = '-',
-  amountColor = '#dc2626',
-  accentColor = '#2563eb',
+  amountColor,
+  accentColor,
   copy = {},
   focusId = null,
+  listHeaderPrefix = null,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const unknownCategory = useMemo(
+    () => ({ ...UNKNOWN_CATEGORY_BASE, color: themeColors.text.muted }),
+    [themeColors.text.muted],
+  );
+  const resolvedAmountColor = amountColor ?? (
+    type === 'income'
+      ? themeColors.accent.income
+      : type === 'expense'
+        ? themeColors.accent.expense
+        : themeColors.accent.investment
+  );
+  const resolvedAccentColor = accentColor ?? resolvedAmountColor;
   const t = {
     totalLabel: 'TOTAL',
     chartTitle: 'By Category',
@@ -75,7 +91,7 @@ export default function TransactionsList({
     notePlaceholder: 'e.g. lunch with team',
     emptyIcon: 'edit-3',
     emptyTitle: 'Nothing here yet.',
-    emptySub: 'Add your first one above.',
+    emptySub: 'Tap + to add your first entry.',
     clearAllTitle: 'Clear all?',
     clearAllMessage: 'This cannot be undone.',
     ...copy,
@@ -107,6 +123,7 @@ export default function TransactionsList({
   // choice, not persisted across app launches; that mirrors how
   // DateFilter behaves for month/week jumps.
   const [brokerFilter, setBrokerFilter] = useState(null);
+  const [chartSelection, setChartSelection] = useState(null);
 
   // Reset the broker filter whenever the list TYPE changes. In
   // practice this component is mounted per type (Expenses, Income,
@@ -128,6 +145,7 @@ export default function TransactionsList({
     clearTransactions,
   } = useTransactions();
   const { showToast, showUndoableToast } = useToast();
+  const { confirm } = useConfirmSheet();
 
   const items = listFor(type);
 
@@ -212,13 +230,16 @@ export default function TransactionsList({
   // prepended in chronological order.
   const dateFilteredItems = filterByRange(items);
   const filteredItems = useMemo(() => {
-    const list = (type === 'investment' && brokerFilter)
+    let list = (type === 'investment' && brokerFilter)
       ? dateFilteredItems.filter((tx) =>
           brokerFilter === '__none__'
             ? !tx.brokerId
             : tx.brokerId === brokerFilter,
         )
       : dateFilteredItems;
+    if (type === 'investment') {
+      list = list.filter((tx) => !isClosedGoldChitTx(tx));
+    }
     return [...list].sort(
       (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0),
     );
@@ -266,16 +287,20 @@ export default function TransactionsList({
     }
     if (unknownTotal > 0) {
       slices.push({
-        id: UNKNOWN_CATEGORY.id,
-        label: UNKNOWN_CATEGORY.label,
-        emoji: UNKNOWN_CATEGORY.emoji,
-        color: UNKNOWN_CATEGORY.color,
+        id: unknownCategory.id,
+        label: unknownCategory.label,
+        emoji: unknownCategory.emoji,
+        color: unknownCategory.color,
         value: unknownTotal,
         percent: total > 0 ? (unknownTotal / total) * 100 : 0,
       });
     }
     return slices.sort((a, b) => b.value - a.value);
   })();
+
+  useEffect(() => {
+    setChartSelection(null);
+  }, [rangeLabel, brokerFilter, filteredItems.length]);
 
   // ---- Handlers ----
   const handleAdd = (values) => {
@@ -289,6 +314,7 @@ export default function TransactionsList({
           subCategoryId: null,
           accountId: values.accountId,
           note: values.note,
+          tags: values.tags ?? [],
           voiceNote: index === 0 ? values.voiceNote ?? null : null,
           createdAt: values.date.toISOString(),
           currency: values.currency,
@@ -307,6 +333,7 @@ export default function TransactionsList({
       subCategoryId: values.subCategoryId ?? null,
       accountId: values.accountId,
       note: values.note,
+      tags: values.tags ?? [],
       voiceNote: values.voiceNote ?? null,
       createdAt: values.date.toISOString(),
       currency: values.currency,
@@ -317,7 +344,34 @@ export default function TransactionsList({
       // undefined fields; keeping this branch explicit also makes the
       // "this field only means something on investments" contract
       // visible at the call site.
-      ...(type === 'investment' ? { brokerId: values.brokerId ?? null } : {}),
+      ...(type === 'investment' ? {
+        brokerId: values.brokerId ?? null,
+        instrumentSymbol: values.instrumentSymbol ?? null,
+        instrumentName: values.instrumentName ?? null,
+        instrumentType: values.instrumentType ?? null,
+        investmentUnits: values.investmentUnits ?? null,
+        ...(values.chitSchemeId ? {
+          chitSchemeId: values.chitSchemeId,
+          chitSchemeName: values.chitSchemeName,
+          chitMetalPurity: values.chitMetalPurity,
+          chitWeightGrams: values.chitWeightGrams,
+          chitRatePerGram: values.chitRatePerGram,
+          chitClosedAt: values.chitClosedAt ?? null,
+          linkedChitAssetId: values.linkedChitAssetId ?? null,
+        } : {}),
+      } : {}),
+      ...(type === 'income' ? {
+        payslipBasic: values.payslipBasic ?? null,
+        payslipHra: values.payslipHra ?? null,
+        payslipSpecial: values.payslipSpecial ?? null,
+        payslipOther: values.payslipOther ?? null,
+        payslipTds: values.payslipTds ?? null,
+        payslipPf: values.payslipPf ?? null,
+        payslipGross: values.payslipGross ?? null,
+        payslipNet: values.payslipNet ?? null,
+        payslipSource: values.payslipSource ?? null,
+        payslipAmountMode: values.payslipAmountMode ?? null,
+      } : {}),
     };
     addTransaction(type, newItem);
 
@@ -415,7 +469,7 @@ export default function TransactionsList({
         if (!undone && audioFile) deleteVoiceNote(audioFile);
       }, UNDO_MS + 500);
 
-      const label = buildDeleteLabel(item, categories);
+      const label = buildDeleteLabel(item, categories, unknownCategory);
       showUndoableToast({
         message: `Deleted ${label}`,
         duration: UNDO_MS,
@@ -432,6 +486,7 @@ export default function TransactionsList({
       deleteTransaction,
       showUndoableToast,
       type,
+      unknownCategory,
     ],
   );
 
@@ -443,16 +498,15 @@ export default function TransactionsList({
     [items, softDeleteWithUndo],
   );
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (items.length === 0) return;
-    Alert.alert(t.clearAllTitle, t.clearAllMessage, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: () => clearTransactions(type),
-      },
-    ]);
+    const ok = await confirm({
+      title: t.clearAllTitle,
+      message: t.clearAllMessage,
+      confirmLabel: 'Clear',
+      destructive: true,
+    });
+    if (ok) clearTransactions(type);
   };
 
   // ---- Render helpers ----
@@ -462,7 +516,7 @@ export default function TransactionsList({
     // against a REAL parent, so a stale sub reference automatically collapses
     // to null and doesn't get accidentally re-committed on Save.
     const realCat = categories.find((c) => c.id === item.categoryId) ?? null;
-    const cat = realCat ?? UNKNOWN_CATEGORY;
+    const cat = realCat ?? unknownCategory;
     const sub = item.subCategoryId && realCat
       ? realCat.subCategories?.find((s) => s.id === item.subCategoryId) ?? null
       : null;
@@ -474,10 +528,11 @@ export default function TransactionsList({
     const rowIsForeign = isForeign(rowCurrency, baseCurrency);
     const rowBaseAmount = baseAmountOf(item, fxRates, baseCurrency, 'amount');
     return (
-      <TouchableOpacity
+      <PressableScale
         onPress={() => setEditing(item)}
-        activeOpacity={0.7}
-        style={[styles.row, highlighted && styles.rowHighlighted]}
+        haptic
+        scaleTo={0.985}
+        contentStyle={[styles.row, highlighted && styles.rowHighlighted]}
       >
         <Text style={styles.rowEmoji}>{cat.emoji}</Text>
         <View style={styles.rowMiddle}>
@@ -535,7 +590,7 @@ export default function TransactionsList({
           </View>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.rowAmount, { color: amountColor }]}>
+          <Text style={[styles.rowAmount, { color: resolvedAmountColor }]}>
             {amountPrefix}
             {rowIsForeign
               ? formatMoneyCurrency(item.amount, rowCurrency)
@@ -544,6 +599,11 @@ export default function TransactionsList({
           {rowIsForeign && (
             <Text style={styles.rowAmountSub}>
               ≈ {amountPrefix}{formatMoneyCurrency(rowBaseAmount, baseCurrency)}
+            </Text>
+          )}
+          {item.subCategoryId === GOLD_CHIT_SUB_ID && item.chitWeightGrams > 0 && (
+            <Text style={styles.rowChitGrams}>
+              +{formatChitGrams(item.chitWeightGrams, 2)}
             </Text>
           )}
         </View>
@@ -557,7 +617,7 @@ export default function TransactionsList({
         >
           <AppIcon name="x" size={14} color={themeColors.text.secondary} strokeWidth={2.4} />
         </TouchableOpacity>
-      </TouchableOpacity>
+      </PressableScale>
     );
   };
 
@@ -603,6 +663,8 @@ export default function TransactionsList({
         }}
         ListHeaderComponent={
           <>
+            {listHeaderPrefix}
+
             <DateFilterBar />
 
             {type === 'investment' && (
@@ -611,7 +673,7 @@ export default function TransactionsList({
                 items={dateFilteredItems}
                 selectedId={brokerFilter}
                 onSelect={setBrokerFilter}
-                accentColor={accentColor}
+                accentColor={resolvedAccentColor}
               />
             )}
 
@@ -628,28 +690,28 @@ export default function TransactionsList({
             </View>
 
             {byCategory.length > 0 && (
-              <View style={styles.chartCard}>
+              <Pressable
+                style={styles.chartCard}
+                onPress={() => {
+                  if (chartSelection != null) setChartSelection(null);
+                }}
+              >
                 <Text style={styles.chartTitle}>{t.chartTitle}</Text>
-                <CategoryPieChart data={byCategory} />
-                <View style={styles.legend}>
-                  {byCategory.map((c) => (
-                    <View key={c.id} style={styles.legendRow}>
-                      <View
-                        style={[styles.legendDot, { backgroundColor: c.color }]}
-                      />
-                      <Text style={styles.legendLabel}>
-                        {c.emoji} {c.label}
-                      </Text>
-                      <Text style={styles.legendValue}>
-                        {formatMoneyCurrency(c.value, baseCurrency)}
-                      </Text>
-                      <Text style={styles.legendPercent}>
-                        {c.percent.toFixed(0)}%
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
+                <CategoryPieChart
+                  data={byCategory}
+                  size={200}
+                  selectedIndex={chartSelection}
+                  onSelectedIndexChange={setChartSelection}
+                />
+                <PieLegendList
+                  rows={byCategory}
+                  total={total}
+                  baseCurrency={baseCurrency}
+                  selectedIndex={chartSelection}
+                  onSelect={setChartSelection}
+                  style={{ marginTop: spacing.lg, width: '100%' }}
+                />
+              </Pressable>
             )}
 
             {/* Inline add form was removed as part of the FAB migration:
@@ -716,7 +778,7 @@ export default function TransactionsList({
           categories={categories}
           accounts={accounts}
           accountGroups={accountGroups}
-          accentColor={accentColor}
+          accentColor={resolvedAccentColor}
           type={type}
           onSave={handleSaveEdit}
           onDelete={handleDeleteEdit}
@@ -737,7 +799,7 @@ export default function TransactionsList({
           categories={categories}
           accounts={accounts}
           accountGroups={accountGroups}
-          accentColor={accentColor}
+          accentColor={resolvedAccentColor}
           type={type}
           title={t.addFormTitle}
           submitLabel={t.submitLabel}
@@ -904,8 +966,8 @@ function formatToastTimestamp(d) {
 // Human-readable label for the undo toast — "Coffee ₹120" beats "1 item".
 // Falls back to the synthetic Unknown category (not an unrelated real one)
 // when the category has been deleted, so the toast is truthful.
-function buildDeleteLabel(item, categories) {
-  const cat = categories.find((c) => c.id === item.categoryId) ?? UNKNOWN_CATEGORY;
+function buildDeleteLabel(item, categories, fallbackCategory) {
+  const cat = categories.find((c) => c.id === item.categoryId) ?? fallbackCategory;
   return `${cat.emoji} ${cat.label} ₹${formatMoney(item.amount)}`;
 }
 
@@ -915,10 +977,11 @@ const makeStyles = (c) => ({
 
   totalCard: {
     backgroundColor: c.bg.hero,
-    borderRadius: radii.xl,
+    borderRadius: radii['2xl'],
     padding: spacing['2xl'],
     alignItems: 'center',
     marginBottom: spacing.xl,
+    ...elevation.raised,
   },
 
   brokerFilterRow: {
@@ -946,26 +1009,21 @@ const makeStyles = (c) => ({
 
   chartCard: {
     backgroundColor: c.bg.surface,
-    borderRadius: radii.xl,
+    borderRadius: radii['2xl'],
     padding: spacing.xl,
     marginBottom: spacing.xl,
     borderWidth: 1,
     borderColor: c.border.subtle,
     alignItems: 'center',
+    ...elevation.card,
   },
   chartTitle: {
     fontSize: 14,
     fontWeight: '700',
     color: c.text.primary,
     alignSelf: 'flex-start',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
-  legend: { width: '100%', marginTop: spacing.xl, gap: spacing.sm },
-  legendRow: { flexDirection: 'row', alignItems: 'center' },
-  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: spacing.sm },
-  legendLabel: { flex: 1, fontSize: 13, color: c.text.primary, fontWeight: '500' },
-  legendValue: { fontSize: 13, color: c.text.primary, fontWeight: '600', marginRight: spacing.md },
-  legendPercent: { fontSize: 12, color: c.text.secondary, width: 36, textAlign: 'right' },
 
   // formCard / formTitle removed alongside the inline add form (see the
   // FAB migration in TransactionsScreen.js). AddTransactionModal renders
@@ -985,11 +1043,12 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.bg.surface,
-    borderRadius: radii.lg,
+    borderRadius: radii.xl,
     padding: spacing.md,
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    ...elevation.card,
   },
   // Applied when the row is the target of a Search-navigation focus.
   // Kept subtle — an accent-tinted border + fill is enough for the eye
@@ -1037,6 +1096,13 @@ const makeStyles = (c) => ({
     fontSize: 11,
     color: c.text.secondary,
     fontStyle: 'italic',
+    marginRight: spacing.sm,
+    marginTop: 2,
+  },
+  rowChitGrams: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: c.accent.gold,
     marginRight: spacing.sm,
     marginTop: 2,
   },

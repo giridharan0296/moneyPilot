@@ -25,6 +25,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
@@ -41,16 +42,20 @@ import DateTimePicker from '../components/DatePicker';
 import LoanForm from '../components/LoanForm';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
+import AmountCalculatorButton from '../components/AmountCalculatorButton';
 import { useLoans } from '../contexts/LoansContext';
+import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import {
   LOAN_ADJUSTMENT_MODES,
+  computeFirstEmiSplit,
   computePayoffPercent,
   computePayoffProjection,
   computeTotalInterestPaid,
   computeTotalPrincipalRepaid,
   enumerateEmiDueDates,
+  firstScheduledEmiDate,
   formatDate,
   formatMoney,
   formatMoneyDetail,
@@ -142,6 +147,7 @@ export default function LoanDetailScreen({ route, navigation }) {
     kindLabel,
   } = useLoans();
   const { showToast } = useToast();
+  const { accounts } = useSettings();
 
   const initialMode = route?.params?.mode === 'new' ? 'new' : 'view';
   const [mode, setMode] = useState(initialMode);
@@ -154,6 +160,22 @@ export default function LoanDetailScreen({ route, navigation }) {
   const [rateModal, setRateModal]         = useState(false);
   const [editModal, setEditModal]         = useState(false);
   const [fixSetupModal, setFixSetupModal] = useState(false);
+  const [pendingBackfillLoanId, setPendingBackfillLoanId] = useState(null);
+
+  // A loan and its mirror liability are created in the same render cycle.
+  // Run confirmed backfills on the following render so TransfersContext can
+  // resolve that liability before it records each principal repayment.
+  useEffect(() => {
+    if (!pendingBackfillLoanId) return;
+    const id = pendingBackfillLoanId;
+    setPendingBackfillLoanId(null);
+    const result = backfillPaidEmis(id);
+    const n = result?.recorded || 0;
+    showToast(
+      n > 0 ? `Loan added · ${n} EMI${n === 1 ? '' : 's'} recorded` : 'Loan added',
+      { variant: 'success', duration: 2200 },
+    );
+  }, [pendingBackfillLoanId, backfillPaidEmis, showToast]);
 
   // Sorted events computed HERE (before any early returns) so the number of
   // hooks called is stable across renders. Empty when the loan isn't found
@@ -194,8 +216,12 @@ export default function LoanDetailScreen({ route, navigation }) {
     }
 
     const title = 'Record past EMIs?';
+    const firstSplit = computeFirstEmiSplit(createdLoan, dueDates[0]);
+    const amountDescription = dueDates.length > 1 && firstSplit?.days > 0
+      ? `${formatMoney(emi)} each (${formatMoney(firstSplit.interest)} interest on first EMI for ${firstSplit.days} days)`
+      : formatMoney(emi);
     const message =
-      `This loan started earlier. Record ${dueDates.length} paid EMI${dueDates.length === 1 ? '' : 's'} of ${formatMoney(emi)} through today?\n\nThis updates loan outstanding and timeline. It does not create expense transactions.`;
+      `This loan started earlier. Record ${dueDates.length} paid EMI${dueDates.length === 1 ? '' : 's'} (${amountDescription}) through today?\n\nThis updates loan outstanding, timeline, and interest expense entries.`;
 
     // Multi-button Alert.alert is unreliable on react-native-web.
     let confirmed = false;
@@ -219,12 +245,7 @@ export default function LoanDetailScreen({ route, navigation }) {
       showToast('Loan added', { variant: 'success', duration: 1500 });
       return;
     }
-    const result = backfillPaidEmis(createdLoan.id);
-    const n = result?.recorded || 0;
-    showToast(
-      n > 0 ? `Loan added · ${n} EMI${n === 1 ? '' : 's'} recorded` : 'Loan added',
-      { variant: 'success', duration: 2200 },
-    );
+    setPendingBackfillLoanId(createdLoan.id);
   };
 
   const handleCreate = (values) => {
@@ -347,11 +368,21 @@ export default function LoanDetailScreen({ route, navigation }) {
       })
     : [];
   const canBackfillEmis = pendingBackfillDates.length > 0 && (Number(loan.emiAmount) || 0) > 0;
+  const firstDueDate = firstScheduledEmiDate(loan.disburseDate, loan.emiDayOfMonth);
+  const firstEmiSplit = firstDueDate ? computeFirstEmiSplit(loan, firstDueDate) : null;
+  const firstInterestLabel = loan.firstInterestPeriod === 'emi_date'
+    ? `Until first EMI date · Actual/${loan.firstInterestBasis}`
+    : loan.firstInterestPeriod === 'month_end'
+      ? `Until month-end · Actual/${loan.firstInterestBasis}`
+      : 'Standard monthly';
 
   const handleBackfillEmis = async () => {
     const title = 'Record past EMIs?';
+    const amountDescription = pendingBackfillDates.length > 1 && firstEmiSplit?.days > 0
+      ? `${formatMoney(loan.emiAmount)} each (${formatMoney(firstEmiSplit.interest)} interest on first EMI for ${firstEmiSplit.days} days)`
+      : formatMoney(loan.emiAmount);
     const message =
-      `Record ${pendingBackfillDates.length} paid EMI${pendingBackfillDates.length === 1 ? '' : 's'} of ${formatMoney(loan.emiAmount)} through today?\n\nUse this only if you have not logged those EMIs yet.`;
+      `Record ${pendingBackfillDates.length} paid EMI${pendingBackfillDates.length === 1 ? '' : 's'} (${amountDescription}) through today?\n\nUse this only if you have not logged those EMIs yet.`;
 
     let confirmed = false;
     if (Platform.OS === 'web') {
@@ -425,6 +456,13 @@ export default function LoanDetailScreen({ route, navigation }) {
           <Text style={styles.cardTitle}>Details</Text>
           <DetailRow label="Principal" value={formatMoney(loan.principal)} />
           <DetailRow label="Current schedule" value={formatSchedule(loan) || '—'} />
+          <DetailRow label={'First interest'} value={firstInterestLabel} />
+          {firstEmiSplit?.days > 0 && (
+            <DetailRow
+              label="First EMI interest"
+              value={`${formatMoney(firstEmiSplit.interest)} · ${firstEmiSplit.days} days`}
+            />
+          )}
           {estimatedEnd?.projectedClosureDate && estimatedEnd.remainingMonths != null && (
             <DetailRow
               label={estimatedEnd.includesPrepaymentPlan ? 'Estimated end with active monthly plan' : 'Estimated loan end'}
@@ -617,10 +655,15 @@ export default function LoanDetailScreen({ route, navigation }) {
         title="Log EMI paid"
         submitLabel="Save EMI"
         accent="#059669"
-        placeholder={loan.emiAmount ? String(Math.round(loan.emiAmount)) : ''}
+        placeholder={(() => {
+          const nextAmount = Number(loan.emiAmount) || 0;
+          return nextAmount > 0 ? String(Math.round(nextAmount)) : '';
+        })()}
+        accounts={accounts}
+        defaultAccountId={loan.disbursementAccountId}
         onClose={() => setEmiModal(false)}
-        onSubmit={({ amount, date, note }) => {
-          const res = logEmi(loan.id, { amount, date, note });
+        onSubmit={({ amount, date, note, accountId }) => {
+          const res = logEmi(loan.id, { amount, date, note, accountId });
           if (!res.ok) {
             Alert.alert('Could not log EMI', errorMessage(res.reason));
             return;
@@ -638,12 +681,14 @@ export default function LoanDetailScreen({ route, navigation }) {
         maxAmount={loan.currentOutstanding}
         defaultEmi={loan.emiAmount}
         initialAmount={plannedPrepayAmount}
+        accounts={accounts}
+        defaultAccountId={loan.disbursementAccountId}
         onClose={() => {
           setPlannedPrepayAmount(null);
           setPrepayModal(false);
         }}
-        onSubmit={({ amount, date, note, adjustmentMode }) => {
-          const res = logPrepayment(loan.id, { amount, date, note, adjustmentMode });
+        onSubmit={({ amount, date, note, adjustmentMode, accountId }) => {
+          const res = logPrepayment(loan.id, { amount, date, note, adjustmentMode, accountId });
           if (!res.ok) {
             Alert.alert('Could not log prepayment', errorMessage(res.reason));
             return;
@@ -845,13 +890,16 @@ function adjustmentSummary(event) {
 
 // Reusable amount + date + note modal used for both Log EMI and Prepay.
 function AmountModal({
-  visible, title, submitLabel, accent, placeholder, maxAmount, onSubmit, onClose,
+  visible, title, submitLabel, accent, placeholder, maxAmount, accounts = [],
+  defaultAccountId, onSubmit, onClose,
 }) {
   const styles = useThemedStyles(makeStyles);
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date());
   const [note, setNote] = useState('');
   const [showPicker, setShowPicker] = useState(false);
+  const fallbackAccountId = accounts[0]?.id ?? null;
+  const [accountId, setAccountId] = useState(defaultAccountId ?? fallbackAccountId);
 
   // Reset the form when the modal opens so stale values don't leak between
   // invocations. useEffect (not useMemo) because these are side effects —
@@ -861,8 +909,10 @@ function AmountModal({
       setAmount('');
       setDate(new Date());
       setNote('');
+      setShowPicker(false);
+      setAccountId(defaultAccountId ?? fallbackAccountId);
     }
-  }, [visible]);
+  }, [visible, defaultAccountId, fallbackAccountId]);
 
   const handleSubmit = () => {
     const amt = Number(amount);
@@ -874,7 +924,11 @@ function AmountModal({
       Alert.alert('Too much', `Amount can't exceed the current outstanding of ${formatMoney(maxAmount)}.`);
       return;
     }
-    onSubmit({ amount: amt, date: date.toISOString(), note });
+    if (!accountId) {
+      Alert.alert('Select account', 'Choose the account used to make this repayment.');
+      return;
+    }
+    onSubmit({ amount: amt, date: date.toISOString(), note, accountId });
   };
 
   return (
@@ -891,27 +945,32 @@ function AmountModal({
           </View>
           <ScrollView contentContainerStyle={{ padding: spacing.xl }} keyboardShouldPersistTaps="handled">
             <Text style={styles.modalLabel}>Amount</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="numeric"
-              placeholder={placeholder || 'e.g. 21500'}
-              placeholderTextColor="#9ca3af"
-              autoFocus
-            />
+            <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+              <TextInput
+                style={styles.modalInput}
+                value={amount}
+                onChangeText={setAmount}
+                keyboardType="numeric"
+                placeholder={placeholder || 'e.g. 21500'}
+                placeholderTextColor="#9ca3af"
+                autoFocus
+              />
+            </AmountCalculatorButton>
             {maxAmount != null && (
               <Text style={styles.modalHint}>
                 Max: {formatMoney(maxAmount)} (current outstanding)
               </Text>
             )}
 
+            <Text style={styles.modalLabel}>Paid from account</Text>
+            <RepaymentAccountPicker accounts={accounts} selectedId={accountId} onSelect={setAccountId} accent={accent} />
+
             <Text style={styles.modalLabel}>Date</Text>
-            <TouchableOpacity onPress={() => setShowPicker(true)} style={styles.modalDateBtn}>
+            <TouchableOpacity onPress={() => { Keyboard.dismiss(); setShowPicker(true); }} style={styles.modalDateBtn}>
               <Text style={styles.modalDateText}>{formatDate(date.toISOString())}</Text>
               <Text style={styles.modalHint}>tap to change</Text>
             </TouchableOpacity>
-            {showPicker && (
+            {(showPicker || Platform.OS === 'web') && (
               <DateTimePicker
                 value={date}
                 mode="date"
@@ -949,13 +1008,15 @@ function AmountModal({
 
 // Prepay modal — same body as AmountModal but with an adjustmentMode chip
 // row so the user records whether the bank shortens tenure or reduces EMI.
-function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, onClose }) {
+function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts = [], defaultAccountId, onSubmit, onClose }) {
   const styles = useThemedStyles(makeStyles);
   const [amount, setAmount] = useState('');
   const [date, setDate]     = useState(new Date());
   const [note, setNote]     = useState('');
   const [adjustmentMode, setAdjustmentMode] = useState('keep_emi');
   const [showPicker, setShowPicker] = useState(false);
+  const fallbackAccountId = accounts[0]?.id ?? null;
+  const [accountId, setAccountId] = useState(defaultAccountId ?? fallbackAccountId);
 
   useEffect(() => {
     if (visible) {
@@ -963,8 +1024,10 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, 
       setDate(new Date());
       setNote(initialAmount ? 'Monthly tenure-reduction plan' : '');
       setAdjustmentMode('keep_emi'); // default matches most retail lender behaviour
+      setShowPicker(false);
+      setAccountId(defaultAccountId ?? fallbackAccountId);
     }
-  }, [visible, initialAmount]);
+  }, [visible, initialAmount, defaultAccountId, fallbackAccountId]);
 
   const handleSubmit = () => {
     const amt = Number(amount);
@@ -976,7 +1039,11 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, 
       Alert.alert('Too much', `Amount can't exceed the current outstanding of ${formatMoney(maxAmount)}.`);
       return;
     }
-    onSubmit({ amount: amt, date: date.toISOString(), note, adjustmentMode });
+    if (!accountId) {
+      Alert.alert('Select account', 'Choose the account used to make this prepayment.');
+      return;
+    }
+    onSubmit({ amount: amt, date: date.toISOString(), note, adjustmentMode, accountId });
   };
 
   return (
@@ -993,20 +1060,25 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, 
           </View>
           <ScrollView contentContainerStyle={{ padding: spacing.xl }} keyboardShouldPersistTaps="handled">
             <Text style={styles.modalLabel}>Amount</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="numeric"
-              placeholder='e.g. 100000'
-              placeholderTextColor="#9ca3af"
-              autoFocus
-            />
+            <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+              <TextInput
+                style={styles.modalInput}
+                value={amount}
+                onChangeText={setAmount}
+                keyboardType="numeric"
+                placeholder="e.g. 100000"
+                placeholderTextColor="#9ca3af"
+                autoFocus
+              />
+            </AmountCalculatorButton>
             {maxAmount != null && (
               <Text style={styles.modalHint}>
                 Max: {formatMoney(maxAmount)} (current outstanding)
               </Text>
             )}
+
+            <Text style={styles.modalLabel}>Paid from account</Text>
+            <RepaymentAccountPicker accounts={accounts} selectedId={accountId} onSelect={setAccountId} accent={'#f59e0b'} />
 
             <Text style={styles.modalLabel}>What did the bank do with the freed balance?</Text>
             <View style={styles.chipRow}>
@@ -1036,11 +1108,11 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, 
             </Text>
 
             <Text style={styles.modalLabel}>Date</Text>
-            <TouchableOpacity onPress={() => setShowPicker(true)} style={styles.modalDateBtn}>
+            <TouchableOpacity onPress={() => { Keyboard.dismiss(); setShowPicker(true); }} style={styles.modalDateBtn}>
               <Text style={styles.modalDateText}>{formatDate(date.toISOString())}</Text>
               <Text style={styles.modalHint}>tap to change</Text>
             </TouchableOpacity>
-            {showPicker && (
+            {(showPicker || Platform.OS === 'web') && (
               <DateTimePicker
                 value={date}
                 mode="date"
@@ -1073,6 +1145,23 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, onSubmit, 
         </SafeAreaView>
       </View>
     </Modal>
+  );
+}
+
+function RepaymentAccountPicker({ accounts, selectedId, onSelect, accent }) {
+  const styles = useThemedStyles(makeStyles);
+  if (accounts.length === 0) return <Text style={styles.modalHint}>No accounts available. Add one in Settings first.</Text>;
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+      {accounts.map((account) => {
+        const selected = account.id === selectedId;
+        return (
+          <TouchableOpacity key={account.id} onPress={() => onSelect(account.id)} style={[styles.chip, selected && { backgroundColor: accent, borderColor: accent }]}>
+            <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{account.emoji} {account.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
   );
 }
 

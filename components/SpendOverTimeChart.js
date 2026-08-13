@@ -114,14 +114,16 @@ export default function SpendOverTimeChart({
         </View>
       </View>
 
-      <ChartBody
-        series={series}
-        width={width}
-        height={height}
-        lineColor={lineColor}
-        hasSpend={hasSpend}
-        mode={mode}
-      />
+      <View style={styles.plotShell}>
+        <ChartBody
+          series={series}
+          width={width}
+          height={height}
+          lineColor={lineColor}
+          hasSpend={hasSpend}
+          mode={mode}
+        />
+      </View>
 
       {stats && hasSpend ? (
         <View style={styles.statsRow}>
@@ -209,6 +211,7 @@ function ChartBody({ series, width, height, lineColor, hasSpend, mode }) {
                 y2={y}
                 stroke={themeColors.border.subtle}
                 strokeWidth={1}
+                strokeDasharray={'3 5'}
               />
               <SvgText
                 x={PADDING.left - 6}
@@ -239,13 +242,21 @@ function ChartBody({ series, width, height, lineColor, hasSpend, mode }) {
           d={linePath}
           fill="none"
           stroke={lineColor}
-          strokeWidth={2.5}
+          strokeWidth={3}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
 
         {/* Peak marker (daily mode) */}
         {mode === 'daily' && series[peakIdx].amount > 0 ? (
+          <>
+          <Circle
+            cx={points[peakIdx][0]}
+            cy={points[peakIdx][1]}
+            r={9}
+            fill={lineColor}
+            opacity={0.14}
+          />
           <Circle
             cx={points[peakIdx][0]}
             cy={points[peakIdx][1]}
@@ -254,9 +265,17 @@ function ChartBody({ series, width, height, lineColor, hasSpend, mode }) {
             stroke="#fff"
             strokeWidth={1.5}
           />
+          </>
         ) : null}
 
         {/* End point */}
+        <Circle
+          cx={last[0]}
+          cy={last[1]}
+          r={10}
+          fill={lineColor}
+          opacity={0.14}
+        />
         <Circle
           cx={last[0]}
           cy={last[1]}
@@ -360,19 +379,19 @@ function shortDate(d) {
 }
 
 const makeStyles = (c) => ({
-  controls: { marginBottom: spacing.sm, gap: 8 },
+  controls: { marginBottom: spacing.md, gap: 9 },
   rangeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: c.bg.surfaceAlt || c.bg.canvas,
+    backgroundColor: c.bg.surface,
     borderWidth: 1,
     borderColor: c.border?.subtle || '#e5e7eb',
   },
   chipActive: {
-    backgroundColor: '#dc2626',
-    borderColor: '#dc2626',
+    backgroundColor: c.text.primary,
+    borderColor: c.text.primary,
   },
   chipText: {
     fontSize: 11,
@@ -380,18 +399,42 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     letterSpacing: 0.3,
   },
-  chipTextActive: { color: '#fff' },
+  chipTextActive: { color: c.bg.canvas },
 
-  modeRow: { flexDirection: 'row', gap: 6 },
+  modeRow: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 3,
+    padding: 3,
+    borderRadius: 10,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
   modeChip: {
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: c.bg.surfaceAlt || c.bg.canvas,
+    borderRadius: 7,
+    backgroundColor: 'transparent',
   },
-  modeChipActive: { backgroundColor: 'rgba(220, 38, 38, 0.12)' },
+  modeChipActive: {
+    backgroundColor: c.bg.surface,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
   modeText: { fontSize: 11, fontWeight: '600', color: c.text.muted },
-  modeTextActive: { color: '#b91c1c', fontWeight: '800' },
+  modeTextActive: { color: c.text.primary, fontWeight: '800' },
+
+  plotShell: {
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
 
   empty: {
     justifyContent: 'center',
@@ -412,10 +455,18 @@ const makeStyles = (c) => ({
   statsRow: {
     flexDirection: 'row',
     gap: spacing.md || 12,
-    marginTop: spacing.sm || 8,
+    marginTop: spacing.md,
     justifyContent: 'space-between',
   },
-  stat: { flex: 1 },
+  stat: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: radii.md,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
   statLabel: {
     fontSize: 10,
     fontWeight: '700',

@@ -34,6 +34,8 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STORAGE_KEYS } from '../constants';
 import { useTransactions } from './TransactionsContext';
+import { useSettings } from './SettingsContext';
+import { lookupRateOrOne } from '../lib/currency';
 import {
   generateDueOccurrences,
   toLocalDayKey,
@@ -106,6 +108,7 @@ function migrateRule(rule) {
 export function RecurringProvider({ children }) {
   const [rules, setRules] = useState([]);
   const [ready, setReady] = useState(false);
+  const { accounts, baseCurrency, fxRates } = useSettings();
 
   // Runtime dependencies from the transactions context.
   //
@@ -175,8 +178,17 @@ export function RecurringProvider({ children }) {
       if (!rule.active) return rule;
       const dueDates = generateDueOccurrences(rule, now);
       if (dueDates.length === 0) return rule;
+      const account = accounts.find((item) => item.id === rule.accountId);
+      const currency = rule.currency ?? account?.currency ?? baseCurrency;
+      const fxRate = lookupRateOrOne(fxRates, currency, baseCurrency);
+      const enrichedRule = {
+        ...rule,
+        currency,
+        fxRate,
+        amountInBase: (Number(rule.amount) || 0) * fxRate,
+      };
       for (const date of dueDates) {
-        toAdd.push({ type: rule.type, tx: transactionFromRule(rule, date) });
+        toAdd.push({ type: rule.type, tx: transactionFromRule(enrichedRule, date) });
       }
       const latest = dueDates[dueDates.length - 1];
       return { ...rule, lastRunDate: latest.toISOString() };
@@ -190,7 +202,7 @@ export function RecurringProvider({ children }) {
     for (const { type, tx } of toAdd) addTransaction(type, tx);
     setRules(updatedRules);
     setLastSweep({ generatedCount: toAdd.length, at: now.toISOString() });
-  }, [ready, transactionsReady, addTransaction, rules]);
+  }, [ready, transactionsReady, addTransaction, rules, accounts, baseCurrency, fxRates]);
 
   // ---- CRUD -------------------------------------------------------------
   //
@@ -248,9 +260,36 @@ export function RecurringProvider({ children }) {
       active:        data.active !== false,
       createdAt:     new Date().toISOString(),
     };
+
+    const now = new Date();
+    let generatedCount = 0;
+    if (data.backfillPast === true && newRule.active) {
+      const dueDates = generateDueOccurrences(newRule, now);
+      const account = accounts.find((item) => item.id === newRule.accountId);
+      const currency = newRule.currency ?? account?.currency ?? baseCurrency;
+      const fxRate = lookupRateOrOne(fxRates, currency, baseCurrency);
+      const enrichedRule = {
+        ...newRule,
+        currency,
+        fxRate,
+        amountInBase: (Number(newRule.amount) || 0) * fxRate,
+      };
+      for (const date of dueDates) {
+        addTransaction(newRule.type, transactionFromRule(enrichedRule, date));
+      }
+      generatedCount = dueDates.length;
+      if (generatedCount > 0) {
+        newRule.lastRunDate = dueDates[generatedCount - 1].toISOString();
+      }
+    } else if (startDate <= now) {
+      // The user explicitly declined historical transactions. Advancing the
+      // cursor prevents the next startup sweep from silently recreating them.
+      newRule.lastRunDate = now.toISOString();
+    }
+
     setRules((prev) => [newRule, ...prev]);
-    return newRule;
-  }, []);
+    return { ...newRule, generatedCount };
+  }, [accounts, addTransaction, baseCurrency, fxRates]);
 
   const updateRule = useCallback((id, patch) => {
     if (!patch) return false;

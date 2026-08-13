@@ -55,7 +55,7 @@ export default function RecurringTransactionsScreen({ navigation }) {
     deleteRuleGeneratedTransactions,
   } = useRecurring();
   const { findCategory, findAccount, baseCurrency } = useSettings();
-  const { showUndoableToast } = useToast();
+  const { showToast, showUndoableToast } = useToast();
 
   // UI state
   //   creating   — the new-rule form is open at the top
@@ -102,7 +102,16 @@ export default function RecurringTransactionsScreen({ navigation }) {
 
   const handleAdd = (values) => {
     const rule = addRule(values);
-    if (rule) setCreating(false);
+    if (rule) {
+      setCreating(false);
+      const count = Number(rule.generatedCount) || 0;
+      showToast(
+        count > 0
+          ? `Rule added · ${count} past transaction${count === 1 ? '' : 's'} created`
+          : 'Recurring rule added',
+        { variant: 'success', duration: 2400 },
+      );
+    }
   };
 
   const handleUpdate = (id) => (values) => {

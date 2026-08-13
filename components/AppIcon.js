@@ -419,6 +419,15 @@ const ICONS = {
     <Circle key="b" cx="8" cy="17" r="1.4" {...p} />,
     <Circle key="c" cx="16" cy="17" r="1.4" {...p} />,
   ],
+  user: (p) => [
+    <Path key="a" d="M20 21a8 8 0 0 0-16 0" {...p} />,
+    <Circle key="b" cx="12" cy="7" r="4" {...p} />,
+  ],
+  'log-out': (p) => [
+    <Path key="a" d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" {...p} />,
+    <Polyline key="b" points="16 17 21 12 16 7" {...p} />,
+    <Line key="c" x1="21" y1="12" x2="9" y2="12" {...p} />,
+  ],
 };
 
 // A tiny fallback so a typo in `name` doesn't crash the whole screen. Emits

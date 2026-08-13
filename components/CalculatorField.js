@@ -17,6 +17,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput } from 'react-native';
 
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import AmountCalculatorButton from './AmountCalculatorButton';
 
 export default function CalculatorField({
   label,
@@ -50,20 +51,39 @@ export default function CalculatorField({
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
-      <View style={[styles.inputRow, focused && styles.inputRowFocused]}>
-        {prefix ? <Text style={styles.affix}>{prefix}</Text> : null}
-        <TextInput
-          style={styles.input}
-          value={value}
-          onChangeText={handleChange}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          keyboardType="decimal-pad"
-          placeholder={placeholder}
-          placeholderTextColor={themeColors.text.muted}
-        />
-        {suffix ? <Text style={styles.affix}>{suffix}</Text> : null}
-      </View>
+      {prefix === '₹' ? (
+        <AmountCalculatorButton value={value} onChangeText={onChangeText}>
+          <View style={[styles.inputRow, focused && styles.inputRowFocused]}>
+            {prefix ? <Text style={styles.affix}>{prefix}</Text> : null}
+            <TextInput
+              style={styles.input}
+              value={value}
+              onChangeText={handleChange}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              keyboardType="decimal-pad"
+              placeholder={placeholder}
+              placeholderTextColor={themeColors.text.muted}
+            />
+            {suffix ? <Text style={styles.affix}>{suffix}</Text> : null}
+          </View>
+        </AmountCalculatorButton>
+      ) : (
+        <View style={[styles.inputRow, focused && styles.inputRowFocused]}>
+          {prefix ? <Text style={styles.affix}>{prefix}</Text> : null}
+          <TextInput
+            style={styles.input}
+            value={value}
+            onChangeText={handleChange}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            keyboardType="decimal-pad"
+            placeholder={placeholder}
+            placeholderTextColor={themeColors.text.muted}
+          />
+          {suffix ? <Text style={styles.affix}>{suffix}</Text> : null}
+        </View>
+      )}
     </View>
   );
 }

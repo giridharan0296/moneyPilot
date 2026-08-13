@@ -3,11 +3,11 @@
 //
 // Data model (per budget):
 //   {
-//     id, categoryId | null, amount, period: 'monthly'|'weekly'|'yearly',
-//     createdAt (ISO), active (bool)
+//     id, categoryId | null, subCategoryId | null, amount,
+//     period: 'monthly'|'weekly'|'yearly', createdAt (ISO), active (bool)
 //   }
 //
-// Enforces one-budget-per-(categoryId, period). Attempting to add a
+// Enforces one-budget-per-(categoryId, subCategoryId, period). Attempting
 // duplicate updates the existing entry instead of stacking a second one.
 //
 // Consumers:
@@ -41,6 +41,7 @@ function normalize(budget) {
   return {
     id:         budget.id ?? prefixedId('bud'),
     categoryId: budget.categoryId ?? null,
+    subCategoryId: budget.subCategoryId ?? null,
     amount:     Number(budget.amount) || 0,
     period:     VALID_PERIODS.has(budget.period) ? budget.period : 'monthly',
     createdAt:  budget.createdAt ?? new Date().toISOString(),
@@ -78,15 +79,17 @@ export function BudgetProvider({ children }) {
 
   // ---- Duplicate detection ----
   //
-  // Uniqueness: (categoryId, period). Two monthly Food budgets don't make
-  // sense — the user probably wants to update the existing one. Return
-  // the existing id when a collision is detected so the caller can decide
-  // whether to prompt or just update.
+  // Uniqueness: (categoryId, subCategoryId, period). Two monthly Food
+  // budgets don't make sense — the user probably wants to update the
+  // existing one. Return the existing id when a collision is detected so
+  // the caller can decide whether to prompt or just update.
   const findExistingId = useCallback(
-    (categoryId, period, excludeId) => {
+    (categoryId, period, excludeId, subCategoryId = null) => {
+      const sid = subCategoryId ?? null;
       const match = budgets.find(
         (b) =>
           b.categoryId === categoryId &&
+          (b.subCategoryId ?? null) === sid &&
           b.period === period &&
           b.id !== excludeId,
       );
@@ -98,13 +101,14 @@ export function BudgetProvider({ children }) {
   // ---- CRUD ------------------------------------------------------------
 
   const addBudget = useCallback(
-    ({ categoryId, amount, period }) => {
+    ({ categoryId, subCategoryId, amount, period }) => {
       const amt = Number(amount);
       if (!isFinite(amt) || amt <= 0) return { ok: false, reason: 'invalid_amount' };
       if (!VALID_PERIODS.has(period)) return { ok: false, reason: 'invalid_period' };
 
       const cid = categoryId ?? null;
-      const dupId = findExistingId(cid, period);
+      const sid = subCategoryId ?? null;
+      const dupId = findExistingId(cid, period, undefined, sid);
       if (dupId) {
         // Update in place so the "you already have this" pattern stays
         // frictionless — the form should still warn the user before this
@@ -117,7 +121,7 @@ export function BudgetProvider({ children }) {
         return { ok: true, id: dupId, replaced: true };
       }
 
-      const item = normalize({ categoryId: cid, amount: amt, period });
+      const item = normalize({ categoryId: cid, subCategoryId: sid, amount: amt, period });
       setBudgets((prev) => [item, ...prev]);
       return { ok: true, id: item.id, replaced: false };
     },
@@ -140,6 +144,9 @@ export function BudgetProvider({ children }) {
       if (!current) return prev;
 
       const nextCid    = patch.categoryId !== undefined ? (patch.categoryId ?? null) : current.categoryId;
+      const nextSubId  = patch.subCategoryId !== undefined
+        ? (patch.subCategoryId ?? null)
+        : (current.subCategoryId ?? null);
       const nextPeriod = patch.period != null            ? patch.period               : current.period;
 
       // Would the patch put this budget in the same slot as ANOTHER
@@ -147,13 +154,23 @@ export function BudgetProvider({ children }) {
       // and drop the current one. Keeps the surviving row's original
       // id + createdAt (matches addBudget's replace semantics).
       const dup = prev.find(
-        (b) => b.id !== id && b.categoryId === nextCid && b.period === nextPeriod,
+        (b) =>
+          b.id !== id &&
+          b.categoryId === nextCid &&
+          (b.subCategoryId ?? null) === nextSubId &&
+          b.period === nextPeriod,
       );
       if (dup) {
         const mergedAmount = patch.amount != null
           ? (Number(patch.amount) || 0)
           : dup.amount;
-        const merged = { ...dup, categoryId: nextCid, period: nextPeriod, amount: mergedAmount };
+        const merged = {
+          ...dup,
+          categoryId: nextCid,
+          subCategoryId: nextSubId,
+          period: nextPeriod,
+          amount: mergedAmount,
+        };
         result = { ok: true, id: dup.id, merged: true };
         return prev
           .filter((b) => b.id !== id)

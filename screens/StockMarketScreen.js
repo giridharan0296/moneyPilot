@@ -12,6 +12,14 @@ import { withAlpha } from '../lib/colorAlpha';
 
 const MARKET_TOOLS = [
   {
+    route: 'Invest',
+    nestedScreen: 'Portfolio',
+    icon: 'briefcase',
+    name: 'My Daily Performance',
+    description: 'Track linked stocks, ETFs, mutual funds, value, and daily change.',
+    accent: 'investment',
+  },
+  {
     route: 'MarketIndices',
     icon: 'bar-chart-2',
     name: 'Nifty Indices',
@@ -22,15 +30,22 @@ const MARKET_TOOLS = [
     route: 'MarketGainers',
     icon: 'trending-up',
     name: 'Top Gainers',
-    description: 'See the top 15 NSE/BSE stocks rising today.',
+    description: 'Top 15 rising stocks by large, mid, and small cap.',
     accent: 'income',
   },
   {
     route: 'MarketLosers',
     icon: 'trending-down',
     name: 'Top Losers',
-    description: 'See the top 15 NSE/BSE stocks falling today.',
+    description: 'Top 15 falling stocks by large, mid, and small cap.',
     accent: 'expense',
+  },
+  {
+    route: 'StockHistory',
+    icon: 'bar-chart-2',
+    name: 'Price History',
+    description: 'Chart and daily closes for any stock — 1M through 5Y.',
+    accent: 'primary',
   },
   {
     route: 'FundamentalAnalysis',
@@ -74,7 +89,10 @@ export default function StockMarketScreen({ navigation }) {
             key={tool.route}
             tool={tool}
             isLast={index === MARKET_TOOLS.length - 1}
-            onPress={() => navigation.navigate(tool.route)}
+            onPress={() => navigation.navigate(
+              tool.route,
+              tool.nestedScreen ? { screen: tool.nestedScreen } : undefined,
+            )}
           />
         ))}
       </View>

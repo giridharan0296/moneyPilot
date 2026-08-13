@@ -383,11 +383,11 @@ function ColumnMapper({ field, headers, selected, onSelect }) {
         </Text>
       </View>
       <View style={styles.chipRow}>
-        {headers.map((h) => {
+        {headers.map((h, colIdx) => {
           const active = selected === h;
           return (
             <TouchableOpacity
-              key={h}
+              key={`col-${colIdx}`}
               style={[
                 styles.chip,
                 styles.chipSmall,

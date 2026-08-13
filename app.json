@@ -1,9 +1,10 @@
 {
   "expo": {
-    "name": "MyMoney",
+    "name": "Worth",
     "slug": "expense-tracker",
     "owner": "giridharan19",
     "version": "1.0.0",
+    "scheme": "worth",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -11,7 +12,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0B1220"
     },
     "ios": {
       "supportsTablet": true,
@@ -24,7 +25,7 @@
       "package": "com.giridharan19.expensetracker",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#10b981"
+        "backgroundColor": "#0B1220"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
@@ -52,11 +53,17 @@
       ],
       "expo-asset",
       "expo-secure-store",
-      "expo-font"
+      "expo-font",
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {
         "projectId": "d393366d-2ad1-4564-a445-b692100d4a31"
+      },
+      "googleAuth": {
+        "webClientId": "",
+        "iosClientId": "",
+        "androidClientId": ""
       }
     }
   }

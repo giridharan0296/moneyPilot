@@ -7,15 +7,17 @@ import {
 } from 'react-native';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import PressableScale from './PressableScale';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { elevation, radii, spacing } from '../lib/theme';
 
 // ----------------------------------------------------------------------------
 // DateFilterBar — slim period control shared by Dashboard + Transactions.
 //
 // Layout:
 //   ┌──────────────────────────────────────┐
-//   │  Month │ Week │ Custom │ All         │  ← segmented pill track
+//   │  Month │ Week │ FY │ Custom │ All         │  ← segmented pill track
 //   │     ‹    July 2026    ›              │  ← period nav (month/week)
 //   └──────────────────────────────────────┘
 //
@@ -26,6 +28,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 const MODE_OPTIONS = [
   { kind: 'month',  label: 'Month' },
   { kind: 'week',   label: 'Week' },
+  { kind: 'fy',     label: 'FY' },
   { kind: 'custom', label: 'Custom' },
   { kind: 'all',    label: 'All' },
 ];
@@ -37,6 +40,7 @@ export default function DateFilterBar() {
     kind,
     label,
     canShift,
+    canShiftForward,
     setKind,
     goPrev,
     goNext,
@@ -51,11 +55,12 @@ export default function DateFilterBar() {
         {MODE_OPTIONS.map((m) => {
           const active = m.kind === kind;
           return (
-            <TouchableOpacity
+            <PressableScale
               key={m.kind}
               onPress={() => setKind(m.kind)}
-              style={[styles.segment, active && styles.segmentActive]}
-              activeOpacity={0.75}
+              haptic
+              scaleTo={0.96}
+              contentStyle={[styles.segment, active && styles.segmentActive]}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
               accessibilityLabel={`${m.label} period`}
@@ -63,7 +68,7 @@ export default function DateFilterBar() {
               <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                 {m.label}
               </Text>
-            </TouchableOpacity>
+            </PressableScale>
           );
         })}
       </View>
@@ -72,7 +77,7 @@ export default function DateFilterBar() {
         <Text style={styles.hint}>All time</Text>
       )}
 
-      {(kind === 'month' || kind === 'week') && (
+      {(kind === 'month' || kind === 'week' || kind === 'fy') && (
         <View style={styles.navRow}>
           <TouchableOpacity
             onPress={goPrev}
@@ -97,11 +102,14 @@ export default function DateFilterBar() {
             accessibilityLabel={`${label}. Tap to jump to current`}
           >
             <Text style={styles.label}>{label}</Text>
+            {kind === 'fy' && (
+              <Text style={styles.fyHint}>Indian financial year · 1 Apr – 31 Mar</Text>
+            )}
           </TouchableOpacity>
           <TouchableOpacity
             onPress={goNext}
-            disabled={!canShift}
-            style={[styles.arrowBtn, !canShift && styles.arrowBtnDisabled]}
+            disabled={!canShift || !canShiftForward}
+            style={[styles.arrowBtn, (!canShift || !canShiftForward) && styles.arrowBtnDisabled]}
             hitSlop={10}
             accessibilityRole="button"
             accessibilityLabel="Next period"
@@ -123,6 +131,10 @@ export default function DateFilterBar() {
           onChange={setCustomRange}
         />
       )}
+
+      <Text style={styles.scopeNote}>
+        Filters Dashboard, transactions, and Reports. Budgets and goals use their own periods.
+      </Text>
     </View>
   );
 }
@@ -193,10 +205,11 @@ const makeStyles = (c) => ({
   segmentTrack: {
     flexDirection: 'row',
     backgroundColor: c.bg.surfaceAlt,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     padding: 3,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    ...elevation.card,
   },
   segment: {
     flex: 1,
@@ -204,6 +217,7 @@ const makeStyles = (c) => ({
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 32,
   },
   segmentActive: {
     backgroundColor: c.bg.hero,
@@ -242,6 +256,13 @@ const makeStyles = (c) => ({
     fontSize: 15,
     fontWeight: '700',
     color: c.text.primary,
+  },
+  fyHint: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: c.text.muted,
+    marginTop: 2,
+    textAlign: 'center',
   },
 
   hint: {
@@ -282,5 +303,13 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     fontWeight: '600',
     marginTop: 2,
+  },
+
+  scopeNote: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: c.text.muted,
+    textAlign: 'center',
+    paddingHorizontal: 4,
   },
 });

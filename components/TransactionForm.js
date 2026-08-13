@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   Platform,
@@ -9,23 +10,83 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import DateTimePicker from './DatePicker';
+import DateTimeField from './DateTimeField';
 import VoiceRecorder from './VoiceRecorder';
 import VoicePlayer from './VoicePlayer';
 import SpeakToFillButton from './SpeakToFillButton';
 import TagInput from './TagInput';
 import AppIcon from './AppIcon';
+import AmountCalculatorButton from './AmountCalculatorButton';
+import AppButton from './AppButton';
+import PayslipReviewDialog from './PayslipReviewDialog';
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { transcribeAudio } from '../lib/transcribe';
+import { formatFieldTimestamp } from '../lib/formatTimestamp';
 import parseVoiceTransaction from '../lib/parseVoiceTransaction';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
+import { useToast } from '../contexts/ToastContext';
+import { searchSymbols } from '../lib/fundamentals';
+import {
+  computeChitWeightGrams,
+  formatChitGrams,
+  GOLD_CHIT_SUB_ID,
+  listOpenChitSchemeOptions,
+  purityLabel,
+  referenceChitRatePerGram,
+  slugChitSchemeId,
+} from '../lib/goldChit';
+import { fetchIndicativeMetalRates, formatMetalRateHint, METAL_PURITY } from '../lib/metalRates';
+import {
+  buildIncomeDraftFromPayslip,
+  computePayslipGross,
+  computePayslipNet,
+  payslipAmountsFromSnapshot,
+  payslipSnapshotToStrings,
+  payslipStringsToPayload,
+  resolvePayslipIncomeAmount,
+} from '../lib/payslipIncome';
+import { PAYSLIP_PDF_ALERTS, readPayslipPdf } from '../lib/readPayslipPdf';
 import {
   CURRENCIES,
   currencyMeta,
   lookupRateOrOne,
 } from '../lib/currency';
+
+function marketCountryFor(categoryId, subCategory) {
+  const key = `${subCategory?.id || ''} ${subCategory?.label || ''}`.toLowerCase();
+  if (/international|global|world|intl/.test(key)) return 'GLOBAL';
+  if (/(^|[_\s-])us($|[_\s-])|united states|america/.test(key)) return 'US';
+  if (/india|indian/.test(key)) return 'IN';
+  if (categoryId === 'mutual_funds' || subCategory?.id === 'gold_etf') return 'IN';
+  return null;
+}
+
+function belongsToMarket(item, marketCountry) {
+  if (!marketCountry) return true;
+  const symbol = String(item.symbol || '').toUpperCase();
+  const exchange = `${item.exchangeCode || ''} ${item.exchange || ''}`.toUpperCase();
+  const indian = /\.(NS|BO)$/.test(symbol) || /(^|\s)(NSI|NSE|BSE)(\s|$)/.test(exchange);
+  if (marketCountry === 'IN') return indian;
+  if (marketCountry === 'US') return !indian && /(^|\s)(NMS|NGM|NCM|NYQ|ASE|NASDAQ|NYSE|AMEX)(\s|$)/.test(exchange);
+  return !indian;
+}
+
+function alertPayslipUser(title, message) {
+  if (Platform.OS === 'web') {
+    // eslint-disable-next-line no-alert
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+}
+
+const INCOME_ENTRY_MODES = [
+  { id: 'manual', icon: 'edit-3', label: 'Manual entry', short: 'Manual' },
+  { id: 'payslip', icon: 'file-text', label: 'From payslip PDF', short: 'Source doc' },
+];
 
 // ----------------------------------------------------------------------------
 // TransactionForm — the shared amount+category+account+timestamp+note form.
@@ -61,6 +122,10 @@ export default function TransactionForm({
   onSubmit,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const { confirm } = useConfirmSheet();
+  const { showToast } = useToast();
+  const [formError, setFormError] = useState(null);
   const [amount, setAmount] = useState(initialValues?.amount ?? '');
   const [categoryId, setCategoryId] = useState(
     initialValues?.categoryId ?? categories[0]?.id
@@ -90,11 +155,29 @@ export default function TransactionForm({
   const [tags, setTags] = useState(
     Array.isArray(initialValues?.tags) ? initialValues.tags : [],
   );
+  const tagInputRef = useRef(null);
   const [voiceNote, setVoiceNote] = useState(initialValues?.voiceNote ?? null);
   // Investment-only field. `null` means "not specified" — legacy rows
   // (created before this field existed) and non-investment rows both
   // stay at null so backup/restore, edit, and read paths are unaffected.
   const [brokerId, setBrokerId] = useState(initialValues?.brokerId ?? null);
+  const [instrumentQuery, setInstrumentQuery] = useState(
+    initialValues?.instrumentName ?? initialValues?.instrumentSymbol ?? '',
+  );
+  const [instrument, setInstrument] = useState(
+    initialValues?.instrumentSymbol
+      ? {
+          symbol: initialValues.instrumentSymbol,
+          name: initialValues.instrumentName ?? initialValues.instrumentSymbol,
+          type: initialValues.instrumentType ?? 'Equity',
+        }
+      : null,
+  );
+  const [investmentUnits, setInvestmentUnits] = useState(
+    initialValues?.investmentUnits != null ? String(initialValues.investmentUnits) : '',
+  );
+  const [instrumentSuggestions, setInstrumentSuggestions] = useState([]);
+  const [instrumentSearching, setInstrumentSearching] = useState(false);
 
   // Voice-note lifecycle bookkeeping.
   //
@@ -143,11 +226,6 @@ export default function TransactionForm({
   }, []);
 
   const [transcribing, setTranscribing] = useState(false);
-  const [showPicker, setShowPicker] = useState(false);
-  // Android can't show date+time in one dialog — step through date, then time.
-  // null | 'date' | 'time' | 'datetime' (iOS / web single-shot).
-  const [pickerStep, setPickerStep] = useState(null);
-  const maxDateRef = useRef(new Date());
   const [manualTranscript, setManualTranscript] = useState(null); // null | string  → also controls modal visibility
   const {
     whisperApiKey,
@@ -156,7 +234,7 @@ export default function TransactionForm({
     brokerDefaultsBySubCategory,
     brokers,
   } = useSettings();
-  const { allTags } = useTransactions();
+  const { allTags, investments } = useTransactions();
 
   // Brokers surfaced in this transaction form. We drop the CSV-only
   // 'generic' entry (whose "auto-detect" hint is meaningless outside of
@@ -226,10 +304,130 @@ export default function TransactionForm({
   // the categories list so we never keep a stale copy around.
   const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
   const subCategories = selectedCategory?.subCategories ?? [];
+  const selectedSubCategory = subCategories.find((s) => s.id === subCategoryId) ?? null;
+  const marketCountry = marketCountryFor(categoryId, selectedSubCategory);
+  const tracksMarketInstrument = type === 'investment' && (
+    categoryId === 'stocks' || categoryId === 'mutual_funds' || subCategoryId === 'gold_etf'
+  );
+  const tracksGoldChit = type === 'investment' && subCategoryId === GOLD_CHIT_SUB_ID;
+  const openChitSchemes = useMemo(
+    () => (tracksGoldChit ? listOpenChitSchemeOptions(investments) : []),
+    [tracksGoldChit, investments],
+  );
+  const [chitSchemeName, setChitSchemeName] = useState(initialValues?.chitSchemeName ?? '');
+  const [chitSchemeId, setChitSchemeId] = useState(initialValues?.chitSchemeId ?? null);
+  const [chitPurity, setChitPurity] = useState(initialValues?.chitMetalPurity ?? '22k');
+  const [chitShopRate, setChitShopRate] = useState(
+    initialValues?.chitRatePerGram != null ? String(initialValues.chitRatePerGram) : '',
+  );
+  const [chitMetalRates, setChitMetalRates] = useState(null);
+  const [chitRatesLoading, setChitRatesLoading] = useState(false);
+  const tracksIncomePayslip = type === 'income';
+  const hasInitialPayslip = Boolean(
+    initialValues?.payslipBasic || initialValues?.payslipTds || initialValues?.payslipGross,
+  );
+  const [incomeEntryMode, setIncomeEntryMode] = useState(
+    () => (hasInitialPayslip ? 'payslip' : 'manual'),
+  );
+  const [payslipForm, setPayslipForm] = useState(() => {
+    if (!initialValues?.payslipBasic && !initialValues?.payslipTds && !initialValues?.payslipGross) return null;
+    return payslipSnapshotToStrings({
+      basic: initialValues.payslipBasic,
+      hra: initialValues.payslipHra,
+      special: initialValues.payslipSpecial,
+      other: initialValues.payslipOther,
+      tds: initialValues.payslipTds,
+      pf: initialValues.payslipPf,
+      gross: initialValues.payslipGross,
+      net: initialValues.payslipNet,
+      source: initialValues.payslipSource,
+      amountMode: initialValues.payslipAmountMode,
+    });
+  });
+  const [pdfPhase, setPdfPhase] = useState('idle');
+  const [pdfParseResult, setPdfParseResult] = useState(null);
+  const [pdfFileName, setPdfFileName] = useState('');
+  const expectedInstrumentTypes = useMemo(
+    () => marketCountry === 'IN'
+      ? ['EQUITY', 'ETF', 'MUTUALFUND']
+      : categoryId === 'mutual_funds'
+        ? ['MUTUALFUND']
+        : ['EQUITY', 'ETF'],
+    [categoryId, marketCountry],
+  );
+
+  useEffect(() => {
+    if (!tracksMarketInstrument || instrument?.symbol) {
+      setInstrumentSuggestions([]);
+      return undefined;
+    }
+    const query = instrumentQuery.trim();
+    if (query.length < 2) {
+      setInstrumentSuggestions([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setInstrumentSearching(true);
+      try {
+        const region = marketCountry === 'IN' || marketCountry === 'US' ? marketCountry : undefined;
+        const hits = await searchSymbols(query, { region });
+        if (!cancelled) {
+          setInstrumentSuggestions(hits.filter((hit) =>
+            expectedInstrumentTypes.includes(String(hit.quoteType || hit.type).toUpperCase().replace(/\s+/g, ''))
+            && belongsToMarket(hit, marketCountry)
+          ));
+        }
+      } catch {
+        if (!cancelled) setInstrumentSuggestions([]);
+      } finally {
+        if (!cancelled) setInstrumentSearching(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [instrumentQuery, instrument?.symbol, tracksMarketInstrument, expectedInstrumentTypes, marketCountry]);
+
+  useEffect(() => {
+    if (!tracksGoldChit) return undefined;
+    let cancelled = false;
+    setChitRatesLoading(true);
+    fetchIndicativeMetalRates()
+      .then((rates) => { if (!cancelled) setChitMetalRates(rates); })
+      .catch(() => { if (!cancelled) setChitMetalRates(null); })
+      .finally(() => { if (!cancelled) setChitRatesLoading(false); });
+    return () => { cancelled = true; };
+  }, [tracksGoldChit]);
+
+  const chitWeightPreview = useMemo(() => {
+    if (!tracksGoldChit) return null;
+    const parsed = parseFloat(String(amount).trim());
+    if (!isFinite(parsed) || parsed <= 0) return null;
+    const shop = chitShopRate.trim() === '' ? null : parseFloat(chitShopRate);
+    return computeChitWeightGrams({
+      amount: parsed,
+      purity: chitPurity,
+      baseRatePerGram: chitMetalRates?.gold,
+      shopRatePerGram: isFinite(shop) && shop > 0 ? shop : null,
+    });
+  }, [tracksGoldChit, amount, chitPurity, chitShopRate, chitMetalRates]);
+
+  const chitReferenceRate = useMemo(() => (
+    chitMetalRates?.gold
+      ? referenceChitRatePerGram(chitMetalRates.gold, chitPurity)
+      : null
+  ), [chitMetalRates, chitPurity]);
+
+  const chitWeightDisplay = chitWeightPreview?.grams != null
+    ? Number(chitWeightPreview.grams).toFixed(4).replace(/\.?0+$/, '')
+    : '';
 
   // Change the parent → drop the sub selection unless it belongs to the new
   // parent. Wrapped so voice-fill can also set a sub-category atomically.
   const changeCategory = (newParentId, keepSubId) => {
+    if (type === 'investment' && newParentId !== categoryId) {
+      setInstrument(null);
+      setInstrumentQuery('');
+    }
     setCategoryId(newParentId);
     if (keepSubId) {
       setSubCategoryId(keepSubId);
@@ -269,6 +467,13 @@ export default function TransactionForm({
   const handleSubCategoryPick = (id) => {
     setSubCategoryId((prev) => {
       const next = prev === id ? null : id;
+      if (type === 'investment' && next === GOLD_CHIT_SUB_ID) {
+        setCategoryId('gold');
+      }
+      if (type === 'investment' && next !== prev) {
+        setInstrument(null);
+        setInstrumentQuery('');
+      }
       if (next && next !== prev) {
         maybeAutoFillBrokerForSub(next);
       }
@@ -276,7 +481,111 @@ export default function TransactionForm({
     });
   };
 
+  const pickOpenChitScheme = (scheme) => {
+    setChitSchemeId(scheme.id);
+    setChitSchemeName(scheme.name);
+    setChitPurity(scheme.purity || '22k');
+    if (scheme.lastRatePerGram != null && isFinite(Number(scheme.lastRatePerGram))) {
+      setChitShopRate(String(Math.round(Number(scheme.lastRatePerGram))));
+    }
+  };
+
+  const applyPayslipDraft = (draft) => {
+    if (!draft?.amount) return;
+    setAmount(String(draft.amount));
+    changeCategory(draft.categoryId, draft.subCategoryId);
+    if (draft.note) setNote(draft.note);
+    setPayslipForm(payslipSnapshotToStrings({
+      ...draft.payslip,
+      amountMode: draft.amountMode,
+    }));
+    setPdfPhase('idle');
+    setPdfParseResult(null);
+    showToast('Payslip values filled — review and save.');
+  };
+
+  const handleUploadPayslip = async () => {
+    setPdfPhase('reading');
+    try {
+      const result = await readPayslipPdf();
+      if (result.cancelled) {
+        setPdfPhase('idle');
+        return;
+      }
+      if (result.error) {
+        setPdfPhase('idle');
+        const spec = PAYSLIP_PDF_ALERTS[result.error];
+        if (spec) alertPayslipUser(spec.title, spec.message);
+        else alertPayslipUser('Couldn\'t read the PDF', result.message ?? 'Unknown error.');
+        return;
+      }
+      setPdfFileName(result.fileName);
+      setPdfParseResult(result.parsed);
+      setPdfPhase('review');
+    } catch (e) {
+      setPdfPhase('idle');
+      alertPayslipUser('Couldn\'t read the PDF', e?.message ?? String(e));
+    }
+  };
+
+  const handleApplyPayslipReview = ({ amountMode } = {}) => {
+    if (!pdfParseResult) return;
+    const draft = buildIncomeDraftFromPayslip(pdfParseResult, {
+      amountMode: amountMode === 'gross' ? 'gross' : 'net',
+      fileName: pdfFileName,
+    });
+    applyPayslipDraft(draft);
+  };
+
+  const closePayslipReview = () => {
+    setPdfPhase('idle');
+    setPdfParseResult(null);
+  };
+
+  const updatePayslipField = (key, value) => {
+    setPayslipForm((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [key]: value };
+      const amounts = payslipAmountsFromSnapshot(next);
+      const gross = computePayslipGross(amounts);
+      const net = computePayslipNet(amounts);
+      next.gross = gross > 0 ? String(Math.round(gross)) : '';
+      next.net = net > 0 ? String(Math.round(net)) : '';
+      const incomeAmount = resolvePayslipIncomeAmount(amounts, next.amountMode);
+      if (incomeAmount > 0) setAmount(String(Math.round(incomeAmount)));
+      return next;
+    });
+  };
+
+  const setPayslipAmountMode = (mode) => {
+    setPayslipForm((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, amountMode: mode === 'gross' ? 'gross' : 'net' };
+      const amounts = payslipAmountsFromSnapshot(next);
+      const incomeAmount = resolvePayslipIncomeAmount(amounts, next.amountMode);
+      if (incomeAmount > 0) setAmount(String(Math.round(incomeAmount)));
+      return next;
+    });
+  };
+
+  const switchIncomeEntryMode = (mode) => {
+    if (mode === incomeEntryMode) return;
+    if (mode === 'manual') {
+      setPayslipForm(null);
+      setPdfPhase('idle');
+      setPdfParseResult(null);
+      setPdfFileName('');
+    }
+    setIncomeEntryMode(mode);
+    if (formError) setFormError(null);
+  };
+
   const handleSubmit = () => {
+    setFormError(null);
+    const failValidation = (message) => {
+      setFormError(message);
+    };
+
     // Whole-token numeric guard: parseFloat('1e12') would accept scientific
     // notation and parseFloat('12abc') would silently return 12. Require a
     // clean decimal input, then clamp to a realistic ceiling so a
@@ -287,35 +596,38 @@ export default function TransactionForm({
     const isCleanDecimal = /^\d+(\.\d+)?$/.test(raw);
     const parsed = parseFloat(raw);
     if (!isCleanDecimal || !isFinite(parsed) || parsed <= 0) {
-      Alert.alert(
-        'Invalid amount',
-        'Please enter a positive number without letters, symbols, or scientific notation (e.g. 250 or 1499.50).',
-      );
+      failValidation('Enter a positive number without letters or symbols (e.g. 250 or 1499.50).');
       return;
     }
     if (parsed > MAX_AMOUNT) {
-      Alert.alert(
-        'Amount too large',
-        `Please enter an amount below ₹${MAX_AMOUNT.toLocaleString('en-IN')}. If you actually need to record something this large, split it into a few entries.`,
-      );
+      failValidation(`Enter an amount below ₹${MAX_AMOUNT.toLocaleString('en-IN')}. Split very large entries if needed.`);
       return;
     }
     if (!categoryId) {
-      Alert.alert('No category', 'Add a category in Settings first.');
+      failValidation('Add a category in Settings first.');
       return;
     }
     if (!accountId) {
-      Alert.alert('No account', 'Add an account in Settings first.');
+      failValidation('Add an account in Settings first.');
+      return;
+    }
+    const units = Number(investmentUnits);
+    if (tracksMarketInstrument && !instrument?.symbol) {
+      failValidation('Search and select the stock, ETF, or mutual fund you purchased.');
+      return;
+    }
+    if (tracksMarketInstrument && (!isFinite(units) || units <= 0)) {
+      failValidation('Enter the number of shares or mutual-fund units purchased.');
       return;
     }
     const splitTotal = splitRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
     if (splitRows.length > 0) {
       if (splitRows.some((row) => !row.categoryId || !Number.isFinite(Number(row.amount)) || Number(row.amount) <= 0)) {
-        Alert.alert('Complete every split', 'Choose a category and enter a positive amount for each split.');
+        failValidation('Choose a category and enter a positive amount for each split.');
         return;
       }
       if (Math.abs(splitTotal - parsed) > 0.01) {
-        Alert.alert('Split total does not match', `Split lines total ₹${splitTotal.toLocaleString('en-IN')}; the receipt amount is ₹${parsed.toLocaleString('en-IN')}.`);
+        failValidation(`Split lines total ₹${splitTotal.toLocaleString('en-IN')}; the receipt amount is ₹${parsed.toLocaleString('en-IN')}.`);
         return;
       }
     }
@@ -328,11 +640,38 @@ export default function TransactionForm({
       : (parseFloat(fxRate) > 0 ? parseFloat(fxRate) : lookupRateOrOne(fxRates, currencyForSubmit, baseCurrency));
 
     if (currencyForSubmit !== baseCurrency && (!isFinite(rateForSubmit) || rateForSubmit <= 0)) {
-      Alert.alert(
-        'Missing FX rate',
-        `Set an FX rate for ${currencyForSubmit} → ${baseCurrency} (either here or in Settings → Currency).`,
-      );
+      failValidation(`Set an FX rate for ${currencyForSubmit} → ${baseCurrency} (here or in Settings → Accounts & data).`);
       return;
+    }
+
+    let chitPayload = {};
+    if (tracksGoldChit) {
+      const schemeName = chitSchemeName.trim();
+      if (!schemeName) {
+        failValidation('Enter a chit name (e.g. Tanishq 20g gold chit).');
+        return;
+      }
+      const weightResult = computeChitWeightGrams({
+        amount: parsed,
+        purity: chitPurity,
+        baseRatePerGram: chitMetalRates?.gold,
+        shopRatePerGram: chitShopRate.trim() === '' ? null : parseFloat(chitShopRate),
+      });
+      if (!weightResult?.grams) {
+        failValidation(chitRatesLoading
+          ? 'Loading gold reference rate — try again in a moment, or enter shop ₹/g.'
+          : 'Enter shop ₹/g for your jeweller, or wait for the reference rate to load.');
+        return;
+      }
+      chitPayload = {
+        chitSchemeId: chitSchemeId || slugChitSchemeId(schemeName),
+        chitSchemeName: schemeName,
+        chitMetalPurity: chitPurity,
+        chitWeightGrams: weightResult.grams,
+        chitRatePerGram: weightResult.ratePerGram,
+        chitClosedAt: initialValues?.chitClosedAt ?? null,
+        linkedChitAssetId: initialValues?.linkedChitAssetId ?? null,
+      };
     }
 
     onSubmit({
@@ -342,7 +681,7 @@ export default function TransactionForm({
       accountId,
       date,
       note: note.trim(),
-      tags,
+      tags: tagInputRef.current?.getValue?.() ?? tags,
       voiceNote,
       // F9 (multi-currency). Frozen at add time.
       currency:     currencyForSubmit,
@@ -352,9 +691,17 @@ export default function TransactionForm({
       // doesn't need to know about `type`; non-investment paths ignore
       // brokerId and it stays null (its initial value).
       brokerId,
+      instrumentSymbol: tracksMarketInstrument ? instrument.symbol : null,
+      instrumentName: tracksMarketInstrument ? instrument.name : null,
+      instrumentType: tracksMarketInstrument ? (instrument.quoteType || instrument.type) : null,
+      investmentUnits: tracksMarketInstrument ? units : null,
       splits: splitRows.length > 0
         ? splitRows.map((row) => ({ categoryId: row.categoryId, amount: Number(row.amount) }))
         : null,
+      ...chitPayload,
+      ...(type === 'income' && incomeEntryMode === 'payslip'
+        ? payslipStringsToPayload(payslipForm, payslipForm?.amountMode)
+        : {}),
     });
 
     // Commit-time voice-note sweep. The saved row now points at
@@ -388,6 +735,8 @@ export default function TransactionForm({
       setTags([]);
       setVoiceNote(null);
       setLastVoiceFill(null);
+      setPayslipForm(null);
+      setIncomeEntryMode('manual');
     }
   };
 
@@ -402,15 +751,14 @@ export default function TransactionForm({
   // "Delete voice note" only clears the form-level reference. The actual
   // file is removed at commit time (row now points at null). If the user
   // cancels, baseline is preserved on disk so the saved row keeps working.
-  const handleDeleteVoice = () => {
-    Alert.alert('Delete voice note?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => setVoiceNote(null),
-      },
-    ]);
+  const handleDeleteVoice = async () => {
+    const ok = await confirm({
+      title: 'Delete voice note?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (ok) setVoiceNote(null);
   };
 
   // Push a transcript through the parser and update form state. Shared
@@ -459,7 +807,7 @@ export default function TransactionForm({
 
     if (parsed.date) {
       setDate(parsed.date);
-      applied.push(`Time ${formatChipTimestamp(parsed.date)}`);
+      applied.push(`Time ${formatFieldTimestamp(parsed.date)}`);
     } else {
       missed.push('Date');
     }
@@ -488,12 +836,12 @@ export default function TransactionForm({
         apiKey: whisperApiKey,
       });
       if (!text) {
-        Alert.alert('No speech detected', 'The recording came back empty.');
+        showToast('No speech detected in the recording.', { variant: 'warning' });
         return;
       }
       applyTranscript(text);
     } catch (e) {
-      Alert.alert('Transcription failed', String(e?.message ?? e));
+      showToast(String(e?.message ?? e), { variant: 'error' });
     } finally {
       setTranscribing(false);
     }
@@ -504,69 +852,6 @@ export default function TransactionForm({
     setManualTranscript(null);
     if (text) applyTranscript(text);
   };
-
-  const openTimestampPicker = () => {
-    // Freeze "now" for maximumDate so the picker doesn't re-render on
-    // every parent tick while open (which can steal focus from inputs).
-    maxDateRef.current = new Date();
-    if (Platform.OS === 'android') {
-      setPickerStep('date');
-      setShowPicker(true);
-      return;
-    }
-    setPickerStep('datetime');
-    setShowPicker(true);
-  };
-
-  const handleDateChange = (event, selectedDate) => {
-    if (event?.type === 'dismissed') {
-      setShowPicker(false);
-      setPickerStep(null);
-      return;
-    }
-    if (!selectedDate) return;
-
-    if (Platform.OS === 'android' && pickerStep === 'date') {
-      const next = new Date(date);
-      next.setFullYear(
-        selectedDate.getFullYear(),
-        selectedDate.getMonth(),
-        selectedDate.getDate(),
-      );
-      setDate(next);
-      // Must unmount the date dialog before mounting the time dialog.
-      setShowPicker(false);
-      setPickerStep('time');
-      setTimeout(() => setShowPicker(true), 50);
-      return;
-    }
-
-    if (Platform.OS === 'android' && pickerStep === 'time') {
-      const next = new Date(date);
-      next.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
-      // Cap at "now" so a past date + late clock can't land in the future.
-      const capped = next.getTime() > Date.now() ? new Date() : next;
-      setDate(capped);
-      setShowPicker(false);
-      setPickerStep(null);
-      return;
-    }
-
-    // iOS / web datetime (or any single-shot picker).
-    const capped = selectedDate.getTime() > Date.now() ? new Date() : selectedDate;
-    setDate(capped);
-    // Keep iOS spinner mounted so the user can keep adjusting; close on web.
-    if (Platform.OS !== 'ios') {
-      setShowPicker(false);
-      setPickerStep(null);
-    }
-  };
-
-  const pickerMode = pickerStep === 'time'
-    ? 'time'
-    : pickerStep === 'date'
-      ? 'date'
-      : 'datetime';
 
   return (
     <View>
@@ -586,15 +871,177 @@ export default function TransactionForm({
         />
       )}
 
-      <Text style={styles.label}>Amount</Text>
-      <TextInput
-        style={styles.input}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        placeholder="0.00"
-        placeholderTextColor="#9aa0a6"
-      />
+      {formError ? (
+        <View style={styles.formErrorBanner} accessibilityRole="alert">
+          <AppIcon name="alert-triangle" size={16} color={styles.formErrorText.color} strokeWidth={2.2} />
+          <Text style={styles.formErrorText}>{formError}</Text>
+        </View>
+      ) : null}
+
+      {tracksIncomePayslip && (
+        <>
+          <Text style={styles.incomeModeLabel}>How are you adding this?</Text>
+          <View style={styles.incomeModeRow}>
+            {INCOME_ENTRY_MODES.map((m) => {
+              const active = incomeEntryMode === m.id;
+              return (
+                <TouchableOpacity
+                  key={m.id}
+                  onPress={() => switchIncomeEntryMode(m.id)}
+                  activeOpacity={0.7}
+                  style={[
+                    styles.incomeModeChip,
+                    active && { borderColor: accentColor, backgroundColor: accentColor + '18' },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={m.label}
+                >
+                  <AppIcon
+                    name={m.icon}
+                    size={14}
+                    color={active ? accentColor : '#6b7280'}
+                    strokeWidth={2.1}
+                  />
+                  <Text style={[
+                    styles.incomeModeChipText,
+                    active && { color: accentColor },
+                  ]}>
+                    {m.short}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={styles.incomeModeHelper}>
+            {incomeEntryMode === 'manual'
+              ? 'Enter the amount and details yourself.'
+              : 'Upload a payslip PDF to auto-fill salary, TDS, and PF.'}
+          </Text>
+        </>
+      )}
+
+      {(!tracksIncomePayslip || incomeEntryMode === 'manual') && (
+        <>
+          <Text style={styles.label}>Amount</Text>
+          <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+            <TextInput
+              style={styles.input}
+              value={amount}
+              onChangeText={(value) => {
+                setAmount(value);
+                if (formError) setFormError(null);
+              }}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor="#9aa0a6"
+            />
+          </AmountCalculatorButton>
+        </>
+      )}
+
+      {tracksIncomePayslip && incomeEntryMode === 'payslip' && (
+        <>
+          <TouchableOpacity
+            style={[styles.uploadPdfBtn, pdfPhase === 'reading' && styles.uploadPdfBtnBusy]}
+            onPress={handleUploadPayslip}
+            disabled={pdfPhase === 'reading'}
+            activeOpacity={0.7}
+          >
+            {pdfPhase === 'reading' ? (
+              <>
+                <ActivityIndicator size="small" color={accentColor} />
+                <Text style={[styles.uploadPdfBtnText, { color: accentColor }]}>Reading payslip PDF…</Text>
+              </>
+            ) : (
+              <>
+                <View style={styles.uploadPdfBtnEmoji}>
+                  <AppIcon name="file-text" size={22} color="#0369a1" strokeWidth={1.8} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.uploadPdfBtnText, { color: accentColor }]}>Upload payslip PDF</Text>
+                  <Text style={styles.uploadPdfBtnSub}>
+                    Auto-fill salary, TDS, and PF from a text-based payslip
+                  </Text>
+                </View>
+              </>
+            )}
+          </TouchableOpacity>
+
+          {payslipForm ? (
+            <View style={styles.payslipPanel}>
+              <View style={styles.payslipPanelHeader}>
+                <Text style={styles.payslipPanelTitle}>Payslip details (for FY tax)</Text>
+                <TouchableOpacity onPress={() => setPayslipForm(null)} hitSlop={8}>
+                  <Text style={styles.payslipClearText}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+              {payslipForm.source ? (
+                <Text style={styles.helperSmallDim} numberOfLines={1}>From {payslipForm.source}</Text>
+              ) : null}
+              <View style={styles.chipRow}>
+                {[['net', 'Net credit'], ['gross', 'Gross salary']].map(([id, label]) => {
+                  const active = payslipForm.amountMode === id;
+                  return (
+                    <TouchableOpacity
+                      key={id}
+                      onPress={() => setPayslipAmountMode(id)}
+                      style={[styles.chip, active && { backgroundColor: accentColor, borderColor: accentColor }]}
+                    >
+                      <Text style={[styles.chipText, active && styles.chipTextSelected]}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {[
+                ['basic', 'Basic'],
+                ['hra', 'HRA'],
+                ['special', 'Special'],
+                ['other', 'Other'],
+                ['tds', 'TDS'],
+                ['pf', 'PF'],
+              ].map(([key, label]) => (
+                <View key={key}>
+                  <Text style={styles.label}>{label}</Text>
+                  <TextInput
+                    style={styles.panelInput}
+                    value={payslipForm[key] ?? ''}
+                    onChangeText={(value) => updatePayslipField(key, value)}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={themeColors.text.muted}
+                  />
+                </View>
+              ))}
+              {(payslipForm.gross || payslipForm.net || payslipForm.tds) ? (
+                <Text style={styles.payslipSummary}>
+                  {payslipForm.gross ? `Gross ₹${Number(payslipForm.gross).toLocaleString('en-IN')}` : ''}
+                  {payslipForm.tds ? ` · TDS ₹${Number(payslipForm.tds).toLocaleString('en-IN')}` : ''}
+                  {payslipForm.net ? ` · Net ₹${Number(payslipForm.net).toLocaleString('en-IN')}` : ''}
+                </Text>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={styles.payslipUploadHint}>
+              Upload a payslip to fill in salary breakdown and income amount.
+            </Text>
+          )}
+
+          <Text style={styles.label}>Income amount</Text>
+          <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+            <TextInput
+              style={styles.input}
+              value={amount}
+              onChangeText={(value) => {
+                setAmount(value);
+                if (formError) setFormError(null);
+              }}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor="#9aa0a6"
+            />
+          </AmountCalculatorButton>
+        </>
+      )}
 
       <Text style={styles.label}>Category</Text>
       <ChipRow
@@ -708,8 +1155,134 @@ export default function TransactionForm({
         </>
       )}
 
+      {tracksGoldChit && (
+        <View style={styles.chitPanel}>
+          <Text style={styles.label}>Chit name</Text>
+          <TextInput
+            style={styles.panelInput}
+            value={chitSchemeName}
+            onChangeText={(value) => {
+              setChitSchemeName(value);
+              setChitSchemeId(null);
+            }}
+            placeholder="e.g. Tanishq 20g gold chit"
+            placeholderTextColor={themeColors.text.muted}
+          />
+          {openChitSchemes.length > 0 && (
+            <>
+              <Text style={styles.helperSmallDim}>Continue an open chit</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                {openChitSchemes.map((scheme) => {
+                  const selected = chitSchemeId === scheme.id;
+                  return (
+                    <TouchableOpacity
+                      key={scheme.id}
+                      onPress={() => pickOpenChitScheme(scheme)}
+                      style={[styles.chip, styles.chipOnPanel, selected && { backgroundColor: accentColor, borderColor: accentColor }]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        {scheme.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </>
+          )}
+
+          <Text style={styles.label}>Gold purity</Text>
+          <View style={styles.chipRow}>
+            {METAL_PURITY.gold.map((item) => {
+              const selected = chitPurity === item.id;
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  onPress={() => setChitPurity(item.id)}
+                  style={[styles.chip, styles.chipOnPanel, selected && { backgroundColor: accentColor, borderColor: accentColor }]}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.label}>Shop rate (optional ₹/g for {purityLabel(chitPurity)})</Text>
+          <TextInput
+            style={styles.panelInput}
+            value={chitShopRate}
+            onChangeText={setChitShopRate}
+            keyboardType="decimal-pad"
+            placeholder={chitReferenceRate
+              ? `${purityLabel(chitPurity)} reference ≈ ₹${Math.round(chitReferenceRate).toLocaleString('en-IN')}/g (COMEX spot)`
+              : 'e.g. 7050'}
+            placeholderTextColor={themeColors.text.muted}
+          />
+          {chitReferenceRate && chitShopRate.trim() === '' && (
+            <TouchableOpacity
+              onPress={() => setChitShopRate(String(Math.round(chitReferenceRate)))}
+              style={styles.chitUseRefBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.chitUseRefText}>
+                Use reference ₹{Math.round(chitReferenceRate).toLocaleString('en-IN')}/g
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <Text style={styles.label}>Accrued weight (grams)</Text>
+          <TextInput
+            style={[styles.panelInput, styles.chitWeightInput]}
+            value={chitWeightDisplay}
+            editable={false}
+            placeholder={chitRatesLoading ? 'Loading rate…' : 'Auto from amount + rate'}
+            placeholderTextColor={themeColors.text.muted}
+          />
+          {chitWeightPreview ? (
+            <Text style={styles.chitPreview}>
+              ≈ {formatChitGrams(chitWeightPreview.grams, 3)}
+              {' · '}
+              ₹{Math.round(chitWeightPreview.ratePerGram).toLocaleString('en-IN')}/g
+              {chitWeightPreview.usedShopRate ? ' (shop)' : ' (reference)'}
+            </Text>
+          ) : (
+            <Text style={styles.helperSmallDim}>
+              {chitRatesLoading
+                ? 'Loading reference gold rate…'
+                : chitReferenceRate
+                  ? `Enter amount above — ${purityLabel(chitPurity)} reference ≈ ₹${Math.round(chitReferenceRate).toLocaleString('en-IN')}/g (COMEX spot), or set shop ₹/g.`
+                  : 'Enter amount above and set shop ₹/g, or wait for reference rate.'}
+            </Text>
+          )}
+        </View>
+      )}
+
       {/* Currency (only shown when the app has ≥1 non-base currency
           configured, otherwise this is dead weight for INR-only users). */}
+      {tracksMarketInstrument && (
+        <InstrumentPicker
+          categoryId={categoryId}
+          marketCountry={marketCountry}
+          query={instrumentQuery}
+          onQueryChange={(value) => {
+            setInstrumentQuery(value);
+            if (value !== instrument?.name && value !== instrument?.symbol) setInstrument(null);
+          }}
+          selected={instrument}
+          onSelect={(item) => {
+            setInstrument(item);
+            setInstrumentQuery(item.name);
+            setInstrumentSuggestions([]);
+          }}
+          suggestions={instrumentSuggestions}
+          searching={instrumentSearching}
+          units={investmentUnits}
+          onUnitsChange={setInvestmentUnits}
+          accentColor={accentColor}
+        />
+      )}
+
       {(CURRENCIES.some((c) => c.code !== baseCurrency && ((accounts.some((a) => a.currency === c.code)) || (fxRates && fxRates[c.code])))
         || currency !== baseCurrency
       ) && (
@@ -772,27 +1345,12 @@ export default function TransactionForm({
         </>
       )}
 
-      <Text style={styles.label}>Timestamp</Text>
-      <TouchableOpacity
-        onPress={openTimestampPicker}
-        activeOpacity={0.7}
-        style={styles.dateChip}
-      >
-        <View style={styles.dateChipInner}>
-          <AppIcon name="calendar" size={16} color="#111" strokeWidth={2} />
-          <Text style={styles.dateChipText}>{formatChipTimestamp(date)}</Text>
-        </View>
-        <Text style={styles.dateChipHint}>Tap to change</Text>
-      </TouchableOpacity>
-      {showPicker && (
-        <DateTimePicker
-          value={date}
-          mode={pickerMode}
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          maximumDate={maxDateRef.current}
-          onChange={handleDateChange}
-        />
-      )}
+      <DateTimeField
+        label="Timestamp"
+        value={date}
+        onChange={setDate}
+        maximumDate={new Date()}
+      />
 
       <Text style={styles.label}>Note (optional)</Text>
       <TextInput
@@ -806,6 +1364,7 @@ export default function TransactionForm({
 
       <Text style={styles.label}>Tags (optional)</Text>
       <TagInput
+        ref={tagInputRef}
         value={tags}
         onChange={setTags}
         suggestions={allTags}
@@ -841,13 +1400,21 @@ export default function TransactionForm({
         accentColor={accentColor}
       />
 
-      <TouchableOpacity
-        style={[styles.submitBtn, { backgroundColor: accentColor }]}
+      <PayslipReviewDialog
+        visible={pdfPhase === 'review'}
+        fileName={pdfFileName}
+        result={pdfParseResult}
+        mode="income"
+        onClose={closePayslipReview}
+        onApply={handleApplyPayslipReview}
+      />
+
+      <AppButton
+        label={submitLabel}
         onPress={handleSubmit}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.submitText}>{submitLabel}</Text>
-      </TouchableOpacity>
+        color={accentColor}
+        style={styles.submitBtnWrap}
+      />
     </View>
   );
 }
@@ -1078,6 +1645,60 @@ function ChipRow({ items, selectedId, onSelect, accentColor, emptyText }) {
   );
 }
 
+function InstrumentPicker(props) {
+  const styles = useThemedStyles(makeStyles);
+  const { categoryId, marketCountry, query, onQueryChange, selected, suggestions, searching, onSelect, units, onUnitsChange, accentColor } = props;
+  const countryLabel = marketCountry === 'IN' ? 'Indian ' : marketCountry === 'US' ? 'US ' : marketCountry === 'GLOBAL' ? 'international ' : '';
+  const kind = marketCountry === 'IN'
+    ? 'Indian stock, ETF, or mutual fund'
+    : categoryId === 'mutual_funds'
+    ? `${countryLabel}mutual fund`
+    : `${countryLabel}stock or ETF`;
+  return (
+    <View style={styles.instrumentSection}>
+      <Text style={styles.label}>Investment name</Text>
+      <View style={[styles.instrumentSearch, selected && { borderColor: accentColor }]}>
+        {searching ? <ActivityIndicator size={'small'} color={accentColor} /> : <AppIcon name={'search'} size={18} color={selected ? accentColor : '#6b7280'} />}
+        <TextInput
+          style={styles.instrumentSearchInput}
+          value={query}
+          onChangeText={onQueryChange}
+          placeholder={`Search ${kind} by name or symbol`}
+          placeholderTextColor={'#8b94a3'}
+          autoCapitalize={'characters'}
+          autoCorrect={false}
+        />
+      </View>
+      {selected ? (
+        <Text style={[styles.instrumentSelected, { color: accentColor }]}>Selected: {selected.symbol} · {selected.type}</Text>
+      ) : null}
+      {suggestions.length > 0 ? (
+        <View style={styles.instrumentResults}>
+          {suggestions.map((item, index) => (
+            <TouchableOpacity
+              key={`${item.symbol}-${item.exchange}`}
+              style={[styles.instrumentResult, index > 0 && styles.instrumentResultBorder]}
+              onPress={() => onSelect(item)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.instrumentResultText}>
+                <Text style={styles.instrumentName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.instrumentMeta}>{item.symbol} · {item.exchange || 'Global'} · {item.type}</Text>
+              </View>
+              <AppIcon name={'chevron-right'} size={16} color={'#8b94a3'} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+      {!selected && query.trim().length >= 2 && !searching && suggestions.length === 0 ? (
+        <Text style={styles.instrumentEmpty}>No matching {kind}s found. Try the trading symbol.</Text>
+      ) : null}
+      <Text style={styles.label}>Shares / units purchased</Text>
+      <TextInput style={styles.input} value={units} onChangeText={onUnitsChange} keyboardType={'decimal-pad'} placeholder={'e.g. 10 or 2.5'} placeholderTextColor={'#8b94a3'} />
+    </View>
+  );
+}
+
 // Broker chip picker for investment mode. Mirrors ChipRow styling but
 // takes its broker list from the parent (sourced from
 // useSettings().brokers so user edits to the Broker management screen
@@ -1205,32 +1826,26 @@ function GroupedAccountPicker({
   );
 }
 
-function formatChipTimestamp(d) {
-  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—';
-  const now = new Date();
-  const same = (a, b) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-
-  const time = d.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  if (same(d, now)) return `Today · ${time}`;
-  if (same(d, yesterday)) return `Yesterday · ${time}`;
-  const day = d.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
-  });
-  return `${day} · ${time}`;
-}
-
 const makeStyles = (c) => ({
+  formErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.errorBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.accent.expense + '44',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 10,
+  },
+  formErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: c.state.errorFg,
+  },
   label: {
     fontSize: 12,
     fontWeight: '600',
@@ -1250,6 +1865,34 @@ const makeStyles = (c) => ({
     borderWidth: 1,
     borderColor: c.border.subtle,
   },
+  panelInput: {
+    backgroundColor: c.bg.surface,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: c.text.primary,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  instrumentSection: { marginTop: 2 },
+  instrumentSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 9,
+    backgroundColor: c.bg.surfaceAlt, borderRadius: 10,
+    paddingHorizontal: 12, borderWidth: 1, borderColor: c.border.subtle,
+  },
+  instrumentSearchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: c.text.primary },
+  instrumentSelected: { marginTop: 6, fontSize: 12, fontWeight: '700' },
+  instrumentResults: {
+    marginTop: 6, borderWidth: 1, borderColor: c.border.subtle,
+    borderRadius: 10, backgroundColor: c.bg.surface, overflow: 'hidden',
+  },
+  instrumentResult: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 8 },
+  instrumentResultBorder: { borderTopWidth: 1, borderTopColor: c.border.subtle },
+  instrumentResultText: { flex: 1 },
+  instrumentName: { color: c.text.primary, fontSize: 14, fontWeight: '700' },
+  instrumentMeta: { color: c.text.secondary, fontSize: 11, marginTop: 3 },
+  instrumentEmpty: { color: c.text.secondary, fontSize: 12, marginTop: 7 },
   groupList: { gap: 6 },
   groupBlock: { gap: 2 },
   groupHeader: {
@@ -1259,7 +1902,137 @@ const makeStyles = (c) => ({
     letterSpacing: 0.5,
     marginTop: 6,
   },
-  chipRow: { paddingVertical: 4, gap: 8 },
+  chipRow: { paddingVertical: 4, gap: 8, flexDirection: 'row', flexWrap: 'wrap' },
+  chitPanel: {
+    marginTop: 4,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    gap: 6,
+  },
+  chitWeightInput: {
+    fontWeight: '700',
+    color: c.accent.gold,
+  },
+  chitUseRefBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  chitUseRefText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.accent.gold,
+  },
+  chitPreview: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: c.accent.gold,
+    marginTop: 4,
+  },
+  incomeModeLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: c.text.secondary,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  incomeModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  incomeModeChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  incomeModeChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.text.secondary,
+    textAlign: 'center',
+  },
+  incomeModeHelper: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginBottom: 12,
+    lineHeight: 17,
+  },
+  payslipUploadHint: {
+    fontSize: 12,
+    color: c.text.secondary,
+    fontStyle: 'italic',
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  uploadPdfBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#2563eb',
+    backgroundColor: '#2563eb0d',
+  },
+  uploadPdfBtnBusy: {
+    borderStyle: 'solid',
+    opacity: 0.7,
+  },
+  uploadPdfBtnEmoji: { width: 26, alignItems: 'center' },
+  uploadPdfBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  uploadPdfBtnSub: {
+    fontSize: 11,
+    color: c.text.secondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  payslipPanel: {
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    gap: 6,
+  },
+  payslipPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  payslipPanelTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: c.text.primary,
+  },
+  payslipClearText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.text.secondary,
+  },
+  payslipSummary: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
+    marginTop: 4,
+  },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -1267,6 +2040,9 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surfaceAlt,
     borderWidth: 1,
     borderColor: c.border.subtle,
+  },
+  chipOnPanel: {
+    backgroundColor: c.bg.surface,
   },
   chipText: { fontSize: 13, fontWeight: '600', color: c.text.secondary },
   chipTextSelected: { color: '#fff' },
@@ -1350,13 +2126,9 @@ const makeStyles = (c) => ({
     marginTop: 6,
     lineHeight: 15,
   },
-  submitBtn: {
+  submitBtnWrap: {
     marginTop: 20,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
   },
-  submitText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 
   summaryCard: {
     marginTop: 10,

@@ -36,14 +36,16 @@ import {
 import { useLoans } from '../contexts/LoansContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
+import AppButton from '../components/AppButton';
 import AppIcon from '../components/AppIcon';
+import PressableScale from '../components/PressableScale';
 import {
   computePayoffPercent,
   computePayoffProjection,
   formatDate,
   formatMoney,
 } from '../lib/loans';
-import { radii, spacing } from '../lib/theme';
+import { radii, spacing, elevation } from '../lib/theme';
 
 const GROUPS = [
   { id: 'owed_by_me', title: 'I owe',       direction: 'owed_by_me',   emptyHint: 'Add a home / car / personal loan to track your EMIs.' },
@@ -171,17 +173,16 @@ export default function LoansScreen({ navigation }) {
         })}
 
         {closedCount > 0 && (
-          <TouchableOpacity
+          <AppButton
+            label={showClosed
+              ? `Hide ${closedCount} closed loan${closedCount === 1 ? '' : 's'}`
+              : `Show ${closedCount} closed loan${closedCount === 1 ? '' : 's'}`}
+            variant="ghost"
+            fullWidth={false}
             onPress={() => setShowClosed((v) => !v)}
             style={styles.toggleClosed}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.toggleClosedText}>
-              {showClosed
-                ? `Hide ${closedCount} closed loan${closedCount === 1 ? '' : 's'}`
-                : `Show ${closedCount} closed loan${closedCount === 1 ? '' : 's'}`}
-            </Text>
-          </TouchableOpacity>
+            textStyle={styles.toggleClosedText}
+          />
         )}
 
         <Text style={styles.footer}>
@@ -202,10 +203,11 @@ function LoanRow({ loan, onPress, onDelete }) {
 
   const barColor = loan.status === 'closed' ? '#9ca3af' : '#059669';
   return (
-    <TouchableOpacity
+    <PressableScale
       onPress={onPress}
-      activeOpacity={0.7}
-      style={[styles.row, loan.status === 'closed' && { opacity: 0.6 }]}
+      haptic
+      scaleTo={0.985}
+      contentStyle={[styles.row, loan.status === 'closed' && { opacity: 0.6 }]}
     >
       <View style={styles.rowEmoji}>
         <AppIcon
@@ -234,19 +236,19 @@ function LoanRow({ loan, onPress, onDelete }) {
         <View style={styles.rowMetaRow}>
           <Text style={styles.rowMetaText}>
             {formatMoney(loan.currentOutstanding)} outstanding
-          </Text>
-          {loan.status !== 'closed' && remainingMonths != null && remainingMonths > 0 && (
-            <Text style={styles.rowMetaText}>
-              {' · '}
+            {loan.status !== 'closed' && remainingMonths != null && remainingMonths > 0 && (
+              <>
+                {' · '}
               {remainingMonths} mo{remainingMonths === 1 ? '' : 's'} left
               {projectedClosureDate ? ` (~${formatDate(projectedClosureDate.toISOString())})` : ''}
-            </Text>
-          )}
+              </>
+            )}
+          </Text>
         </View>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
+      <View style={styles.rowAmountBlock}>
         <Text style={styles.rowAmount}>{formatMoney(loan.principal)}</Text>
-        <Text style={styles.rowAmountSub}>principal</Text>
+        <Text style={styles.rowAmountSub}>Principal</Text>
       </View>
       <TouchableOpacity
         onPress={onDelete}
@@ -257,7 +259,7 @@ function LoanRow({ loan, onPress, onDelete }) {
       >
         <AppIcon name="x" size={14} color={themeColors.text.secondary} strokeWidth={2.4} />
       </TouchableOpacity>
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 
@@ -322,11 +324,12 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.bg.surface,
-    borderRadius: radii.lg,
+    borderRadius: radii.xl,
     padding: spacing.md,
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    ...elevation.card,
   },
   rowEmoji: {
     width: 34, height: 34, borderRadius: 17,
@@ -334,7 +337,7 @@ const makeStyles = (c) => ({
     alignItems: 'center', justifyContent: 'center',
     marginRight: spacing.md,
   },
-  rowMiddle: { flex: 1, marginRight: spacing.sm },
+  rowMiddle: { flex: 1, minWidth: 0, marginRight: spacing.sm },
   rowTopLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowName: { fontSize: 14, fontWeight: '700', color: c.text.primary, flexShrink: 1 },
   rowClosedTag: {
@@ -349,10 +352,11 @@ const makeStyles = (c) => ({
     marginTop: 8, overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: 3 },
-  rowMetaRow: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap' },
-  rowMetaText: { fontSize: 11, color: c.text.muted },
+  rowMetaRow: { marginTop: 4 },
+  rowMetaText: { fontSize: 11, lineHeight: 15, color: c.text.muted, flexShrink: 1 },
+  rowAmountBlock: { alignItems: 'flex-end', flexShrink: 0, minWidth: 64 },
   rowAmount: { fontSize: 14, fontWeight: '700', color: c.text.primary },
-  rowAmountSub: { fontSize: 10, color: c.text.muted, marginTop: 2 },
+  rowAmountSub: { fontSize: 10, color: c.text.muted, marginTop: 2, paddingHorizontal: 1 },
 
   deleteBtn: {
     width: 32, height: 32, borderRadius: 16,

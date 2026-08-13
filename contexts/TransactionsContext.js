@@ -33,6 +33,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STORAGE_KEYS } from '../constants';
 import { deleteVoiceNote } from '../lib/voiceNotes';
+import { GOLD_CHIT_SUB_ID } from '../lib/goldChit';
 
 const TransactionsContext = createContext(null);
 
@@ -54,9 +55,19 @@ function normalizeTx(t) {
   const currency = (t?.currency && typeof t.currency === 'string')
     ? String(t.currency).toUpperCase()
     : null;
-  const amountInBase = (t?.amountInBase != null && isFinite(Number(t.amountInBase)))
-    ? Number(t.amountInBase)
+  const amount = Number(t?.amount);
+  const fxRateVal = (t?.fxRate != null && isFinite(Number(t.fxRate)))
+    ? Number(t.fxRate)
     : null;
+  // Keep amountInBase in sync with amount whenever a rate is known.
+  // Edits used to update `amount` but leave the old snapshot, so charts
+  // and totals (which sum amountInBase) showed stale values.
+  let amountInBase = null;
+  if (isFinite(amount) && fxRateVal != null && fxRateVal > 0) {
+    amountInBase = amount * fxRateVal;
+  } else if (t?.amountInBase != null && isFinite(Number(t.amountInBase))) {
+    amountInBase = Number(t.amountInBase);
+  }
   // Investment-only: canonicalize brokerId as a string or null. Legacy
   // rows without this field stay undefined via the outer spread — we
   // only tighten the value when it's actually present so we don't add
@@ -64,15 +75,78 @@ function normalizeTx(t) {
   const brokerId = (typeof t?.brokerId === 'string' && t.brokerId.length > 0)
     ? t.brokerId
     : (t && Object.prototype.hasOwnProperty.call(t, 'brokerId') ? null : undefined);
-  return {
+  const investmentUnits = t?.investmentUnits != null && isFinite(Number(t.investmentUnits))
+    ? Number(t.investmentUnits)
+    : null;
+  const isGoldChit = t?.subCategoryId === GOLD_CHIT_SUB_ID;
+  const chitWeightGrams = isGoldChit && t?.chitWeightGrams != null && isFinite(Number(t.chitWeightGrams))
+    ? Number(t.chitWeightGrams)
+    : null;
+  const chitRatePerGram = isGoldChit && t?.chitRatePerGram != null && isFinite(Number(t.chitRatePerGram))
+    ? Number(t.chitRatePerGram)
+    : null;
+  const payslipNum = (key) => {
+    const n = Number(t?.[key]);
+    return isFinite(n) && n >= 0 ? n : null;
+  };
+  const hasPayslip = t?.payslipTds != null || t?.payslipBasic != null || t?.payslipGross != null
+    || t?.payslipSource != null;
+  const normalized = {
     ...t,
     tags: Array.isArray(t?.tags) ? sanitizeTags(t.tags) : [],
     subCategoryId: t?.subCategoryId ?? null,
     currency,
     amountInBase,
-    fxRate: (t?.fxRate != null && isFinite(Number(t.fxRate))) ? Number(t.fxRate) : null,
+    fxRate: fxRateVal,
     ...(brokerId !== undefined ? { brokerId } : {}),
+    ...(t?.instrumentSymbol ? {
+      instrumentSymbol: String(t.instrumentSymbol).trim().toUpperCase(),
+      instrumentName: String(t.instrumentName || t.instrumentSymbol).trim(),
+      instrumentType: t.instrumentType ?? null,
+      investmentUnits,
+    } : {}),
   };
+  if (isGoldChit) {
+    normalized.chitSchemeId = typeof t?.chitSchemeId === 'string' ? t.chitSchemeId : null;
+    normalized.chitSchemeName = typeof t?.chitSchemeName === 'string' ? t.chitSchemeName.trim() : null;
+    normalized.chitMetalPurity = ['24k', '22k', '18k'].includes(t?.chitMetalPurity) ? t.chitMetalPurity : '22k';
+    normalized.chitWeightGrams = chitWeightGrams;
+    normalized.chitRatePerGram = chitRatePerGram;
+    normalized.chitClosedAt = typeof t?.chitClosedAt === 'string' ? t.chitClosedAt : null;
+    normalized.linkedChitAssetId = typeof t?.linkedChitAssetId === 'string' ? t.linkedChitAssetId : null;
+  } else {
+    delete normalized.chitSchemeId;
+    delete normalized.chitSchemeName;
+    delete normalized.chitMetalPurity;
+    delete normalized.chitWeightGrams;
+    delete normalized.chitRatePerGram;
+    delete normalized.chitClosedAt;
+    delete normalized.linkedChitAssetId;
+  }
+  if (hasPayslip) {
+    normalized.payslipBasic = payslipNum('payslipBasic');
+    normalized.payslipHra = payslipNum('payslipHra');
+    normalized.payslipSpecial = payslipNum('payslipSpecial');
+    normalized.payslipOther = payslipNum('payslipOther');
+    normalized.payslipTds = payslipNum('payslipTds');
+    normalized.payslipPf = payslipNum('payslipPf');
+    normalized.payslipGross = payslipNum('payslipGross');
+    normalized.payslipNet = payslipNum('payslipNet');
+    normalized.payslipSource = typeof t?.payslipSource === 'string' ? t.payslipSource.trim() : null;
+    normalized.payslipAmountMode = t?.payslipAmountMode === 'gross' ? 'gross' : 'net';
+  } else {
+    delete normalized.payslipBasic;
+    delete normalized.payslipHra;
+    delete normalized.payslipSpecial;
+    delete normalized.payslipOther;
+    delete normalized.payslipTds;
+    delete normalized.payslipPf;
+    delete normalized.payslipGross;
+    delete normalized.payslipNet;
+    delete normalized.payslipSource;
+    delete normalized.payslipAmountMode;
+  }
+  return normalized;
 }
 
 // Trim, drop empties, drop duplicates (case-insensitive), cap at 8 to keep
@@ -153,8 +227,9 @@ export function TransactionsProvider({ children }) {
 
   const addTransaction = useCallback((type, item) => {
     const set = setterFor(type);
-    if (!set) return;
+    if (!set) return null;
     const normalized = normalizeTx(item);
+    let created = normalized;
     set((prev) => {
       // Belt-and-braces dedupe: recurring rules mint deterministic ids
       // (`${rule.id}_${date.getTime()}`); if the sweep is ever re-invoked
@@ -163,18 +238,28 @@ export function TransactionsProvider({ children }) {
       // append a second row with the same id or downstream find/update/delete
       // will only touch the first one. Skip silently — the row is already there.
       if (normalized.id && prev.some((it) => it.id === normalized.id)) {
+        created = prev.find((it) => it.id === normalized.id) ?? normalized;
         return prev;
       }
       return [normalized, ...prev];
     });
+    return created;
   }, []);
 
-  const updateTransaction = useCallback((type, updated) => {
+  const updateTransaction = useCallback((type, updated, opts = {}) => {
     const set = setterFor(type);
     if (!set) return;
     const normalized = normalizeTx(updated);
     set((prev) => {
       const previous = prev.find((it) => it.id === normalized.id);
+      if (
+        previous &&
+        !opts.fromLoan &&
+        !opts.fromTransfer &&
+        (previous.linkedLoanId || previous.linkedTransferId)
+      ) {
+        return prev;
+      }
       // If the edit swapped or removed a voice note, clean up the old file.
       if (
         previous?.voiceNote?.file &&
@@ -192,11 +277,14 @@ export function TransactionsProvider({ children }) {
   // undo window expires (see TransactionsList.handleQuickDelete). Default
   // stays `true` for the many call sites that just want a plain delete.
   const deleteTransaction = useCallback((type, id, opts = {}) => {
-    const { cleanupFiles = true } = opts;
+    const { cleanupFiles = true, fromLoan = false, fromTransfer = false } = opts;
     const set = setterFor(type);
     if (!set) return;
     set((prev) => {
       const target = prev.find((it) => it.id === id);
+      if (target && !fromLoan && !fromTransfer && (target.linkedLoanId || target.linkedTransferId)) {
+        return prev;
+      }
       if (cleanupFiles && target?.voiceNote?.file) {
         deleteVoiceNote(target.voiceNote.file);
       }
@@ -222,6 +310,38 @@ export function TransactionsProvider({ children }) {
     if (!set || !Array.isArray(items) || items.length === 0) return;
     const normalized = items.map(normalizeTx);
     set((prev) => [...normalized, ...prev]);
+  }, []);
+
+  const closeGoldChitScheme = useCallback((schemeId, assetId, closedAt = new Date().toISOString()) => {
+    if (!schemeId || !assetId) return;
+    setInvestments((prev) =>
+      prev.map((tx) => {
+        if (tx.subCategoryId !== GOLD_CHIT_SUB_ID) return tx;
+        if (tx.chitSchemeId !== schemeId) return tx;
+        if (tx.chitClosedAt) return tx;
+        return {
+          ...tx,
+          chitClosedAt: closedAt,
+          linkedChitAssetId: assetId,
+        };
+      }),
+    );
+  }, []);
+
+  const linkGoldChitSchemeToAsset = useCallback((schemeId, assetId) => {
+    if (!schemeId || !assetId) return;
+    setInvestments((prev) => {
+      let changed = false;
+      const next = prev.map((tx) => {
+        if (tx.subCategoryId !== GOLD_CHIT_SUB_ID) return tx;
+        if (tx.chitSchemeId !== schemeId) return tx;
+        if (tx.chitClosedAt) return tx;
+        if (tx.linkedChitAssetId === assetId) return tx;
+        changed = true;
+        return { ...tx, linkedChitAssetId: assetId };
+      });
+      return changed ? next : prev;
+    });
   }, []);
 
   // ---- Restore ----------------------------------------------------------
@@ -320,6 +440,8 @@ export function TransactionsProvider({ children }) {
       clearTransactions,
       importTransactions,
       restoreState,
+      closeGoldChitScheme,
+      linkGoldChitSchemeToAsset,
       allTags,
     }),
     [
@@ -334,6 +456,8 @@ export function TransactionsProvider({ children }) {
       clearTransactions,
       importTransactions,
       restoreState,
+      closeGoldChitScheme,
+      linkGoldChitSchemeToAsset,
       allTags,
     ],
   );

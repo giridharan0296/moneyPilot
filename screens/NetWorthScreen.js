@@ -23,7 +23,7 @@
 // row to expand into edit mode.
 // ----------------------------------------------------------------------------
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ScrollView,
   View,
@@ -41,13 +41,30 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AppIcon from '../components/AppIcon';
+import { fetchIndicativeMetalRates, formatMetalRateHint, METAL_PURITY, valuePhysicalMetal } from '../lib/metalRates';
+import AmountCalculatorButton from '../components/AmountCalculatorButton';
 import NetWorthChart from '../components/NetWorthChart';
+import ScreenHelpIntro from '../components/ScreenHelpIntro';
+import { HELP_NET_WORTH } from '../lib/helpContent';
 import {
   CURRENCIES,
   currencyMeta,
   formatMoney as formatMoneyCurrency,
   lookupRateOrOne,
 } from '../lib/currency';
+import {
+  EPF_ASSET_CATEGORY,
+  EPF_INVESTMENT_SUB_CATEGORY,
+  filterEpfAssets,
+  findDuplicateUan,
+  formatUanDisplay,
+  isEpfAsset,
+  isValidUan,
+  normalizeUan,
+  suggestEpfName,
+  totalEpfValue,
+} from '../lib/epfAssets';
+import { portfolioKindLabel } from '../lib/portfolioNetWorthSync';
 
 function formatMoney(n) {
   if (!isFinite(n)) return '0';
@@ -56,6 +73,7 @@ function formatMoney(n) {
 
 export default function NetWorthScreen() {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const {
     assets,
     liabilities,
@@ -83,6 +101,15 @@ export default function NetWorthScreen() {
   const chartWidth = Dimensions.get('window').width - 16 * 2 - 16 * 2;
 
   const netWorthPositive = summary.netWorth >= 0;
+  const epfAssets = filterEpfAssets(assets);
+  const nonEpfAssets = assets.filter((asset) => !isEpfAsset(asset));
+  const epfTotal = totalEpfValue(assets, fxRates, baseCurrency);
+  const hasPortfolioSyncedAssets = assets.some((asset) => asset.linkedPortfolioSync);
+  const immovableAssets = summary.assetsByCategory.find((row) => row.id === 'realestate')?.value ?? 0;
+  const assetClassification = {
+    immovable: immovableAssets,
+    movable: Math.max(0, summary.totalAssets - immovableAssets),
+  };
 
   // Wrap deletes with an undo-toast. The full item is captured before the
   // delete so restore is exact (same id, same createdAt/updatedAt).
@@ -108,11 +135,17 @@ export default function NetWorthScreen() {
     >
       <ScrollView contentContainerStyle={styles.container}>
 
+        <ScreenHelpIntro
+          title="Balance sheet"
+          subtitle="What you own minus what you owe — updated from accounts and Portfolio."
+          help={HELP_NET_WORTH}
+        />
+
         {/* HERO — Net Worth */}
         <View
           style={[
             styles.heroCard,
-            { backgroundColor: netWorthPositive ? '#065f46' : '#7f1d1d' },
+            { backgroundColor: netWorthPositive ? themeColors.bg.heroGreen : themeColors.bg.heroRed },
           ]}
         >
           <Text style={styles.heroLabel}>NET WORTH</Text>
@@ -137,6 +170,20 @@ export default function NetWorthScreen() {
           </View>
         </View>
 
+        <View style={styles.classificationCard}>
+          <View style={styles.classificationItem}>
+            <Text style={styles.classificationLabel}>Movable assets</Text>
+            <Text style={styles.classificationValue}>{formatMoneyCurrency(assetClassification.movable, baseCurrency)}</Text>
+            <Text style={styles.classificationHint}>Cash, investments, vehicles and physical metals</Text>
+          </View>
+          <View style={styles.classificationDivider} />
+          <View style={styles.classificationItem}>
+            <Text style={styles.classificationLabel}>Immovable assets</Text>
+            <Text style={styles.classificationValue}>{formatMoneyCurrency(assetClassification.immovable, baseCurrency)}</Text>
+            <Text style={styles.classificationHint}>Land and real estate</Text>
+          </View>
+        </View>
+
         {/* HISTORY CHART — daily NW snapshots. On a fresh install this
             shows a "come back tomorrow" prompt; the context auto-samples
             as soon as totals change so the first point lands immediately. */}
@@ -150,12 +197,34 @@ export default function NetWorthScreen() {
           <NetWorthChart history={history} width={chartWidth} />
         </View>
 
+        {hasPortfolioSyncedAssets ? (
+          <View style={styles.syncNotice}>
+            <AppIcon name="briefcase" size={14} color={styles.syncNoticeText.color} strokeWidth={2.1} />
+            <Text style={styles.syncNoticeText}>
+              Synced from Portfolio — updates when you log symbol + units or refresh prices.
+            </Text>
+          </View>
+        ) : null}
+
+        <EpfQuickSection
+          epfAssets={epfAssets}
+          epfTotal={epfTotal}
+          allAssets={assets}
+          assetCategories={assetCategories}
+          findCategory={findAssetCategory}
+          onAdd={addAsset}
+          onUpdate={updateAsset}
+          onDelete={undoableDeleteAsset}
+          baseCurrency={baseCurrency}
+          fxRates={fxRates}
+        />
+
         {/* ASSETS */}
         <ItemSection
           title="Assets"
           subtitle="What you own"
           total={summary.totalAssets}
-          items={assets}
+          items={nonEpfAssets}
           categories={assetCategories}
           findCategory={findAssetCategory}
           amountKey="value"
@@ -164,8 +233,8 @@ export default function NetWorthScreen() {
           onAdd={addAsset}
           onUpdate={updateAsset}
           onDelete={undoableDeleteAsset}
-          emptyMessage="No assets yet. Tap + to add cash, property, gold, or anything else you own."
-          accent="#059669"
+          emptyMessage="No other assets yet. Tap + to add cash, property, gold, or anything else you own."
+          accent={themeColors.accent.income}
           baseCurrency={baseCurrency}
           fxRates={fxRates}
         />
@@ -185,7 +254,7 @@ export default function NetWorthScreen() {
           onUpdate={updateLiability}
           onDelete={undoableDeleteLiability}
           emptyMessage="No liabilities. Tap + to add loans or credit balances."
-          accent="#dc2626"
+          accent={themeColors.accent.expense}
           baseCurrency={baseCurrency}
           fxRates={fxRates}
         />
@@ -195,6 +264,153 @@ export default function NetWorthScreen() {
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// EpfQuickSection — shortcut to add/update EPF balances (supports multiple UANs).
+// ----------------------------------------------------------------------------
+function EpfQuickSection({
+  epfAssets,
+  epfTotal,
+  allAssets,
+  assetCategories,
+  findCategory,
+  onAdd,
+  onUpdate,
+  onDelete,
+  baseCurrency,
+  fxRates,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const investmentAccent = themeColors.accent.investmentStrong;
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const epfCategory = findCategory(EPF_ASSET_CATEGORY);
+
+  const openAdd = () => {
+    setEditingId(null);
+    setAdding(true);
+  };
+
+  return (
+    <View style={[styles.section, styles.epfSection]}>
+      <View style={styles.sectionHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Employee Provident Fund (EPF)</Text>
+          <Text style={styles.sectionSubtitle}>
+            Add one row per UAN — current employer and old accounts stay separate.
+          </Text>
+        </View>
+        <Text style={[styles.sectionTotal, { color: investmentAccent }]}>
+          {formatMoneyCurrency(epfTotal, baseCurrency)}
+        </Text>
+      </View>
+
+      {epfAssets.length === 0 && !adding && (
+        <Text style={styles.epfEmpty}>
+          Track your EPF passbook balance here. If you changed jobs, add each UAN as its own row.
+        </Text>
+      )}
+
+      {epfAssets.map((item) => {
+        const isEditing = editingId === item.id;
+        if (isEditing) {
+          return (
+            <ItemForm
+              key={item.id}
+              initial={item}
+              amountKey="value"
+              amountLabel="Current EPF balance"
+              namePlaceholder="e.g. EPF — Acme Corp"
+              categories={assetCategories}
+              submitLabel="Save EPF"
+              accent={investmentAccent}
+              epfMode
+              existingEpfAssets={allAssets}
+              onCancel={() => setEditingId(null)}
+              onSubmit={(patch) => {
+                onUpdate(item.id, patch);
+                setEditingId(null);
+              }}
+              onDelete={() => {
+                setEditingId(null);
+                onDelete(item);
+              }}
+              baseCurrency={baseCurrency}
+              fxRates={fxRates}
+            />
+          );
+        }
+
+        const uanLabel = formatUanDisplay(item.epfUan);
+        return (
+          <TouchableOpacity
+            key={item.id}
+            style={styles.itemRow}
+            activeOpacity={0.7}
+            onPress={() => setEditingId(item.id)}
+          >
+            <View style={[styles.itemDot, { backgroundColor: epfCategory?.color ?? investmentAccent }]} />
+            <Text style={styles.itemEmoji}>{epfCategory?.emoji ?? '🏢'}</Text>
+            <View style={styles.itemMiddle}>
+              <Text style={styles.itemName}>{item.name}</Text>
+              <Text style={styles.itemCategory}>
+                EPF{uanLabel ? ` · ${uanLabel}` : ''}
+              </Text>
+              {item.note ? (
+                <Text style={styles.itemNote} numberOfLines={1}>{item.note}</Text>
+              ) : null}
+            </View>
+            <Text style={styles.itemAmount}>
+              {formatMoneyCurrency(item.value, item.currency ?? baseCurrency)}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+
+      {adding ? (
+        <ItemForm
+          amountKey="value"
+          amountLabel="Current EPF balance"
+          namePlaceholder="e.g. EPF — Acme Corp"
+          categories={assetCategories}
+          submitLabel="Add EPF"
+          accent={investmentAccent}
+          epfMode
+          existingEpfAssets={allAssets}
+          suggestedName={suggestEpfName(epfAssets.length)}
+          onCancel={() => setAdding(false)}
+          onSubmit={(data) => {
+            const result = onAdd(data);
+            if (result) setAdding(false);
+          }}
+          baseCurrency={baseCurrency}
+          fxRates={fxRates}
+        />
+      ) : (
+        <View style={styles.epfActions}>
+          <TouchableOpacity
+            style={styles.epfPrimaryBtn}
+            onPress={openAdd}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={epfAssets.length ? 'Add another EPF UAN account' : 'Add EPF account'}
+          >
+            <AppIcon name="plus" size={16} color={themeColors.text.onHero} strokeWidth={2.4} />
+            <Text style={styles.epfPrimaryBtnText}>
+              {epfAssets.length ? 'Add another UAN' : 'Add EPF account'}
+            </Text>
+          </TouchableOpacity>
+          {epfAssets.length > 0 && (
+            <Text style={styles.epfHint}>
+              {epfAssets.length} UAN account{epfAssets.length === 1 ? '' : 's'} · totals roll into net worth
+            </Text>
+          )}
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -280,12 +496,25 @@ function ItemSection({
               onSubmit={(patch) => {
                 onUpdate(item.id, {
                   ...patch,
-                  // Keep the account mirror link even if the form can't edit it.
+                  // Keep auto-sync links even if the form can't edit them.
                   ...(item.linkedAccountId
                     ? {
                         linkedAccountId: item.linkedAccountId,
                         categoryId: 'cash',
                         [amountKey]: item[amountKey],
+                      }
+                    : {}),
+                  ...(item.linkedPortfolioSync
+                    ? {
+                        linkedPortfolioSync: true,
+                        categoryId: 'investments',
+                        [amountKey]: item[amountKey],
+                        [`${amountKey}InBase`]: item[`${amountKey}InBase`],
+                        valuationMethod: 'portfolio_sync',
+                        portfolioSymbol: item.portfolioSymbol,
+                        portfolioInstrumentKind: item.portfolioInstrumentKind,
+                        investmentSubCategoryId: item.investmentSubCategoryId ?? null,
+                        instrumentSymbol: item.instrumentSymbol ?? null,
                       }
                     : {}),
                 });
@@ -299,10 +528,26 @@ function ItemSection({
                   );
                   return;
                 }
+                if (item.linkedPortfolioSync) {
+                  Alert.alert(
+                    'Synced from portfolio',
+                    'This asset tracks one stock or mutual fund from Portfolio. Remove the holding or investment log for this instrument instead.',
+                  );
+                  return;
+                }
+                if (item.chitOpen) {
+                  Alert.alert(
+                    'Open gold chit',
+                    'This asset tracks an open gold chit from Invest. Log pay-ins there, or use Close chit when you receive physical gold.',
+                  );
+                  return;
+                }
                 setEditingId(null);
                 onDelete(item);
               }}
               lockedFromAccount={Boolean(item.linkedAccountId)}
+              lockedFromPortfolio={Boolean(item.linkedPortfolioSync)}
+              lockedFromChit={Boolean(item.chitOpen)}
               baseCurrency={baseCurrency}
               fxRates={fxRates}
             />
@@ -317,15 +562,26 @@ function ItemSection({
             activeOpacity={0.7}
             onPress={() => setEditingId(item.id)}
           >
-            <View style={[styles.itemDot, { backgroundColor: cat?.color ?? '#6b7280' }]} />
+            <View style={[styles.itemDot, { backgroundColor: cat?.color ?? themeColors.text.muted }]} />
             <Text style={styles.itemEmoji}>{cat?.emoji ?? '📦'}</Text>
             <View style={styles.itemMiddle}>
               <Text style={styles.itemName}>{item.name}</Text>
               <Text style={styles.itemCategory}>
                 {item.linkedAccountId
                   ? `${cat?.label ?? 'Other'} · from account`
-                  : (cat?.label ?? 'Other')}
+                  : item.linkedPortfolioSync
+                    ? `${portfolioKindLabel(item.portfolioInstrumentKind)} · from portfolio`
+                    : item.chitOpen
+                      ? `${cat?.label ?? 'Gold'} · open chit`
+                      : (cat?.label ?? 'Other')}
               </Text>
+              {item.valuationMethod === 'metal_spot' ? (
+                <Text style={styles.itemNote}>
+                  Movable · {item.metal === 'silver' ? 'Silver' : 'Gold'} {item.purity} · {item.weightGrams} g
+                </Text>
+              ) : item.categoryId === 'realestate' ? (
+                <Text style={styles.itemNote}>Immovable asset</Text>
+              ) : null}
               {item.note ? (
                 <Text style={styles.itemNote} numberOfLines={1}>{item.note}</Text>
               ) : null}
@@ -384,18 +640,56 @@ function ItemForm({
   onSubmit,
   onDelete,
   lockedFromAccount = false,
+  lockedFromPortfolio = false,
+  lockedFromChit = false,
+  epfMode = false,
+  existingEpfAssets = [],
+  suggestedName = '',
   baseCurrency,
   fxRates,
 }) {
   const styles = useThemedStyles(makeStyles);
-  const [name, setName] = useState(initial?.name ?? '');
+  const themeColors = useThemeColors();
+  const placeholder = themeColors.text.muted;
+  const [name, setName] = useState(initial?.name ?? suggestedName ?? '');
   const [amount, setAmount] = useState(
     initial?.[amountKey] != null ? String(initial[amountKey]) : '',
   );
   const [categoryId, setCategoryId] = useState(
-    initial?.categoryId ?? categories[0]?.id ?? null,
+    epfMode ? EPF_ASSET_CATEGORY : (initial?.categoryId ?? categories[0]?.id ?? null),
   );
   const [note, setNote] = useState(initial?.note ?? '');
+  const [epfUan, setEpfUan] = useState(initial?.epfUan ?? '');
+  const [metal, setMetal] = useState(initial?.metal ?? 'gold');
+  const [purity, setPurity] = useState(initial?.purity ?? '24k');
+  const [weightGrams, setWeightGrams] = useState(
+    initial?.weightGrams != null ? String(initial.weightGrams) : '',
+  );
+  const [metalRates, setMetalRates] = useState(null);
+  const [metalRateLoading, setMetalRateLoading] = useState(false);
+  const [goldValuationMode, setGoldValuationMode] = useState(
+    initial ? (initial.valuationMethod === 'metal_spot' ? 'physical' : 'manual') : 'physical',
+  );
+  const isGoldAsset = amountKey === 'value' && categoryId === 'gold';
+  const isPhysicalMetal = isGoldAsset && goldValuationMode === 'physical';
+  const lockedAutoValue = lockedFromAccount || lockedFromPortfolio || lockedFromChit;
+
+  useEffect(() => {
+    if (!isPhysicalMetal) return undefined;
+    let cancelled = false;
+    setMetalRateLoading(true);
+    fetchIndicativeMetalRates()
+      .then((rates) => { if (!cancelled) setMetalRates(rates); })
+      .catch(() => { if (!cancelled) setMetalRates(null); })
+      .finally(() => { if (!cancelled) setMetalRateLoading(false); });
+    return () => { cancelled = true; };
+  }, [isPhysicalMetal]);
+
+  useEffect(() => {
+    if (!isPhysicalMetal || !metalRates) return;
+    const next = valuePhysicalMetal({ metal, purity, weightGrams, rates: metalRates });
+    if (next != null) setAmount(next.toFixed(2));
+  }, [isPhysicalMetal, metal, purity, weightGrams, metalRates]);
 
   // F9 (multi-currency). Balance-sheet rows carry an optional currency +
   // fxRate + <amountKey>InBase snapshot. Defaults to base for legacy rows.
@@ -418,11 +712,32 @@ function ItemForm({
   const handleSubmit = () => {
     const parsed = Number(amount);
     if (!name.trim()) {
-      Alert.alert('Missing name', 'Please give this a name.');
+      Alert.alert('Missing name', epfMode
+        ? 'Give this EPF account a label (e.g. employer name).'
+        : 'Please give this a name.');
       return;
+    }
+    if (epfMode) {
+      const normalizedUan = normalizeUan(epfUan);
+      if (normalizedUan && !isValidUan(normalizedUan)) {
+        Alert.alert('Invalid UAN', 'UAN should be 12 digits. You can leave it blank if unsure.');
+        return;
+      }
+      const duplicate = findDuplicateUan(existingEpfAssets, normalizedUan, initial?.id);
+      if (duplicate) {
+        Alert.alert(
+          'UAN already added',
+          `"${duplicate.name}" already uses this UAN. Edit that row or use a different UAN.`,
+        );
+        return;
+      }
     }
     if (!isFinite(parsed) || parsed < 0) {
       Alert.alert('Invalid amount', 'Please enter a valid positive number.');
+      return;
+    }
+    if (isPhysicalMetal && !(Number(weightGrams) > 0)) {
+      Alert.alert('Invalid weight', 'Enter the physical metal weight in grams.');
       return;
     }
 
@@ -431,7 +746,7 @@ function ItemForm({
     if (cur !== baseCurrency && (!isFinite(rate) || rate <= 0)) {
       Alert.alert(
         'Missing FX rate',
-        `Set an FX rate for ${cur} → ${baseCurrency} (either here or in Settings → Currency).`,
+        `Set an FX rate for ${cur} → ${baseCurrency} (either here or in Settings → Accounts & data).`,
       );
       return;
     }
@@ -439,8 +754,26 @@ function ItemForm({
     onSubmit({
       name: name.trim(),
       [amountKey]: parsed,
-      categoryId,
+      categoryId: epfMode ? EPF_ASSET_CATEGORY : categoryId,
       note: note.trim(),
+      ...(epfMode ? {
+        investmentSubCategoryId: EPF_INVESTMENT_SUB_CATEGORY,
+        epfUan: normalizeUan(epfUan),
+      } : {}),
+      ...(isPhysicalMetal ? {
+        assetNature: 'movable',
+        valuationMethod: 'metal_spot',
+        metal,
+        purity,
+        weightGrams: Number(weightGrams),
+        referenceRatePerGram: metalRates?.[metal] ?? null,
+        valuedAt: metalRates?.updatedAt ?? null,
+        valuationSource: metalRates?.source ?? null,
+      } : isGoldAsset ? {
+        assetNature: 'movable', valuationMethod: 'manual', metal: null,
+        purity: null, weightGrams: null, referenceRatePerGram: null,
+        valuedAt: null, valuationSource: null,
+      } : {}),
       currency:                   cur,
       fxRate:                     rate,
       [`${amountKey}InBase`]:     parsed * rate,
@@ -449,20 +782,50 @@ function ItemForm({
 
   return (
     <View style={styles.form}>
+      {epfMode && (
+        <Text style={styles.epfFormIntro}>
+          Enter the total from your EPFO passbook (employee + employer share). Add a separate row for each UAN.
+        </Text>
+      )}
       <Text style={styles.formLabel}>Name</Text>
       <TextInput
         style={styles.input}
         value={name}
         onChangeText={setName}
         placeholder={namePlaceholder}
-        placeholderTextColor="#9ca3af"
+        placeholderTextColor={placeholder}
         autoFocus={!initial}
       />
 
+      {epfMode && (
+        <>
+          <Text style={styles.formLabel}>UAN (optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={epfUan}
+            onChangeText={setEpfUan}
+            placeholder="12-digit Universal Account Number"
+            placeholderTextColor={placeholder}
+            keyboardType="number-pad"
+            maxLength={14}
+          />
+        </>
+      )}
+
+      {!epfMode && (
+        <>
       <Text style={styles.formLabel}>Category</Text>
       {lockedFromAccount ? (
         <Text style={styles.itemNote}>
           Synced from your account ledger. Balance updates automatically.
+        </Text>
+      ) : lockedFromPortfolio ? (
+        <Text style={styles.itemNote}>
+          Synced from Portfolio — one asset per stock or mutual fund. Value updates from live prices.
+        </Text>
+      ) : lockedFromChit ? (
+        <Text style={styles.itemNote}>
+          Synced from an open gold chit in Invest. Grams and value update as you log pay-ins, or use Close chit when you receive physical gold.
         </Text>
       ) : (
         <View style={styles.chipRow}>
@@ -485,21 +848,72 @@ function ItemForm({
           })}
         </View>
       )}
+        </>
+      )}
 
-      <Text style={styles.formLabel}>{amountLabel}</Text>
-      <TextInput
-        style={[styles.input, lockedFromAccount && { opacity: 0.6 }]}
-        value={amount}
-        onChangeText={setAmount}
-        editable={!lockedFromAccount}
-        keyboardType="decimal-pad"
-        placeholder="0"
-        placeholderTextColor="#9ca3af"
-      />
+      {isGoldAsset && (
+        <View style={styles.metalPanel}>
+          <Text style={styles.formLabel}>Valuation</Text>
+          <View style={styles.chipRow}>
+            {[['physical', 'Live metal value'], ['manual', 'Manual value']].map(([id, label]) => (
+              <TouchableOpacity key={id} style={[styles.chip, goldValuationMode === id && { borderColor: accent, backgroundColor: accent + '20' }]}
+                onPress={() => setGoldValuationMode(id)}>
+                <Text style={styles.chipText}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {isPhysicalMetal && <>
+          <Text style={styles.formLabel}>Physical metal</Text>
+          <View style={styles.chipRow}>
+            {[['gold', '🥇 Gold'], ['silver', '🥈 Silver']].map(([id, label]) => (
+              <TouchableOpacity key={id} style={[styles.chip, metal === id && { borderColor: accent, backgroundColor: accent + '20' }]}
+                onPress={() => { setMetal(id); setPurity(id === 'gold' ? '24k' : '999'); }}>
+                <Text style={styles.chipText}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.formLabel}>Purity</Text>
+          <View style={styles.chipRow}>
+            {METAL_PURITY[metal].map((item) => (
+              <TouchableOpacity key={item.id} style={[styles.chip, purity === item.id && { borderColor: accent, backgroundColor: accent + '20' }]}
+                onPress={() => setPurity(item.id)}>
+                <Text style={styles.chipText}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.formLabel}>Weight (grams)</Text>
+          <TextInput style={styles.input} value={weightGrams} onChangeText={setWeightGrams} keyboardType={'decimal-pad'} placeholder={'e.g. 25.5'} placeholderTextColor={placeholder} />
+          <Text style={styles.metalHint}>
+            {formatMetalRateHint({ metal, purity, rates: metalRates, loading: metalRateLoading })}
+          </Text>
+          </>}
+        </View>
+      )}
 
-      {/* Currency + rate — shown when the app has any non-base currency
-          in play, or when editing a foreign row. Hidden for pure INR
-          users so the form stays as short as it was. */}
+      <Text style={styles.formLabel}>{isPhysicalMetal ? `${amountLabel} (auto-calculated)` : amountLabel}</Text>
+      {!lockedAutoValue && !isPhysicalMetal && (
+        <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+          <TextInput
+            style={[styles.input, (lockedAutoValue || isPhysicalMetal) && { opacity: 0.6 }]}
+            value={amount}
+            onChangeText={setAmount}
+            editable={!lockedAutoValue && !isPhysicalMetal}
+            keyboardType="decimal-pad"
+            placeholder="0"
+            placeholderTextColor={placeholder}
+          />
+        </AmountCalculatorButton>
+      )}
+      {(lockedAutoValue || isPhysicalMetal) && (
+        <TextInput
+          style={[styles.input, { opacity: 0.6 }]}
+          value={amount}
+          editable={false}
+          keyboardType="decimal-pad"
+          placeholder="0"
+          placeholderTextColor={placeholder}
+        />
+      )}
       {(CURRENCIES.some((c) => c.code !== baseCurrency && !!fxRates?.[c.code])
         || currency !== baseCurrency
       ) && (
@@ -517,24 +931,15 @@ function ItemForm({
                   key={c.code}
                   onPress={() => handleCurrencyPick(c.code)}
                   style={[
-                    {
-                      minWidth: 64,
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      borderRadius: 10,
-                      borderWidth: 1,
-                      borderColor: '#e5e7eb',
-                      backgroundColor: '#f9fafb',
-                      alignItems: 'center',
-                    },
+                    styles.currencyChip,
                     selected && { borderColor: accent, backgroundColor: accent + '15' },
                   ]}
                   activeOpacity={0.7}
                 >
-                  <Text style={[{ fontSize: 12, fontWeight: '700', color: '#374151', letterSpacing: 0.4 }, selected && { color: accent }]}>
+                  <Text style={[styles.currencyChipCode, selected && { color: accent }]}>
                     {c.code}
                   </Text>
-                  <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{c.symbol}</Text>
+                  <Text style={styles.currencyChipSymbol}>{c.symbol}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -550,14 +955,14 @@ function ItemForm({
                 onChangeText={setFxRate}
                 keyboardType="decimal-pad"
                 placeholder="e.g. 88.40"
-                placeholderTextColor="#9ca3af"
+                placeholderTextColor={placeholder}
               />
               {(() => {
                 const amt = parseFloat(amount);
                 const rate = parseFloat(fxRate);
                 if (!isFinite(amt) || amt <= 0 || !isFinite(rate) || rate <= 0) return null;
                 return (
-                  <Text style={{ marginTop: 6, fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
+                  <Text style={styles.fxHint}>
                     ≈ {currencyMeta(baseCurrency).symbol}{' '}
                     {(amt * rate).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     {' '}in {baseCurrency}
@@ -575,7 +980,7 @@ function ItemForm({
         value={note}
         onChangeText={setNote}
         placeholder="Anything you want to remember"
-        placeholderTextColor="#9ca3af"
+        placeholderTextColor={placeholder}
       />
 
       <View style={styles.formButtonsRow}>
@@ -619,22 +1024,31 @@ const makeStyles = (c) => ({
     padding: 20,
     marginBottom: 20,
   },
-  heroLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, letterSpacing: 1, fontWeight: '600' },
-  heroValue: { color: '#fff', fontSize: 36, fontWeight: '800', marginTop: 6 },
+  heroLabel: { color: c.text.onHeroFaint, fontSize: 12, letterSpacing: 1, fontWeight: '600' },
+  heroValue: { color: c.text.onHero, fontSize: 36, fontWeight: '800', marginTop: 6 },
   heroBreakdownRow: {
     flexDirection: 'row', alignItems: 'center',
     marginTop: 14,
   },
   heroPill: {
     flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: c.bg.heroOverlay,
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
-  heroPillLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '600' },
-  heroPillValue: { color: '#fff', fontSize: 15, fontWeight: '700', marginTop: 2 },
-  heroMinus:    { color: '#fff', fontSize: 22, fontWeight: '700', marginHorizontal: 10 },
+  heroPillLabel: { color: c.text.onHeroSoft, fontSize: 11, fontWeight: '600' },
+  heroPillValue: { color: c.text.onHero, fontSize: 15, fontWeight: '700', marginTop: 2 },
+  heroMinus:    { color: c.text.onHero, fontSize: 22, fontWeight: '700', marginHorizontal: 10 },
+  classificationCard: {
+    flexDirection: 'row', backgroundColor: c.bg.surface, borderRadius: 16,
+    borderWidth: 1, borderColor: c.border.subtle, padding: 14, marginBottom: 16,
+  },
+  classificationItem: { flex: 1 },
+  classificationDivider: { width: 1, backgroundColor: c.border.subtle, marginHorizontal: 12 },
+  classificationLabel: { fontSize: 11, fontWeight: '700', color: c.text.secondary, textTransform: 'uppercase' },
+  classificationValue: { fontSize: 16, fontWeight: '800', color: c.text.primary, marginTop: 5 },
+  classificationHint: { fontSize: 10, lineHeight: 14, color: c.text.muted, marginTop: 4 },
 
   // Section
   section: {
@@ -731,6 +1145,11 @@ const makeStyles = (c) => ({
     marginRight: 6, marginBottom: 6,
   },
   chipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
+  metalPanel: {
+    marginTop: 6, padding: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: c.border.subtle, backgroundColor: c.bg.surface,
+  },
+  metalHint: { marginTop: 7, fontSize: 11, lineHeight: 16, color: c.text.secondary },
 
   formButtonsRow: {
     flexDirection: 'row',
@@ -745,9 +1164,57 @@ const makeStyles = (c) => ({
   },
   formBtnCancel:      { backgroundColor: c.bg.surfaceAlt },
   formBtnCancelText:  { color: c.text.secondary, fontWeight: '600' },
-  formBtnDelete:      { backgroundColor: '#fee2e2' },
-  formBtnDeleteText:  { color: '#b91c1c', fontWeight: '700' },
-  formBtnPrimaryText: { color: '#fff', fontWeight: '700' },
+  formBtnDelete:      { backgroundColor: c.state.errorSurface },
+  formBtnDeleteText:  { color: c.state.errorText, fontWeight: '700' },
+  formBtnPrimaryText: { color: c.text.onHero, fontWeight: '700' },
+
+  currencyChip: {
+    minWidth: 64,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+    alignItems: 'center',
+  },
+  currencyChipCode: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.text.primary,
+    letterSpacing: 0.4,
+  },
+  currencyChipSymbol: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: 2,
+  },
+  fxHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: c.text.secondary,
+    fontStyle: 'italic',
+  },
+
+  syncNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.infoBg,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: c.accent.primary + '33',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  syncNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: c.state.infoFg,
+  },
 
   footer: {
     textAlign: 'center',
@@ -755,5 +1222,48 @@ const makeStyles = (c) => ({
     color: c.text.muted,
     fontStyle: 'italic',
     marginTop: 8,
+  },
+
+  epfSection: {
+    borderColor: c.accent.investmentStrong + '33',
+  },
+  epfEmpty: {
+    fontSize: 13,
+    color: c.text.secondary,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    lineHeight: 18,
+  },
+  epfActions: {
+    gap: 8,
+    marginTop: 4,
+  },
+  epfPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: c.accent.investmentStrong,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  epfPrimaryBtnText: {
+    color: c.text.onHero,
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  epfHint: {
+    fontSize: 11,
+    color: c.text.muted,
+    textAlign: 'center',
+  },
+  epfFormIntro: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: c.text.secondary,
+    marginBottom: 4,
   },
 });

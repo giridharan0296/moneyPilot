@@ -26,6 +26,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AmountCalculatorButton from './AmountCalculatorButton';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
 import { useSettings } from '../contexts/SettingsContext';
@@ -85,6 +86,7 @@ export default function RecurringForm({
     initialValues?.endDate ? new Date(initialValues.endDate) : null,
   );
   const [active, setActive] = useState(initialValues?.active !== false);
+  const [backfillPast, setBackfillPast] = useState(false);
 
   // Date-picker visibility. Separate flags because a form can host two
   // pickers (start / end) and we want them independently controllable.
@@ -161,8 +163,13 @@ export default function RecurringForm({
       startDate,
       endDate,
       active,
+      backfillPast: !initialValues && backfillPast,
     });
   };
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const startsInPast = startDate < todayStart;
 
   return (
     <View style={styles.root}>
@@ -201,15 +208,16 @@ export default function RecurringForm({
       </View>
 
       <Text style={styles.label}>Amount</Text>
-      <TextInput
-        style={styles.input}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        placeholder="0.00"
-        placeholderTextColor="#9aa0a6"
-      />
-
+      <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="decimal-pad"
+          placeholder="0.00"
+          placeholderTextColor="#9aa0a6"
+        />
+      </AmountCalculatorButton>
       <Text style={styles.label}>Category</Text>
       {typeCategories.length === 0 ? (
         <Text style={styles.chipEmpty}>
@@ -514,7 +522,7 @@ export default function RecurringForm({
       <Text style={styles.hint}>
         {frequency === 'monthly' && monthlyMode !== 'date'
           ? 'The rule kicks in from this month. The exact first firing date is computed automatically from the mode above.'
-          : 'The first occurrence will be added on this date (or immediately if the date is in the past).'}
+          : 'The first occurrence follows this date and the selected frequency.'}
       </Text>
       {showStartPicker && (
         <DateTimePicker
@@ -523,6 +531,23 @@ export default function RecurringForm({
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={handleStartChange}
         />
+      )}
+
+      {!initialValues && startsInPast && (
+        <View style={styles.activeRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.activeLabel}>Create past transactions</Text>
+            <Text style={styles.activeSub}>
+              Add every due occurrence from the start date through today. Leave off to begin tracking from now.
+            </Text>
+          </View>
+          <Switch
+            value={backfillPast}
+            onValueChange={setBackfillPast}
+            trackColor={{ false: '#e5e7eb', true: accent }}
+            thumbColor={'#fff'}
+          />
+        </View>
       )}
 
       <Text style={styles.label}>Ends on</Text>

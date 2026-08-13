@@ -29,11 +29,14 @@ import {
 import CashFlowChart from '../components/CashFlowChart';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
-import { useNetWorth } from '../contexts/NetWorthContext';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useSettings } from '../contexts/SettingsContext';
+import { useTransactions } from '../contexts/TransactionsContext';
+import { useTransfers } from '../contexts/TransfersContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
-import { liquidAssetsTotal, projectCashFlow } from '../lib/cashFlow';
+import { projectCashFlow } from '../lib/cashFlow';
+import { computeAccountBalances } from '../lib/accountBalances';
+import { lookupRateOrOne } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 
@@ -48,10 +51,25 @@ export default function CashFlowScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { rules } = useRecurring();
-  const { assets } = useNetWorth();
-  const { categories, baseCurrency } = useSettings();
+  const { income, expenses, investments } = useTransactions();
+  const { transfers } = useTransfers();
+  const { categories, accounts, baseCurrency, fxRates } = useSettings();
 
-  const autoStart = useMemo(() => liquidAssetsTotal(assets, ['cash']), [assets]);
+  const autoStart = useMemo(() => {
+    const balances = computeAccountBalances({ accounts, income, expenses, investments, transfers });
+    return accounts.reduce((sum, account) => {
+      const amount = Number(balances.get(account.id)) || 0;
+      return sum + amount * lookupRateOrOne(fxRates, account.currency ?? baseCurrency, baseCurrency);
+    }, 0);
+  }, [accounts, income, expenses, investments, transfers, fxRates, baseCurrency]);
+  const projectedRules = useMemo(() => rules.map((rule) => {
+    const account = accounts.find((item) => item.id === rule.accountId);
+    const currency = rule.currency ?? account?.currency ?? baseCurrency;
+    const amount = rule.amountInBase != null
+      ? Number(rule.amountInBase) || 0
+      : (Number(rule.amount) || 0) * lookupRateOrOne(fxRates, currency, baseCurrency);
+    return { ...rule, amount };
+  }), [rules, accounts, fxRates, baseCurrency]);
   const [startBalanceText, setStartBalanceText] = useState('');
   const [horizonDays, setHorizonDays] = useState(90);
 
@@ -78,12 +96,12 @@ export default function CashFlowScreen({ navigation }) {
   const result = useMemo(
     () => projectCashFlow({
       startBalance:   effectiveStart,
-      recurringRules: rules,
+      recurringRules: projectedRules,
       today:          new Date(),
       horizonDays,
       categoriesById,
     }),
-    [effectiveStart, rules, horizonDays, categoriesById],
+    [effectiveStart, projectedRules, horizonDays, categoriesById],
   );
 
   const { events, series, summary } = result;

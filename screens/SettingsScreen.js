@@ -39,9 +39,9 @@ import {
   deleteOrphanVoiceNotes,
   formatBytes,
 } from '../lib/voiceNotes';
-import { buildDemoData } from '../lib/demoData';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
+import { useDemoRestore } from '../hooks/useDemoRestore';
 
 // Bump when the backup shape changes in an incompatible way. Older
 // versions of the app will refuse to restore a file with a higher
@@ -159,9 +159,16 @@ function validateBackupSections(d) {
 // renamed (via delete+re-add for now), or deleted.
 // ----------------------------------------------------------------------------
 
-export default function SettingsScreen({ navigation }) {
+export default function AdvancedSettingsScreen({ navigation, route }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const section = route?.params?.section ?? 'advanced';
+  const sectionLabel = {
+    appearance: 'Appearance',
+    accounts_data: 'Accounts & data',
+    ai: 'AI',
+    advanced: 'Advanced',
+  }[section] ?? 'Settings';
   const {
     accounts,
     accountGroups,
@@ -185,7 +192,6 @@ export default function SettingsScreen({ navigation }) {
     deleteFxRate,
     brokerDefaultsBySubCategory,
     brokers,
-    restoreState: restoreSettings,
     // BK-M2: static list of migration keys the current app expects to
     // be applied. Included in the backup payload so a device restoring
     // this backup can honour "already merged" state and skip redundant
@@ -197,47 +203,41 @@ export default function SettingsScreen({ navigation }) {
     expenses,
     income,
     investments,
-    restoreState: restoreTransactions,
   } = useTransactions();
 
   const {
     holdings,
     pricesUpdatedAt,
-    restoreState: restorePortfolio,
   } = usePortfolio();
 
   const {
     assets,
     liabilities,
     history: netWorthHistory,
-    restoreState: restoreNetWorth,
   } = useNetWorth();
 
   const {
     loans,
     customLoanKinds,
-    restoreState: restoreLoans,
   } = useLoans();
 
   const {
     rules: recurringRules,
-    restoreState: restoreRecurring,
   } = useRecurring();
 
   const {
     budgets,
-    restoreState: restoreBudgets,
   } = useBudgets();
 
   const {
     transfers,
-    restoreState: restoreTransfers,
   } = useTransfers();
 
   const {
     goals,
-    restoreState: restoreGoals,
   } = useGoals();
+
+  const { applyRestore, loadDemoData } = useDemoRestore();
 
   const { mode: themeMode, setThemeMode, fontId, setFontId } = useTheme();
   // BK-M2: include theme mode + font in backup payload. Lightweight
@@ -514,94 +514,8 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
-  // Push the restored payload into each context. Contexts auto-persist to
-  // AsyncStorage in their next effect cycle, so we don't touch storage
-  // directly here.
-  //
-  // BK-H2 posture: pre-flight validation in handleRestore has already
-  // rejected any payload with obvious shape mismatches. Here we wrap
-  // each individual restore in its own try/catch and COLLECT failures
-  // rather than aborting mid-flight — one context blowing up shouldn't
-  // block the others from being restored. If ANY section failed, we
-  // surface a "partial restore" alert listing the offenders so the
-  // user can retry or hand-edit the backup.
-  //
-  // BK-M2: applies the restored `preferences` block. Theme is handed
-  // off via ThemeContext's setter (this context owns that state);
-  // settings_migrations is unioned inside restoreSettings.
-  //
-  // BK-L4: portfolio hand-off is now undefined-preserving —
-  // `d.portfolio` (not `d.portfolio ?? {}`), so an old-schema backup
-  // that entirely omits the portfolio section preserves the user's
-  // in-memory holdings instead of silently nuking them.
-  const applyRestore = (payload) => {
-    const d = payload.data ?? {};
-    const prefs = d.preferences ?? {};
-    const failures = [];
-    const runSection = (label, fn) => {
-      try {
-        fn();
-      } catch (e) {
-        console.warn(`Apply restore section "${label}" failed:`, e);
-        failures.push(`${label}: ${e?.message ?? 'unknown error'}`);
-      }
-    };
-
-    runSection('transactions', () => restoreTransactions(d.transactions ?? {}));
-    runSection('settings', () => restoreSettings({
-      categories: d.categories,
-      accounts: d.accounts,
-      accountGroups: d.accountGroups,
-      // F9 Tier-2. Older backups (schemaVersion < 6) won't have a
-      // `currency` block; restoreSettings will fall back to the
-      // existing base + empty rate table in that case.
-      baseCurrency: d.currency?.baseCurrency,
-      fxRates:      d.currency?.fxRates,
-      // BK-M2 union with current-app expected migration keys inside
-      // restoreSettings — see SettingsContext.restoreState.
-      settingsMigrations: prefs.settingsMigrations,
-      // Broker auto-suggest memory (per investment sub-category).
-      // Missing → cleared, so a restored device doesn't keep stale
-      // pre-restore suggestions.
-      brokerDefaultsBySubCategory: prefs.brokerDefaultsBySubCategory,
-    }));
-    runSection('portfolio', () => restorePortfolio(d.portfolio));
-    runSection('netWorth', () => restoreNetWorth({
-      assets:            d.netWorth?.assets      ?? d.assets,
-      liabilities:       d.netWorth?.liabilities ?? d.liabilities,
-      netWorthHistory:   d.netWorth?.history     ?? d.netWorthHistory,
-    }));
-    runSection('recurring', () => restoreRecurring(d.recurring ?? {}));
-    runSection('budgets', () => restoreBudgets({ budgets: d.budgets ?? [] }));
-    runSection('transfers', () => restoreTransfers({ transfers: d.transfers ?? [] }));
-    runSection('goals', () => restoreGoals({ goals: d.goals ?? [] }));
-    runSection('loans', () => restoreLoans({
-      loans: d.loans ?? [],
-      customLoanKinds: d.customLoanKinds ?? [],
-    }));
-    runSection('preferences.theme', () => {
-      if (prefs.theme && ['light', 'dark', 'system'].includes(prefs.theme)) {
-        setThemeMode(prefs.theme);
-      }
-    });
-    runSection('preferences.font', () => {
-      if (prefs.font && FONT_OPTIONS.some((f) => f.id === prefs.font)) {
-        setFontId(prefs.font);
-      }
-    });
-
-    if (failures.length === 0) {
-      Alert.alert(
-        'Restored',
-        'Your data has been restored from the backup.',
-      );
-    } else {
-      Alert.alert(
-        'Partial restore',
-        `Some sections could not be applied:\n\n${failures.join('\n')}\n\nEverything else was restored successfully.`,
-      );
-    }
-  };
+  // Push the restored payload into each context — see hooks/useDemoRestore.js.
+  // handleRestore calls applyRestore after validation; load demo uses the same path.
 
   // ---- Reset everything -------------------------------------------------
   //
@@ -614,22 +528,27 @@ export default function SettingsScreen({ navigation }) {
   // years of data. The alert copy names exactly what gets deleted, and
   // reminds the user that Backup runs before Reset if they want a safety
   // net.
+  const FINANCIAL_DATA_KEYS = [
+    STORAGE_KEYS.expenses, STORAGE_KEYS.income, STORAGE_KEYS.investments,
+    STORAGE_KEYS.portfolio_holdings, STORAGE_KEYS.portfolio_prices_updated_at,
+    STORAGE_KEYS.assets, STORAGE_KEYS.liabilities, STORAGE_KEYS.networth_history,
+    STORAGE_KEYS.recurring_rules, STORAGE_KEYS.budgets, STORAGE_KEYS.transfers,
+    STORAGE_KEYS.goals, STORAGE_KEYS.loans, STORAGE_KEYS.ai_insights_cache,
+  ].filter(Boolean);
+
   const handleResetAll = () => {
     Alert.alert(
-      'Reset everything?',
-      'This will delete ALL transactions, categories, accounts, budgets, '
-        + 'transfers, goals, portfolio holdings, net worth items, recurring '
-        + 'rules, theme preference, font preference, and the Whisper API key. Default '
-        + 'categories/accounts will be re-seeded on next launch.\n\n'
+      'Choose what to reset',
+      'Financial data only keeps accounts, categories and preferences. '
+        + 'It clears transfers, loans, holdings, net worth, recurring rules, '
+        + 'budgets and goals. Reset everything also removes master data and '
+        + 'preferences. Default accounts and categories will then be restored.\n\n'
         + 'Consider tapping "Backup (JSON)" first if you might want '
         + 'this data back. This action CANNOT be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset everything',
-          style: 'destructive',
-          onPress: performResetAll,
-        },
+        { text: 'Financial data only', style: 'destructive', onPress: performResetFinancialData },
+        { text: 'Everything', style: 'destructive', onPress: performResetEverything },
       ],
     );
   };
@@ -644,56 +563,7 @@ export default function SettingsScreen({ navigation }) {
   // `onPress` callback for multi-button alerts, so tapping "Load demo
   // data" would silently no-op in the browser. Branch on Platform to
   // use window.confirm() there.
-  const handleLoadDemo = () => {
-    const message =
-      'This will REPLACE all your current data with a rich sample dataset — '
-      + 'about 2 months of transactions across every category, 6 accounts '
-      + '(including one USD account), 4 recurring rules, 4 budgets, 3 goals, '
-      + '3 transfers, 5 loans (home, personal, car, education-closed, '
-      + 'consumer-durable — the home loan walks through 4 rate revisions '
-      + 'over 3+ years plus a prepayment; education loan is fully closed), '
-      + 'portfolio holdings, assets/liabilities, and 60 days '
-      + 'of net-worth snapshots.\n\n'
-      + 'Tap "Backup (JSON)" first if you might want your real data back. '
-      + 'This action CANNOT be undone.';
-
-    const doLoad = () => {
-      try {
-        const payload = {
-          app: BACKUP_APP_ID,
-          schemaVersion: BACKUP_SCHEMA_VERSION,
-          exportedAt: new Date().toISOString(),
-          data: buildDemoData(),
-        };
-        applyRestore(payload);
-      } catch (e) {
-        console.warn('Load demo failed:', e);
-        const failMsg = `Something went wrong: ${e?.message ?? String(e)}`;
-        if (Platform.OS === 'web') {
-          // eslint-disable-next-line no-alert
-          window.alert(`Demo load failed\n\n${failMsg}`);
-        } else {
-          Alert.alert('Demo load failed', failMsg);
-        }
-      }
-    };
-
-    if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      const ok = window.confirm(`Load demo data?\n\n${message}`);
-      if (ok) doLoad();
-      return;
-    }
-
-    Alert.alert(
-      'Load demo data?',
-      message,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Load demo data', style: 'destructive', onPress: doLoad },
-      ],
-    );
-  };
+  const handleLoadDemo = () => loadDemoData();
 
   // NOTE: `confirmResetCategories` (BK-H6) used to live here, wrapping
   // each per-type reset in a destructive Alert. In the v4 polish pass
@@ -701,23 +571,35 @@ export default function SettingsScreen({ navigation }) {
   // owns its own reset flow behind an overflow menu, so this helper
   // was removed along with the three <Section> blocks that called it.
 
-  const performResetAll = async () => {
+  const reloadAfterReset = () => {
+    const reloaded = reloadApp();
+    if (!reloaded) {
+      Alert.alert('Reset complete', 'Data cleared. Please close and reopen the app to finish.');
+    }
+  };
+
+  const performResetFinancialData = async () => {
+    try {
+      await AsyncStorage.multiRemove(FINANCIAL_DATA_KEYS);
+      reloadAfterReset();
+    } catch (e) {
+      console.warn('Financial data reset failed:', e);
+      Alert.alert('Reset failed', e.message ?? 'Unknown error');
+    }
+  };
+
+  const performResetEverything = async () => {
     try {
       // Delete every known key. multiRemove is atomic-ish on both iOS and
       // Android — either all keys go, or the whole operation fails.
       await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
+      await setAiConfig({ apiKey: '' });
 
       // Reload the app so every context re-runs its hydration effect
       // against the now-empty storage. If we skipped the reload, contexts
       // would keep serving their in-memory (now-stale) copies until the
       // user manually closed and reopened the app.
-      const reloaded = reloadApp();
-      if (!reloaded) {
-        Alert.alert(
-          'Reset complete',
-          'All data cleared. Please close and reopen the app to finish.',
-        );
-      }
+      reloadAfterReset();
     } catch (e) {
       console.warn('Reset failed:', e);
       Alert.alert('Reset failed', e.message ?? 'Unknown error');
@@ -731,7 +613,7 @@ export default function SettingsScreen({ navigation }) {
     >
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.settingsHelpRow}>
-          <Text style={styles.settingsHelpLabel}>Settings</Text>
+          <Text style={styles.settingsHelpLabel}>{sectionLabel}</Text>
           <HelpSheet
             title="Settings"
             summary="Set up the app’s master data and preferences here."
@@ -746,6 +628,8 @@ export default function SettingsScreen({ navigation }) {
             because these are the fields the "Add" flows depend on and
             because they're the surfaces users most often revisit.
             ============================================================ */}
+        {section === 'accounts_data' && (
+          <>
         <Text style={styles.groupHeader}>Your data</Text>
 
         {/* ---- CATEGORIES HUB CARD ----
@@ -824,7 +708,7 @@ export default function SettingsScreen({ navigation }) {
           accessibilityLabel="Manage accounts"
         >
           <View style={[styles.acctHubIcon, { backgroundColor: '#0ea5e922' }]}>
-            <AppIcon name="credit-card" size={20} color="#0ea5e9" strokeWidth={2.2} />
+            <AppIcon name={'wallet'} size={20} color={'#0ea5e9'} strokeWidth={2.2} />
           </View>
           <View style={styles.acctHubBody}>
             <Text style={styles.acctHubTitle}>Accounts</Text>
@@ -836,7 +720,7 @@ export default function SettingsScreen({ navigation }) {
                 </Text>
               </View>
               <View style={styles.acctHubCountPill}>
-                <AppIcon name="credit-card" size={11} color={themeColors.text.secondary} strokeWidth={2.2} />
+                <AppIcon name={'wallet'} size={11} color={themeColors.text.secondary} strokeWidth={2.2} />
                 <Text style={styles.acctHubCountText}>
                   {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'}
                 </Text>
@@ -924,6 +808,8 @@ export default function SettingsScreen({ navigation }) {
           onSetRate={setFxRate}
           onDeleteRate={deleteFxRate}
         />
+          </>
+        )}
 
         {/* ============================================================
             INTELLIGENCE
@@ -931,6 +817,8 @@ export default function SettingsScreen({ navigation }) {
             Grouped together so users considering "should I enable
             LLM / voice?" can compare them in one glance.
             ============================================================ */}
+        {section === 'ai' && (
+          <>
         <Text style={styles.groupHeader}>Intelligence</Text>
 
         {/* AI INSIGHTS — LLM-backed personal-finance coach */}
@@ -946,6 +834,8 @@ export default function SettingsScreen({ navigation }) {
           apiKey={whisperApiKey}
           onSave={setWhisperApiKey}
         />
+          </>
+        )}
 
         {/* ============================================================
             BACKUP & MAINTENANCE
@@ -954,6 +844,8 @@ export default function SettingsScreen({ navigation }) {
             (which also replaces data — reason enough to keep it here
             near backup instead of at the top).
             ============================================================ */}
+        {section === 'advanced' && (
+          <>
         <Text style={styles.groupHeader}>Backup & maintenance</Text>
 
         {/* EXPORT & BACKUP
@@ -1098,10 +990,9 @@ export default function SettingsScreen({ navigation }) {
             <View style={{ flex: 1 }}>
               <Text style={styles.demoBtnTitle}>Load demo data</Text>
               <Text style={styles.demoBtnSub}>
-                ~60 days of transactions, 6 accounts (incl. USD), 4 recurring
-                rules, 3 goals, 5 loans (incl. 3-year home loan with 4 rate
-                revisions + prepayment, and a closed education loan),
-                portfolio holdings, and 60 days of net-worth history.
+                Two financial years of transactions, portfolio holdings with
+                unit logs, synced Net Worth assets, 2 EPF UANs, 6 budgets,
+                5 goals, 5 loans, allocation targets, and full net-worth history.
               </Text>
             </View>
           </TouchableOpacity>
@@ -1136,6 +1027,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
         )}
+          </>
+        )}
 
         {/* ============================================================
             LOOK & FEEL
@@ -1144,6 +1037,8 @@ export default function SettingsScreen({ navigation }) {
             new installs need the master data cards above much more
             urgently than a theme toggle.
             ============================================================ */}
+        {section === 'appearance' && (
+          <>
         <Text style={styles.groupHeader}>Look & feel</Text>
 
         {/* APPEARANCE */}
@@ -1238,6 +1133,10 @@ export default function SettingsScreen({ navigation }) {
 
         {/* DANGER ZONE — full wipe of all local data. Kept at the bottom
             of the screen and styled red so it can't be tapped accidentally. */}
+          </>
+        )}
+
+        {section === 'advanced' && (
         <View style={[styles.section, styles.dangerSection]}>
           <View style={styles.sectionHeader}>
             <View style={{ flex: 1 }}>
@@ -1267,6 +1166,7 @@ export default function SettingsScreen({ navigation }) {
             </View>
           </TouchableOpacity>
         </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1471,7 +1371,7 @@ function VoiceNotesSection({ referencedPaths }) {
 // The section is intentionally LONG. AI usage on a finance app deserves
 // visible controls, not a hidden toggle.
 // ----------------------------------------------------------------------------
-function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
+export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const [keyReveal,  setKeyReveal]  = useState(false);
@@ -1779,7 +1679,7 @@ function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
 //   - Show a masked preview when a key is already set so the user knows
 //     the app is configured without leaking the full secret on screen.
 // ----------------------------------------------------------------------------
-function WhisperKeySection({ apiKey, onSave }) {
+export function WhisperKeySection({ apiKey, onSave }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const [draft, setDraft] = useState('');
@@ -1946,7 +1846,7 @@ function WhisperKeySection({ apiKey, onSave }) {
 //   * Rate updates likewise don't retroactively affect past rows.
 //   * The base-currency row is not editable (it's always 1:1 with itself).
 // ----------------------------------------------------------------------------
-function CurrencySection({
+export function CurrencySection({
   baseCurrency,
   fxRates,
   onChangeBase,
@@ -2319,7 +2219,7 @@ const makeStyles = (c) => ({
   // ---- Accounts hub card ----
   // Same visual grammar as catHub above so both cards read as siblings
   // in Settings — the icon + title + count-pill row + hint copy structure
-  // is identical, only the tint (sky-blue) and iconography (credit-card)
+  // is identical, only the tint (sky-blue) and iconography (wallet)
   // change.
   acctHub: {
     flexDirection: 'row',

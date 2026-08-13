@@ -14,6 +14,7 @@
 //   initialValues                { kind, name, lenderName, direction,
 //                                  principal, ratePct, method, tenureMonths,
 //                                  emiAmount, emiDayOfMonth,
+//                                  firstInterestPeriod, firstInterestBasis,
 //                                  disburseDate, disbursementAccountId, ... }
 //   submitLabel                  e.g. "Add loan" / "Save changes"
 //   onSubmit(values)             validated payload for addLoan/updateLoan
@@ -21,7 +22,7 @@
 //   isEdit                       true when editing (locks structural fields)
 // ----------------------------------------------------------------------------
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Platform,
@@ -33,12 +34,15 @@ import {
 } from 'react-native';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import AmountCalculatorButton from './AmountCalculatorButton';
 import { useLoans } from '../contexts/LoansContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import {
   LOAN_METHODS,
   computeEmiAmount,
+  computeFirstEmiSplit,
+  firstScheduledEmiDate,
   formatMoney,
 } from '../lib/loans';
 
@@ -46,6 +50,14 @@ const DIRECTIONS = [
   { id: 'owed_by_me', label: 'I owe (borrower)',    icon: 'download' },
   { id: 'owed_to_me', label: 'Owed to me (lender)', icon: 'upload' },
 ];
+
+const FIRST_INTEREST_PERIODS = [
+  { id: 'monthly', label: 'Standard monthly' },
+  { id: 'month_end', label: 'Until month-end' },
+  { id: 'emi_date', label: 'Until first EMI date' },
+];
+
+const FIRST_INTEREST_BASES = [360, 365];
 
 export default function LoanForm({
   initialValues,
@@ -84,6 +96,12 @@ export default function LoanForm({
   const [emiAmount, setEmiAmount] = useState(
     initialValues?.emiAmount ? String(initialValues.emiAmount) : '',
   );
+  const [firstInterestPeriod, setFirstInterestPeriod] = useState(
+    initialValues?.firstInterestPeriod ?? 'month_end',
+  );
+  const [firstInterestBasis, setFirstInterestBasis] = useState(
+    Number(initialValues?.firstInterestBasis) === 360 ? 360 : 365,
+  );
   const [emiDayOfMonth, setEmiDayOfMonth] = useState(
     String(initialValues?.emiDayOfMonth ?? 1),
   );
@@ -93,6 +111,21 @@ export default function LoanForm({
   const [disbursementAccountId, setDisbursementAccountId] = useState(
     initialValues?.disbursementAccountId ?? accounts[0]?.id ?? null,
   );
+  const [creditPrincipalToAccount, setCreditPrincipalToAccount] = useState(
+    initialValues?.creditPrincipalToAccount ?? true,
+  );
+
+  useEffect(() => {
+    if (isEdit) return;
+
+    const fallbackAccountId = initialValues?.disbursementAccountId ?? accounts[0]?.id ?? null;
+    const hasValidSelection =
+      !!disbursementAccountId && accounts.some((account) => account.id === disbursementAccountId);
+
+    if (!hasValidSelection && fallbackAccountId) {
+      setDisbursementAccountId(fallbackAccountId);
+    }
+  }, [accounts, disbursementAccountId, initialValues?.disbursementAccountId, isEdit]);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [emiTouched, setEmiTouched] = useState(false); // once user edits, stop auto-recomputing
@@ -114,6 +147,31 @@ export default function LoanForm({
     });
   }, [principal, ratePct, method, tenureMonths]);
 
+  const computedFirstEmiSplit = useMemo(() => {
+    const regularEmi = Number(emiAmount) || computedEmi;
+    const firstDate = firstScheduledEmiDate(disburseDate, emiDayOfMonth);
+    if (!firstDate || regularEmi <= 0) return null;
+    return computeFirstEmiSplit({
+      principal: Number(principal) || 0,
+      ratePct: ratePct === '' ? null : Number(ratePct),
+      method,
+      emiAmount: regularEmi,
+      disburseDate: disburseDate.toISOString(),
+      firstInterestPeriod,
+      firstInterestBasis,
+    }, firstDate);
+  }, [
+    computedEmi,
+    disburseDate,
+    emiAmount,
+    emiDayOfMonth,
+    firstInterestBasis,
+    firstInterestPeriod,
+    method,
+    principal,
+    ratePct,
+  ]);
+
   const changeKind = (nextKindId) => {
     setKind(nextKindId);
     const nextMeta = findLoanKind(nextKindId);
@@ -125,6 +183,9 @@ export default function LoanForm({
         setDirection(nextMeta.defaultDirection);
       }
       if (nextMeta.defaultMethod) setMethod(nextMeta.defaultMethod);
+      if (nextKindId === 'home' && nextMeta.defaultMethod !== 'flat') {
+        setFirstInterestPeriod('month_end');
+      }
     }
   };
 
@@ -178,8 +239,42 @@ export default function LoanForm({
     // On edit, DON'T send ratePct — updateLoan silently drops it anyway
     // (rate changes must go through updateRate), and omitting the field
     // makes intent clearer at the API boundary.
+    const resolvedDisbursementAccountId =
+      disbursementAccountId ?? accounts[0]?.id ?? null;
+
+    // The custom-kind editor used to require its small `Add` button to be
+    // pressed before the main form submit. If the user typed a custom label
+    // and tapped `Add loan` directly, `kind` was still the default
+    // `personal`, so the loan was silently saved as a Personal Loan. Treat a
+    // populated, open custom editor as the user's final selection and create
+    // that kind as part of this submit.
+    let resolvedKind = kind;
+    let resolvedKindMeta = findLoanKind(kind);
+    if (!isEdit && addingCustomKind) {
+      if (!customKindLabel.trim()) {
+        Alert.alert('Missing loan type', 'Enter a name for the custom loan type.');
+        return;
+      }
+      const customResult = addCustomLoanKind({ label: customKindLabel });
+      if (!customResult.ok) {
+        Alert.alert(
+          'Could not add type',
+          customResult.reason === 'duplicate_name'
+            ? 'A loan type with that name already exists. Select it from the list.'
+            : 'Enter a short name for the loan type.',
+        );
+        return;
+      }
+      resolvedKind = customResult.kind.id;
+      resolvedKindMeta = customResult.kind;
+    }
+
     const payload = {
-      kind,
+      kind: resolvedKind,
+      // Keep a denormalized label on the loan as well. This makes the loan
+      // display correctly even during the render in which the new custom-kind
+      // row is still being committed, and after partial/legacy restores.
+      kindLabel: resolvedKindMeta?.label ?? null,
       name: name.trim(),
       lenderName: lenderName.trim(),
       direction,
@@ -187,9 +282,12 @@ export default function LoanForm({
       method,
       tenureMonths: Number(tenureMonths) || 0,
       emiAmount: emiAmount === '' ? computedEmi : Number(emiAmount),
+      firstInterestPeriod,
+      firstInterestBasis,
       emiDayOfMonth: day,
       disburseDate: disburseDate.toISOString(),
-      disbursementAccountId,
+      disbursementAccountId: resolvedDisbursementAccountId,
+      creditPrincipalToAccount: creditPrincipalToAccount && !!resolvedDisbursementAccountId,
     };
     if (!isEdit) {
       payload.ratePct = parsedRate;
@@ -343,15 +441,27 @@ export default function LoanForm({
       />
 
       <Text style={styles.label}>Principal amount</Text>
-      <TextInput
-        style={styles.input}
-        value={principal}
-        onChangeText={(v) => (isEdit ? null : setPrincipal(v))}
-        keyboardType="numeric"
-        placeholder='e.g. 2500000'
-        placeholderTextColor="#9ca3af"
-        editable={!isEdit}
-      />
+      {!isEdit ? (
+        <AmountCalculatorButton value={principal} onChangeText={setPrincipal}>
+          <TextInput
+            style={styles.input}
+            value={principal}
+            onChangeText={setPrincipal}
+            keyboardType="numeric"
+            placeholder="e.g. 2500000"
+            placeholderTextColor="#9ca3af"
+          />
+        </AmountCalculatorButton>
+      ) : (
+        <TextInput
+          style={styles.input}
+          value={principal}
+          keyboardType="numeric"
+          placeholder="e.g. 2500000"
+          placeholderTextColor="#9ca3af"
+          editable={false}
+        />
+      )}
       {isEdit && (
         <Text style={styles.hint}>Principal is locked on edit — delete and re-add to change it.</Text>
       )}
@@ -412,17 +522,19 @@ export default function LoanForm({
       <View style={styles.row2}>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>EMI amount</Text>
-          <TextInput
-            style={styles.input}
-            value={emiAmount}
-            onChangeText={(v) => {
-              setEmiTouched(true);
-              setEmiAmount(v);
-            }}
-            keyboardType="numeric"
-            placeholder={computedEmi > 0 ? String(Math.round(computedEmi)) : 'e.g. 21500'}
-            placeholderTextColor="#9ca3af"
-          />
+          <AmountCalculatorButton value={emiAmount} onChangeText={setEmiAmount}>
+            <TextInput
+              style={styles.input}
+              value={emiAmount}
+              onChangeText={(v) => {
+                setEmiTouched(true);
+                setEmiAmount(v);
+              }}
+              keyboardType="numeric"
+              placeholder={computedEmi > 0 ? String(Math.round(computedEmi)) : 'e.g. 21500'}
+              placeholderTextColor="#9ca3af"
+            />
+          </AmountCalculatorButton>
           {computedEmi > 0 && (
             <Text style={styles.hint}>
               Calculated: {formatMoney(computedEmi)}
@@ -446,6 +558,68 @@ export default function LoanForm({
       <Text style={styles.hint}>
         Day of every month your EMI is due (1–28 recommended). Example: 5 = 5th of each month.
       </Text>
+
+      {method !== 'flat' && (
+        <>
+          <Text style={styles.label}>First interest calculation</Text>
+          <View style={styles.chipRow}>
+            {FIRST_INTEREST_PERIODS.map((option) => {
+              const selected = firstInterestPeriod === option.id;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  onPress={() => setFirstInterestPeriod(option.id)}
+                  style={[
+                    styles.chip,
+                    selected && { backgroundColor: accent, borderColor: accent },
+                  ]}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {firstInterestPeriod !== 'monthly' && (
+            <>
+              <Text style={styles.label}>Day-count basis</Text>
+              <View style={styles.chipRow}>
+                {FIRST_INTEREST_BASES.map((basis) => {
+                  const selected = firstInterestBasis === basis;
+                  return (
+                    <TouchableOpacity
+                      key={basis}
+                      onPress={() => setFirstInterestBasis(basis)}
+                      style={[
+                        styles.chip,
+                        selected && { backgroundColor: accent, borderColor: accent },
+                      ]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        Actual/{basis}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
+
+          {computedFirstEmiSplit && computedFirstEmiSplit.emi > 0 && (
+            <Text style={styles.hint}>
+              First EMI: {formatMoney(computedFirstEmiSplit.emi)}
+              {computedFirstEmiSplit.days != null && computedFirstEmiSplit.days > 0
+                ? ` · interest ${formatMoney(computedFirstEmiSplit.interest)} for ${computedFirstEmiSplit.days} day${computedFirstEmiSplit.days === 1 ? '' : 's'}`
+                : ''}
+              {computedFirstEmiSplit.days != null && computedFirstEmiSplit.days > 0
+                ? ` · principal ${formatMoney(computedFirstEmiSplit.principal)}`
+                : '. Later EMIs use the regular amount above.'}
+            </Text>
+          )}
+        </>
+      )}
 
       <Text style={styles.label}>Disbursement date</Text>
       <TouchableOpacity
@@ -480,6 +654,40 @@ export default function LoanForm({
         onSelect={setDisbursementAccountId}
         accent={accent}
       />
+      {direction === 'owed_by_me' && (
+        <>
+          <Text style={styles.label}>Send principal to this account?</Text>
+          <View style={styles.chipRow}>
+            <TouchableOpacity
+              onPress={() => setCreditPrincipalToAccount(true)}
+              activeOpacity={0.7}
+              style={[
+                styles.chip,
+                creditPrincipalToAccount && { backgroundColor: accent, borderColor: accent },
+              ]}
+            >
+              <Text style={[styles.chipText, creditPrincipalToAccount && styles.chipTextSelected]}>
+                Yes, credit the principal
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCreditPrincipalToAccount(false)}
+              activeOpacity={0.7}
+              style={[
+                styles.chip,
+                !creditPrincipalToAccount && { backgroundColor: accent, borderColor: accent },
+              ]}
+            >
+              <Text style={[styles.chipText, !creditPrincipalToAccount && styles.chipTextSelected]}>
+                No, keep it as loan-only
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.hint}>
+            Turn this on only if the loan amount actually landed in this account. Leave it off for loans that were already spent, like some older gold loans.
+          </Text>
+        </>
+      )}
       <Text style={styles.hint}>
         Used as the default account for future EMI-paid events.
       </Text>

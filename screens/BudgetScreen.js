@@ -34,12 +34,15 @@ import {
 import BudgetForm from '../components/BudgetForm';
 import BudgetProgressBar from '../components/BudgetProgressBar';
 import AppIcon from '../components/AppIcon';
+import ScreenHelpIntro from '../components/ScreenHelpIntro';
+import { HELP_BUDGETS } from '../lib/helpContent';
 import { useBudgets } from '../contexts/BudgetContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import {
+  budgetDisplayLabel,
   computeProgress,
   currentPeriodLabel,
   daysLeftInPeriod,
@@ -144,7 +147,12 @@ export default function BudgetScreen({ navigation }) {
   const handleAdd = (values) => {
     // Warn if the same (category, period) already exists. addBudget still
     // "succeeds" by replacing the amount, so we tell the user what happened.
-    const dupId = findExistingId(values.categoryId, values.period);
+    const dupId = findExistingId(
+      values.categoryId,
+      values.period,
+      undefined,
+      values.subCategoryId,
+    );
     const res = addBudget(values);
     if (!res.ok) {
       showToast('Could not save budget', { variant: 'error' });
@@ -179,9 +187,7 @@ export default function BudgetScreen({ navigation }) {
   const handleDelete = (budget) => {
     if (editingId === budget.id) setEditingId(null);
     deleteBudget(budget.id);
-    const label = budget.categoryId
-      ? categoryLabel(expenseCategories, budget.categoryId)
-      : 'Overall';
+    const label = budgetDisplayLabel(budget, expenseCategories);
     showUndoableToast({
       message: `Deleted budget: ${label}`,
       onUndo: () => restoreBudget(budget),
@@ -196,6 +202,11 @@ export default function BudgetScreen({ navigation }) {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      <ScreenHelpIntro
+        title="Spending limits"
+        subtitle="Repeating caps that reset each week, month, or year."
+        help={HELP_BUDGETS}
+      />
       <SummaryHero summary={summary} />
 
       {creating && (
@@ -212,12 +223,7 @@ export default function BudgetScreen({ navigation }) {
       {budgets.length === 0 && !creating && <EmptyState />}
 
       {budgets.map((b) => {
-        const cat = b.categoryId
-          ? expenseCategories.find((c) => c.id === b.categoryId)
-          : null;
-        const label = b.categoryId
-          ? `${cat?.emoji ?? '📌'} ${cat?.label ?? 'Unknown'}`
-          : 'Overall';
+        const label = budgetDisplayLabel(b, expenseCategories);
         const prog = progressById[b.id] ?? {
           spent: 0,
           percent: 0,
@@ -382,11 +388,6 @@ function statusStyle(status, themeColors) {
         ? themeColors.palette.amber500
         : themeColors.accent.income;
   return { color, fontSize: 12, fontWeight: '700' };
-}
-
-function categoryLabel(categories, id) {
-  const c = categories.find((cat) => cat.id === id);
-  return c ? `${c.emoji} ${c.label}` : 'Unknown';
 }
 
 // ----------------------------------------------------------------------------

@@ -28,6 +28,9 @@ export const STORAGE_KEYS = {
   // Last successful Backup export (ISO). Device-local nag only — not
   // required inside the backup JSON itself.
   last_backup_at:                 '@financeApp/backup/lastAt/v1',
+  setup_checklist_dismissed:      '@financeApp/onboarding/setupDismissed/v1',
+  setup_currency_confirmed:       '@financeApp/onboarding/currencyConfirmed/v1',
+  ui_collapsible_sections:        '@financeApp/ui/collapsibleSections/v1',
 
   // Net worth: what you own (assets) and what you owe (liabilities)
   assets:                         '@financeApp/networth/assets/v1',
@@ -100,6 +103,9 @@ export const STORAGE_KEYS = {
   // NetWorth items so progress is auto-computed).
   goals:                          '@financeApp/goals/v1',
 
+  // Target allocation % per investment category (portfolio balancing).
+  allocation_targets:             '@financeApp/investments/allocationTargets/v1',
+
   // One-time migration flags — a JSON array of ids for migrations we've
   // already applied on this device. Grows over time; existing entries are
   // never re-run. See SettingsContext for the migration runner.
@@ -116,7 +122,7 @@ export const STORAGE_KEYS = {
   // is stored separately via lib/secureKeyStore.js (iOS Keychain /
   // Android Keystore-backed EncryptedSharedPreferences), NOT in
   // AsyncStorage. Anything that touches the key must go through the
-  // secure store — see SettingsContext.setAiApiKey.
+  // secure store — see SettingsContext.setAiConfig({ apiKey }).
   //
   // Legacy: older versions of this app DID store `apiKey` in this blob
   // as plaintext. On first load we migrate the plaintext value out to
@@ -134,6 +140,10 @@ export const STORAGE_KEYS = {
   // the LLM (regeneration costs real money / tokens). Shape:
   //   { insights: [...], generatedAt: ISO, provider, model }
   ai_insights_cache:              '@financeApp/ai/insightsCache/v1',
+
+  // Google Sign-In session blob (user profile + token metadata). Stored in
+  // SecureStore via lib/secureKeyStore — not AsyncStorage.
+  auth_session_secret:            '@financeApp/secrets/authSession/v1',
 };
 
 // ---------------------------------------------------------------------------
@@ -542,6 +552,7 @@ export const DEFAULT_INVESTMENT_CATEGORIES = [
     id: 'gold', label: 'Gold', emoji: '🥇', color: '#f59e0b',
     subCategories: [
       { id: 'gold_physical',   label: 'Physical',      emoji: '🥇', color: '#f59e0b' },
+      { id: 'gold_chit',       label: 'Gold Chit',     emoji: '🪙', color: '#d97706' },
       { id: 'gold_etf',        label: 'Gold ETF',      emoji: '📈', color: '#eab308' },
       { id: 'gold_sgb',        label: 'SGB',           emoji: '🏛️', color: '#ca8a04' },
       { id: 'gold_digital',    label: 'Digital Gold',  emoji: '📱', color: '#d97706' },
@@ -589,7 +600,7 @@ export const DEFAULT_INVESTMENT_CATEGORIES = [
 // account's id — the group is derived by lookup.
 export const DEFAULT_ACCOUNT_GROUPS = [
   { id: 'grp_bank',   label: 'Bank Accounts', emoji: '🏦', color: '#0ea5e9' },
-  { id: 'grp_wallet', label: 'Wallets',       emoji: '📱', color: '#8b5cf6' },
+  { id: 'grp_wallet', label: 'Digital Accounts', emoji: '📲', color: '#8b5cf6' },
   { id: 'grp_cash',   label: 'Cash',          emoji: '💵', color: '#84cc16' },
   { id: 'grp_credit', label: 'Credit Cards',  emoji: '💳', color: '#ec4899' },
 ];

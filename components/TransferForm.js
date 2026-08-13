@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import DateTimePicker from './DatePicker';
+import DateTimeField from './DateTimeField';
 
 import { radii, spacing } from '../lib/theme';
 import { KIND_META, KINDS } from '../lib/transfers';
@@ -15,6 +15,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 import AppIcon from './AppIcon';
+import AmountCalculatorButton from './AmountCalculatorButton';
 
 // ----------------------------------------------------------------------------
 // TransferForm — kind-aware form for adding OR editing a Transfer.
@@ -76,7 +77,6 @@ export default function TransferForm({
   const [date, setDate] = useState(
     initialValues?.createdAt ? new Date(initialValues.createdAt) : new Date(),
   );
-  const [showPicker, setShowPicker] = useState(false);
 
   // Lend / Borrow: user types a counterparty name.
   const [counterpartyName, setCounterpartyName] = useState(
@@ -213,12 +213,6 @@ export default function TransferForm({
     });
   };
 
-  const handleDateChange = (event, selectedDate) => {
-    setShowPicker(Platform.OS === 'ios');
-    if (event.type === 'dismissed') return;
-    if (selectedDate) setDate(selectedDate);
-  };
-
   return (
     <View style={styles.card}>
       {/* Kind selector — segmented control across the top.
@@ -290,15 +284,17 @@ export default function TransferForm({
       )}
 
       <Text style={styles.label}>Amount (₹)</Text>
-      <TextInput
-        ref={amountRef}
-        style={styles.input}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        placeholder="e.g. 25000"
-        placeholderTextColor={themeColors.text.muted}
-      />
+      <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+        <TextInput
+          ref={amountRef}
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="decimal-pad"
+          placeholder="e.g. 25000"
+          placeholderTextColor={themeColors.text.muted}
+        />
+      </AmountCalculatorButton>
 
       {/* Lend / Borrow: free-text counterparty. Also shown in edit mode
           for Repay/LoanRepay so users can fix a typo without needing to
@@ -423,14 +419,16 @@ export default function TransferForm({
           </View>
 
           <Text style={styles.label}>Interest portion (optional, ₹)</Text>
-          <TextInput
-            style={styles.input}
-            value={interestAmount}
-            onChangeText={setInterestAmount}
-            keyboardType="decimal-pad"
-            placeholder="e.g. 500 (rest is principal)"
-            placeholderTextColor={themeColors.text.muted}
-          />
+          <AmountCalculatorButton value={interestAmount} onChangeText={setInterestAmount}>
+            <TextInput
+              style={styles.input}
+              value={interestAmount}
+              onChangeText={setInterestAmount}
+              keyboardType="decimal-pad"
+              placeholder="e.g. 500 (rest is principal)"
+              placeholderTextColor={themeColors.text.muted}
+            />
+          </AmountCalculatorButton>
           <Text style={styles.helperSmall}>
             Interest is logged as an expense under Bills → Loan Interest. The
             principal portion reduces the liability only.
@@ -464,27 +462,12 @@ export default function TransferForm({
         </>
       )}
 
-      <Text style={styles.label}>Date</Text>
-      <TouchableOpacity
-        onPress={() => setShowPicker(true)}
-        activeOpacity={0.7}
-        style={styles.dateChip}
-      >
-        <View style={styles.dateChipInner}>
-          <AppIcon name="calendar" size={16} color={themeColors.text.primary} strokeWidth={2} />
-          <Text style={styles.dateChipText}>{formatChipDate(date)}</Text>
-        </View>
-        <Text style={styles.dateChipHint}>Tap to change</Text>
-      </TouchableOpacity>
-      {showPicker && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          maximumDate={new Date()}
-          onChange={handleDateChange}
-        />
-      )}
+      <DateTimeField
+        label="Timestamp"
+        value={date}
+        onChange={setDate}
+        maximumDate={new Date()}
+      />
 
       <Text style={styles.label}>Note (optional)</Text>
       <TextInput
@@ -628,22 +611,6 @@ function GroupedAccountPicker({
   );
 }
 
-function formatChipDate(d) {
-  const now = new Date();
-  const same = (a, b) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (same(d, now)) return 'Today';
-  if (same(d, yesterday)) return 'Yesterday';
-  return d.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-}
 
 const makeStyles = (c) => ({
   card: {

@@ -20,8 +20,9 @@
 //   - ✕       → undo-toast; reverses NetWorth + expense side effects
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useState, useEffect } from 'react';
 import {
+  DeviceEventEmitter,
   Modal,
   Pressable,
   SafeAreaView,
@@ -39,7 +40,10 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTransfers } from '../contexts/TransfersContext';
+import { useLoans } from '../contexts/LoansContext';
+import { formatTimestamp } from '../lib/formatTimestamp';
 import { KIND_META, kindLabel, transferSubtitle } from '../lib/transfers';
+import { computeLoansLendingSummary } from '../lib/loansLendingSummary';
 import { radii, spacing } from '../lib/theme';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 
@@ -64,13 +68,14 @@ const GROUPS = [
   },
 ];
 
-export default function TransfersScreen({ navigation }) {
+export default function TransfersScreen({ navigation, embedded = false }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { transfers, addTransfer, updateTransfer, deleteTransfer } =
     useTransfers();
-  const { accounts, accountGroups, baseCurrency } = useSettings();
-  const { assets, liabilities, summary } = useNetWorth();
+  const { deleteEvent, loans } = useLoans();
+  const { accounts, accountGroups, baseCurrency, fxRates } = useSettings();
+  const { assets, liabilities } = useNetWorth();
   const { showToast, showUndoableToast } = useToast();
 
   const [creating, setCreating] = useState(false);
@@ -88,6 +93,7 @@ export default function TransfersScreen({ navigation }) {
   const anyLiabilities = liabilities;
 
   useLayoutEffect(() => {
+    if (embedded || !navigation?.setOptions) return;
     navigation.setOptions({
       headerRight: () =>
         !creating && !editing ? (
@@ -107,7 +113,33 @@ export default function TransfersScreen({ navigation }) {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating, editing, themeColors.text.primary]);
+  }, [navigation, creating, editing, themeColors.text.primary, embedded]);
+
+  // Embedded in Transactions tab — FAB opens add form via the same bus
+  // Income/Expense use for `transactions:openAdd`.
+  useEffect(() => {
+    if (!embedded) return undefined;
+    const sub = DeviceEventEmitter.addListener(
+      'transactions:openAdd',
+      (payload) => {
+        if (payload?.type !== 'transfer') return;
+        setCreating(true);
+        setEditing(null);
+      },
+    );
+    return () => sub.remove();
+  }, [embedded]);
+
+  useEffect(() => {
+    if (!embedded) return undefined;
+    DeviceEventEmitter.emit(
+      'transactions:modalOpen',
+      creating || editing !== null,
+    );
+    return () => {
+      DeviceEventEmitter.emit('transactions:modalOpen', false);
+    };
+  }, [embedded, creating, editing]);
 
   const handleAdd = (values) => {
     const res = addTransfer(values);
@@ -131,6 +163,23 @@ export default function TransfersScreen({ navigation }) {
   };
 
   const handleDelete = (transfer) => {
+    // Formal-loan repayments are projections of an EMI/prepayment event.
+    // Delete the owning event so the loan timeline, outstanding principal,
+    // transfer row and linked interest expense are reconciled together.
+    if (transfer.linkedLoanId && transfer.linkedLoanEventId) {
+      const loanResult = deleteEvent(transfer.linkedLoanId, transfer.linkedLoanEventId);
+      if (!loanResult.ok) {
+        showToast(errorMessage(loanResult.reason), { variant: 'error', duration: 3000 });
+        return;
+      }
+      if (editing?.id === transfer.id) setEditing(null);
+      showToast('Loan repayment and linked expense deleted', {
+        variant: 'success',
+        duration: 2200,
+      });
+      return;
+    }
+
     // Delete BEFORE showing the toast so the row is already gone visually.
     // The delete method reverses linked NetWorth + interest-expense impacts.
     // Undo re-creates via addTransfer (which re-applies the same impacts),
@@ -168,14 +217,18 @@ export default function TransfersScreen({ navigation }) {
     });
   };
 
-  // Totals for the hero. Derived from the actual current NetWorth items
-  // in the 'lent' asset category and all liabilities. This is more truthful
-  // than summing transfer amounts (which don't account for partial repays).
-  const owedToYou = useMemo(
-    () => lentAssets.reduce((s, a) => s + (a.value || 0), 0),
-    [lentAssets],
+  // Totals for the hero — same logic as Dashboard "Loans & lending" strip.
+  const lendingSummary = useMemo(
+    () => computeLoansLendingSummary({
+      assets,
+      liabilities,
+      loans,
+      fxRates,
+      baseCurrency,
+    }),
+    [assets, liabilities, loans, fxRates, baseCurrency],
   );
-  const youOwe = summary.totalLiabilities;
+  const { owedToYou, youOwe } = lendingSummary;
 
   // Group transfers for display. Also compute totals per group so headers
   // can show a scannable subtitle like "OUTSTANDING (3) · ₹42,000".
@@ -188,7 +241,7 @@ export default function TransfersScreen({ navigation }) {
     for (const t of transfers) {
       const bucket = t.kind === 'internal_transfer'
         ? g.internal
-        : (t.kind === 'lend' || t.kind === 'borrow')
+        : (t.kind === 'lend' || t.kind === 'borrow' || t.kind === 'loan_disbursement')
         ? g.outstanding
         : g.repayments;
       bucket.items.push(t);
@@ -225,8 +278,8 @@ export default function TransfersScreen({ navigation }) {
             </View>
           </View>
           <Text style={styles.heroFootnote}>
-            Balances come from Net Worth. Transfers here update those items
-            automatically.
+            Includes formal loans (home, personal, etc.) plus informal
+            lend/borrow balances from Net Worth.
           </Text>
         </View>
 
@@ -345,6 +398,9 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
     : km?.cashDirection === 'out'
     ? themeColors.accent.expense
     : themeColors.accent.income;
+  const principalAmount = transfer.kind === 'loan_repayment'
+    ? Math.max(0, (Number(transfer.amount) || 0) - (Number(transfer.interestAmount) || 0))
+    : null;
 
   return (
     <Pressable
@@ -378,13 +434,16 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
           {transferSubtitle(transfer, accounts)}
         </Text>
         <View style={styles.rowMetaRow}>
-          <Text style={styles.rowDate}>{formatDate(transfer.createdAt)}</Text>
-          {transfer.interestAmount > 0 && (
-            <Text style={styles.rowInterest}>
-              · {formatMoneyCurrency(transfer.interestAmount, baseCurrency, { decimals: 0 })} interest
-            </Text>
-          )}
+          <Text style={styles.rowDate}>{formatTimestamp(transfer.createdAt)}</Text>
         </View>
+        {principalAmount != null && (
+          <Text style={styles.rowPrincipal} numberOfLines={2}>
+            Principal paid {formatMoneyCurrency(principalAmount, baseCurrency, { decimals: 0 })}
+            {transfer.interestAmount > 0
+              ? ` · Interest ${formatMoneyCurrency(transfer.interestAmount, baseCurrency, { decimals: 0 })}`
+              : ''}
+          </Text>
+        )}
       </View>
       <View style={styles.rowRight}>
         <Text style={[styles.rowAmount, { color: cashColor }]}>
@@ -440,28 +499,10 @@ function errorMessage(reason) {
     over_repay:           'Repayment exceeds the remaining balance. Reduce the amount or edit the linked item first.',
     linked_gone:          'The linked Net Worth item was removed. Delete this transfer and re-create it against the correct item.',
     has_child_transfers:  'Delete the child repayment transfers first — they are still linked to this loan.',
+    managed_by_loan:      'This entry is managed by its formal loan. Edit or delete it from the Loans screen.',
+    event_not_found:      'The linked loan repayment event no longer exists.',
+    cannot_delete_disburse: 'The original loan disbursement cannot be deleted as a repayment.',
   }[reason] ?? 'Could not save transfer.';
-}
-
-function formatDate(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  const sameDay = (a, b) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  if (sameDay(d, now)) return 'Today';
-  const yest = new Date(now); yest.setDate(now.getDate() - 1);
-  if (sameDay(d, yest)) return 'Yesterday';
-  // Same year → "18 Jul"; else "18 Jul '25"
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
-  }
-  return d.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: '2-digit',
-  });
 }
 
 // ----------------------------------------------------------------------------
@@ -579,6 +620,12 @@ const makeStyles = (c) => ({
     color: c.accent.expense,
     marginLeft: 4,
     fontWeight: '600',
+  },
+  rowPrincipal: {
+    fontSize: 11,
+    color: c.text.secondary,
+    marginTop: 3,
+    fontWeight: '700',
   },
   rowRight: {
     alignItems: 'flex-end',

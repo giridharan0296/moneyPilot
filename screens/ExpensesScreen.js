@@ -6,8 +6,6 @@ export default function ExpensesScreen({ route }) {
     <TransactionsList
       type="expense"
       amountPrefix="-"
-      amountColor="#dc2626"
-      accentColor="#2563eb"
       focusId={focusId}
       copy={{
         totalLabel: 'TOTAL SPENT',
@@ -17,7 +15,7 @@ export default function ExpensesScreen({ route }) {
         notePlaceholder: 'e.g. lunch with team',
         emptyIcon: 'credit-card',
         emptyTitle: 'No expenses yet.',
-        emptySub: 'Add your first one above.',
+        emptySub: 'Tap + to add your first expense.',
         clearAllTitle: 'Clear all expenses?',
         clearAllMessage: 'This cannot be undone.',
       }}

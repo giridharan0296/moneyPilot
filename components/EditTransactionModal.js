@@ -20,7 +20,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 //   item        the transaction being edited (or null)
 //   categories, accounts   master data (from context, passed by parent)
 //   accentColor
-//   onSave(updatedFields)  { amount, categoryId, accountId, date, note }
+//   onSave(updatedFields)  { amount, categoryId, accountId, date, note, tags }
 //   onDelete()             asks for confirmation, then deletes
 // ----------------------------------------------------------------------------
 
@@ -47,11 +47,35 @@ export default function EditTransactionModal({
     accountId: item.accountId,
     date: new Date(item.createdAt),
     note: item.note,
+    tags: Array.isArray(item.tags) ? item.tags : [],
     voiceNote: item.voiceNote ?? null,
+    currency: item.currency ?? null,
+    fxRate: item.fxRate ?? null,
     // Forwarded so the broker chip re-populates on Edit. Meaningless
     // for expense/income items (item.brokerId will simply be undefined);
     // TransactionForm treats undefined as null.
     brokerId: item.brokerId ?? null,
+    instrumentSymbol: item.instrumentSymbol ?? null,
+    instrumentName: item.instrumentName ?? null,
+    instrumentType: item.instrumentType ?? null,
+    investmentUnits: item.investmentUnits ?? null,
+    chitSchemeId: item.chitSchemeId ?? null,
+    chitSchemeName: item.chitSchemeName ?? null,
+    chitMetalPurity: item.chitMetalPurity ?? null,
+    chitWeightGrams: item.chitWeightGrams ?? null,
+    chitRatePerGram: item.chitRatePerGram ?? null,
+    chitClosedAt: item.chitClosedAt ?? null,
+    linkedChitAssetId: item.linkedChitAssetId ?? null,
+    payslipBasic: item.payslipBasic ?? null,
+    payslipHra: item.payslipHra ?? null,
+    payslipSpecial: item.payslipSpecial ?? null,
+    payslipOther: item.payslipOther ?? null,
+    payslipTds: item.payslipTds ?? null,
+    payslipPf: item.payslipPf ?? null,
+    payslipGross: item.payslipGross ?? null,
+    payslipNet: item.payslipNet ?? null,
+    payslipSource: item.payslipSource ?? null,
+    payslipAmountMode: item.payslipAmountMode ?? null,
   };
 
   const handleSave = (values) => {
@@ -62,13 +86,44 @@ export default function EditTransactionModal({
       subCategoryId: values.subCategoryId ?? null,
       accountId: values.accountId,
       note: values.note,
+      tags: values.tags ?? [],
       voiceNote: values.voiceNote ?? null,
+      currency: values.currency,
+      fxRate: values.fxRate,
+      amountInBase: values.amountInBase,
+      ...(values.chitSchemeId ? {
+        chitSchemeId: values.chitSchemeId,
+        chitSchemeName: values.chitSchemeName,
+        chitMetalPurity: values.chitMetalPurity,
+        chitWeightGrams: values.chitWeightGrams,
+        chitRatePerGram: values.chitRatePerGram,
+        chitClosedAt: item.chitClosedAt ?? null,
+        linkedChitAssetId: item.linkedChitAssetId ?? null,
+      } : {}),
       createdAt: values.date.toISOString(),
       // Only persist brokerId on investment rows — for
       // expense/income we deliberately drop it so a re-save doesn't
       // add a stray field to a row that never had one. Existing
       // investment rows without a brokerId keep their null.
-      ...(type === 'investment' ? { brokerId: values.brokerId ?? null } : {}),
+      ...(type === 'investment' ? {
+        brokerId: values.brokerId ?? null,
+        instrumentSymbol: values.instrumentSymbol ?? null,
+        instrumentName: values.instrumentName ?? null,
+        instrumentType: values.instrumentType ?? null,
+        investmentUnits: values.investmentUnits ?? null,
+      } : {}),
+      ...(type === 'income' ? {
+        payslipBasic: values.payslipBasic ?? null,
+        payslipHra: values.payslipHra ?? null,
+        payslipSpecial: values.payslipSpecial ?? null,
+        payslipOther: values.payslipOther ?? null,
+        payslipTds: values.payslipTds ?? null,
+        payslipPf: values.payslipPf ?? null,
+        payslipGross: values.payslipGross ?? null,
+        payslipNet: values.payslipNet ?? null,
+        payslipSource: values.payslipSource ?? null,
+        payslipAmountMode: values.payslipAmountMode ?? null,
+      } : {}),
     });
     onClose();
   };

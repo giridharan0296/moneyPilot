@@ -75,7 +75,7 @@ app.whenReady().then(() => {
       return { ok: false, status: 400, bodyText: 'Blocked URL', setCookie: [] };
     }
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (compatible; MyMoney/1.0)',
+      'User-Agent': 'Mozilla/5.0 (compatible; Worth/1.0)',
       Accept: opts.accept || 'application/json',
     };
     if (opts.cookie) headers.Cookie = opts.cookie;
@@ -122,7 +122,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     backgroundColor: '#f5f7fb',
-    title: 'MyMoney',
+    title: 'Worth',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

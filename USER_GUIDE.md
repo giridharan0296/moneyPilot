@@ -16,9 +16,9 @@ Worth Management is a personal-finance app for recording daily money activity, t
 
 In **Settings**, use **Load Demo Data** to replace current data with a realistic sample. The demo includes:
 
-- Three completed Indian financial years of income, expenses, and investments
-- Accounts, wallets, cash, a credit card, and internal transfers
-- Budgets, goals, recurring rules, loans, investments, holdings, and net worth
+- Two completed Indian financial years of income, expenses, and investments (plus recent activity)
+- Accounts with opening balances, budgets, goals, recurring rules, loans, transfers, and holdings
+- Portfolio holdings with symbol/units, portfolio-synced Net Worth assets, 2 EPF UAN accounts, and allocation targets
 - Zerodha and Groww broker assignments
 
 Export a backup before loading demo data if you need to keep current records.

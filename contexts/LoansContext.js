@@ -12,6 +12,7 @@
 //     ratePct, method, tenureMonths, emiAmount, emiDayOfMonth,
 //     disbursementAccountId,
 //     linkedLiabilityId,          // id of the mirror NetWorth liability
+//     linkedDisbursementTransferId, // id of the cash-in loan disbursement
 //     currentOutstanding,         // snapshotted from events, ledger is truth
 //     events: [ { id, kind, date, amount, principal, interest, note } ],
 //     status: 'active' | 'closed' | 'defaulted',
@@ -61,10 +62,13 @@ import {
   kindIcon as kindIconInLib,
   kindLabel as kindLabelInLib,
   normalizeCustomLoanKind,
+  normalizeFirstInterestPeriod,
   rebuildReducingBalanceSplits,
   splitPrincipalInterestAtDate,
 } from '../lib/loans';
 import { useNetWorth } from './NetWorthContext';
+import { useTransactions } from './TransactionsContext';
+import { useTransfers } from './TransfersContext';
 import { shortId } from '../lib/ids';
 
 const LoansContext = createContext(null);
@@ -88,9 +92,16 @@ function normalizeLoan(l) {
     method:                 l.method ?? 'reducing',
     tenureMonths:           Number(l.tenureMonths) || 0,
     emiAmount:              Number(l.emiAmount) || 0,
+    firstInterestPeriod:    normalizeFirstInterestPeriod(l),
+    firstInterestBasis:     Number(l.firstInterestBasis) === 360 ? 360 : 365,
     emiDayOfMonth:          Number(l.emiDayOfMonth) || 1,
     disbursementAccountId:  l.disbursementAccountId ?? null,
+    creditPrincipalToAccount: l.creditPrincipalToAccount === true,
     linkedLiabilityId:      l.linkedLiabilityId ?? null,
+    linkedIncomeTransactionId: l.linkedIncomeTransactionId ?? null,
+    linkedPrincipalTransferId: l.linkedPrincipalTransferId ?? null,
+    linkedDisbursementTransferId:
+      l.linkedDisbursementTransferId ?? l.linkedPrincipalTransferId ?? null,
     currentOutstanding:     Number(l.currentOutstanding) || 0,
     prepaymentPlan:         l.prepaymentPlan?.enabled
       ? {
@@ -214,6 +225,18 @@ export function LoansProvider({ children }) {
     updateLiability,
     deleteLiability,
   } = useNetWorth();
+  const {
+    expenses,
+    addTransaction,
+    updateTransaction,
+    deleteTransaction,
+  } = useTransactions();
+  const {
+    addTransfer,
+    updateTransfer,
+    deleteTransfer,
+    transfers,
+  } = useTransfers();
 
   // ---- Load persisted loans + custom kinds on mount ----
   useEffect(() => {
@@ -259,6 +282,55 @@ export function LoansProvider({ children }) {
     AsyncStorage.setItem(STORAGE_KEYS.loans, JSON.stringify(loans))
       .catch((e) => console.warn('Save loans failed:', e));
   }, [loans, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const missingPrincipalCredit = loans.filter(
+      (loan) =>
+        loan.direction === 'owed_by_me' &&
+        loan.creditPrincipalToAccount === true &&
+        loan.disbursementAccountId &&
+        (
+          loan.linkedIncomeTransactionId ||
+          !transfers.some((transfer) =>
+            transfer.id === loan.linkedDisbursementTransferId &&
+            transfer.kind === 'loan_disbursement'
+          )
+        ),
+    );
+    if (missingPrincipalCredit.length === 0) return;
+
+    const nextLoans = loans.map((loan) => {
+      if (
+        loan.direction !== 'owed_by_me' ||
+        loan.creditPrincipalToAccount !== true ||
+        !loan.disbursementAccountId ||
+        (
+          !loan.linkedIncomeTransactionId &&
+          transfers.some((transfer) =>
+            transfer.id === loan.linkedDisbursementTransferId &&
+            transfer.kind === 'loan_disbursement'
+          )
+        )
+      ) {
+        return loan;
+      }
+      const reconciliation = syncPrincipalCreditTransaction(loan, loan);
+      return reconciliation
+        ? {
+            ...loan,
+            linkedIncomeTransactionId: reconciliation.linkedIncomeTransactionId,
+            linkedPrincipalTransferId: reconciliation.linkedPrincipalTransferId,
+            linkedDisbursementTransferId: reconciliation.linkedDisbursementTransferId,
+            updatedAt: new Date().toISOString(),
+          }
+        : loan;
+    });
+
+    if (nextLoans.some((loan, index) => loan !== loans[index])) {
+      setLoans(nextLoans);
+    }
+  }, [loans, ready, syncPrincipalCreditTransaction, transfers]);
 
   useEffect(() => {
     if (!ready) return;
@@ -329,6 +401,145 @@ export function LoansProvider({ children }) {
     [loans],
   );
 
+  const syncPrincipalCreditTransaction = useCallback((loan, nextLoanLike) => {
+    if (!loan || loan.direction !== 'owed_by_me') return null;
+
+    const shouldCredit = nextLoanLike?.creditPrincipalToAccount === true;
+    const accountId = nextLoanLike?.disbursementAccountId ?? loan.disbursementAccountId ?? null;
+    const disburseDate = nextLoanLike?.disburseDate ?? loan.disburseDate ?? new Date().toISOString();
+    const principal = Number(nextLoanLike?.principal ?? loan.principal) || 0;
+    const transferId = loan.linkedDisbursementTransferId ?? loan.linkedPrincipalTransferId ?? null;
+
+    if (!shouldCredit || !accountId || principal <= 0) {
+      if (loan.linkedIncomeTransactionId) {
+        deleteTransaction('income', loan.linkedIncomeTransactionId, { fromLoan: true });
+      }
+      if (transferId) {
+        deleteTransfer(transferId, { cascade: false, force: true, fromLoan: true });
+      }
+      return {
+        linkedIncomeTransactionId: null,
+        linkedPrincipalTransferId: null,
+        linkedDisbursementTransferId: null,
+      };
+    }
+
+    // Loan proceeds are debt-funded cash, not income. Remove the legacy
+    // synthetic income row and represent the deposit as a cash-in transfer.
+    if (loan.linkedIncomeTransactionId) {
+      deleteTransaction('income', loan.linkedIncomeTransactionId, { fromLoan: true });
+    }
+
+    const transferPayload = {
+      kind: 'loan_disbursement',
+      amount: principal,
+      accountId,
+      counterpartyName: (nextLoanLike?.lenderName ?? loan.lenderName) || (nextLoanLike?.name ?? loan.name),
+      linkedNetWorthId: loan.linkedLiabilityId,
+      interestAmount: 0,
+      note: `Loan disbursement · ${nextLoanLike?.name ?? loan.name}`,
+      createdAt: disburseDate,
+      linkedLoanId: loan.id,
+      linkedLoanEventId: loan.events?.find((event) => event.kind === 'disburse')?.id ?? null,
+    };
+
+    const existingTransfer = transferId
+      ? transfers.find((transfer) => transfer.id === transferId)
+      : null;
+    let nextTransferId = transferId;
+    if (existingTransfer?.kind === 'loan_disbursement') {
+      updateTransfer(existingTransfer.id, transferPayload, { fromLoan: true });
+    } else {
+      if (transferId) {
+        // Legacy rows were incorrectly stored as loan repayments. Remove
+        // without reversing their old Net Worth side; the loan ledger is
+        // authoritative for the liability.
+        deleteTransfer(transferId, { cascade: false, force: true, fromLoan: true });
+      }
+      const createdTransfer = addTransfer(transferPayload);
+      nextTransferId = createdTransfer?.ok ? createdTransfer.transfer?.id ?? null : null;
+    }
+
+    return {
+      linkedIncomeTransactionId: null,
+      linkedPrincipalTransferId: null,
+      linkedDisbursementTransferId: nextTransferId,
+    };
+  }, [addTransfer, deleteTransaction, deleteTransfer, transfers, updateTransfer]);
+
+  const reconcileGeneratedPaymentRecords = useCallback((loan) => {
+    if (!loan) return;
+    for (const event of loan.events ?? []) {
+      if (!['emi', 'prepay'].includes(event.kind)) continue;
+      const principal = Math.max(0, Number(event.principal) || 0);
+      const interest = event.kind === 'emi' ? Math.max(0, Number(event.interest) || 0) : 0;
+      const transfer = transfers.find((item) => item.linkedLoanEventId === event.id);
+      if (
+        transfer &&
+        (
+          Math.abs((Number(transfer.amount) || 0) - principal) > 1e-6 ||
+          transfer.createdAt !== event.date ||
+          (transfer.accountId ?? null) !== (event.accountId ?? loan.disbursementAccountId ?? null) ||
+          transfer.counterpartyName !== (loan.lenderName || loan.name)
+        )
+      ) {
+        updateTransfer(transfer.id, {
+          amount: principal,
+          accountId: event.accountId ?? loan.disbursementAccountId ?? null,
+          counterpartyName: loan.lenderName || loan.name,
+          interestAmount: 0,
+          note: event.kind === 'prepay' ? `Loan prepayment · ${loan.name}` : `Loan principal · ${loan.name}`,
+          createdAt: event.date,
+        }, { fromLoan: true, skipNetWorth: true });
+      } else if (!transfer && principal > 0 && loan.linkedLiabilityId) {
+        addTransfer({
+          kind: 'loan_repayment',
+          amount: principal,
+          accountId: event.accountId ?? loan.disbursementAccountId ?? null,
+          counterpartyName: loan.lenderName || loan.name,
+          linkedNetWorthId: loan.linkedLiabilityId,
+          interestAmount: 0,
+          note: event.kind === 'prepay' ? `Loan prepayment · ${loan.name}` : `Loan principal · ${loan.name}`,
+          createdAt: event.date,
+          linkedLoanId: loan.id,
+          linkedLoanEventId: event.id,
+        });
+      }
+
+      const expense = expenses.find((item) => item.linkedLoanEventId === event.id);
+      if (interest > 0 && expense) {
+        if (
+          Math.abs((Number(expense.amount) || 0) - interest) > 1e-6 ||
+          expense.createdAt !== event.date ||
+          (expense.accountId ?? null) !== (event.accountId ?? loan.disbursementAccountId ?? null) ||
+          expense.note !== `Loan interest · ${loan.name}`
+        ) {
+          updateTransaction('expense', {
+            ...expense,
+            amount: interest,
+            accountId: event.accountId ?? loan.disbursementAccountId ?? null,
+            note: `Loan interest · ${loan.name}`,
+            createdAt: event.date,
+          }, { fromLoan: true });
+        }
+      } else if (interest > 0 && !expense) {
+        addTransaction('expense', {
+          id: `tx_${shortId()}_loan_interest`,
+          amount: interest,
+          categoryId: 'bills',
+          subCategoryId: 'bills_loan_interest',
+          accountId: event.accountId ?? loan.disbursementAccountId ?? null,
+          note: `Loan interest · ${loan.name}`,
+          createdAt: event.date,
+          linkedLoanId: loan.id,
+          linkedLoanEventId: event.id,
+        });
+      } else if (interest <= 0 && expense) {
+        deleteTransaction('expense', expense.id, { fromLoan: true });
+      }
+    }
+  }, [addTransaction, addTransfer, deleteTransaction, expenses, transfers, updateTransaction, updateTransfer]);
+
   // --------------------------------------------------------------------------
   // CREATE
   // --------------------------------------------------------------------------
@@ -367,6 +578,10 @@ export function LoansProvider({ children }) {
       // "money lent" loans we skip the mirror (that side is an asset, handled
       // separately in a future phase). Custom types default to other_liab.
       let linkedLiabilityId = null;
+      let linkedIncomeTransactionId = null;
+      let linkedPrincipalTransferId = null;
+      let linkedDisbursementTransferId = null;
+      const shouldCreditPrincipal = data.creditPrincipalToAccount === true;
       const liabilityCategoryId =
         kindMeta?.liabilityCategoryId
         ?? (direction === 'owed_by_me' ? 'other_liab' : null);
@@ -378,6 +593,25 @@ export function LoansProvider({ children }) {
           note: `Auto-created from Loans: ${kindMeta?.label ?? 'Loan'}`,
         });
         if (created) linkedLiabilityId = created.id;
+      }
+
+      if (direction === 'owed_by_me' && shouldCreditPrincipal && data.disbursementAccountId) {
+        if (linkedLiabilityId) {
+          const transferResult = addTransfer({
+            kind: 'loan_disbursement',
+            amount: principal,
+            accountId: data.disbursementAccountId,
+            counterpartyName: data.lenderName ?? name,
+            linkedNetWorthId: linkedLiabilityId,
+            interestAmount: 0,
+            note: `Loan disbursement · ${name}`,
+            createdAt: data.disburseDate ?? nowIso,
+            linkedLoanId: loanId,
+          });
+          if (transferResult?.ok && transferResult.transfer?.id) {
+            linkedDisbursementTransferId = transferResult.transfer.id;
+          }
+        }
       }
 
       const disburseEvent = normalizeEvent({
@@ -409,9 +643,18 @@ export function LoansProvider({ children }) {
         method:                 provisional.method,
         tenureMonths:           provisional.tenureMonths,
         emiAmount:              emi,
+        firstInterestPeriod:    normalizeFirstInterestPeriod({
+          ...data,
+          method: provisional.method,
+        }),
+        firstInterestBasis:     Number(data.firstInterestBasis) === 360 ? 360 : 365,
         emiDayOfMonth:          data.emiDayOfMonth ?? 1,
         disbursementAccountId:  data.disbursementAccountId ?? null,
+        creditPrincipalToAccount: shouldCreditPrincipal,
         linkedLiabilityId,
+        linkedIncomeTransactionId,
+        linkedPrincipalTransferId,
+        linkedDisbursementTransferId,
         currentOutstanding:     principal,
         events:                 [disburseEvent],
         status:                 'active',
@@ -422,7 +665,7 @@ export function LoansProvider({ children }) {
       setLoans((prev) => [loan, ...prev]);
       return { ok: true, loan };
     },
-    [addLiability, customLoanKinds],
+    [addLiability, addTransfer, customLoanKinds],
   );
 
   // --------------------------------------------------------------------------
@@ -441,6 +684,17 @@ export function LoansProvider({ children }) {
       const current = findLoan(id);
       if (!current) return { ok: false, reason: 'not_found' };
 
+      const accountChanged =
+        patch.disbursementAccountId != null &&
+        patch.disbursementAccountId !== current.disbursementAccountId;
+      const nextEvents = accountChanged
+        ? current.events.map((event) => (
+          ['emi', 'prepay'].includes(event.kind)
+            ? { ...event, accountId: patch.disbursementAccountId }
+            : event
+        ))
+        : current.events;
+
       const next = normalizeLoan({
         ...current,
         ...patch,
@@ -449,7 +703,7 @@ export function LoansProvider({ children }) {
         principal:           current.principal,
         disburseDate:        current.disburseDate,
         currentOutstanding:  current.currentOutstanding,
-        events:              current.events,
+        events:              nextEvents,
         linkedLiabilityId:   current.linkedLiabilityId,
         status:              current.status,
         closedAt:            current.closedAt,
@@ -492,10 +746,33 @@ export function LoansProvider({ children }) {
         updateLiability(current.linkedLiabilityId, { name: patch.name.trim() });
       }
 
+      const shouldReconcilePrincipalCredit =
+        patch.creditPrincipalToAccount != null ||
+        patch.disbursementAccountId != null;
+      if (shouldReconcilePrincipalCredit) {
+        const reconciliation = syncPrincipalCreditTransaction(current, next);
+        if (reconciliation) {
+          next.linkedIncomeTransactionId = reconciliation.linkedIncomeTransactionId;
+          next.linkedPrincipalTransferId = reconciliation.linkedPrincipalTransferId;
+          next.linkedDisbursementTransferId = reconciliation.linkedDisbursementTransferId;
+        } else {
+          next.linkedIncomeTransactionId = current.linkedIncomeTransactionId;
+          next.linkedPrincipalTransferId = current.linkedPrincipalTransferId;
+          next.linkedDisbursementTransferId = current.linkedDisbursementTransferId;
+        }
+      }
+
+      // The account selected on Edit is the loan's ledger account. Move all
+      // generated principal transfers and interest expenses to it as one
+      // logical change; user-created records are never touched.
+      if (accountChanged || patch.name != null || patch.lenderName != null) {
+        reconcileGeneratedPaymentRecords(next);
+      }
+
       setLoans((prev) => prev.map((l) => (l.id === id ? next : l)));
       return { ok: true, loan: next };
     },
-    [findLoan, updateLiability],
+    [findLoan, reconcileGeneratedPaymentRecords, syncPrincipalCreditTransaction, updateLiability],
   );
 
   // --------------------------------------------------------------------------
@@ -607,7 +884,7 @@ export function LoansProvider({ children }) {
         events:       newEvents,
       };
       const replayed = replayLoanState(nextTop, newEvents);
-      const next = {
+      let next = {
         ...nextTop,
         currentOutstanding: replayed.currentOutstanding,
         // Only refresh emi + tenure from replay when nothing later has
@@ -619,6 +896,17 @@ export function LoansProvider({ children }) {
         closedAt:     replayed.status === 'closed' ? loan.closedAt : null,
         updatedAt:    new Date().toISOString(),
       };
+
+      if (next.creditPrincipalToAccount) {
+        const reconciliation = syncPrincipalCreditTransaction(loan, next);
+        if (reconciliation) {
+          next.linkedIncomeTransactionId = reconciliation.linkedIncomeTransactionId;
+          next.linkedPrincipalTransferId = reconciliation.linkedPrincipalTransferId;
+          next.linkedDisbursementTransferId = reconciliation.linkedDisbursementTransferId;
+        }
+      }
+      next = rebuildReducingBalanceSplits(next);
+      reconcileGeneratedPaymentRecords(next);
 
       // Re-sync the mirror liability's outstanding (skip if already deleted
       // via closeLoan). Also refresh its name if the loan was renamed —
@@ -632,7 +920,7 @@ export function LoansProvider({ children }) {
       setLoans((prev) => prev.map((l) => (l.id === loanId ? next : l)));
       return { ok: true, loan: next };
     },
-    [findLoan, updateLiability],
+    [findLoan, reconcileGeneratedPaymentRecords, syncPrincipalCreditTransaction, updateLiability],
   );
 
   // --------------------------------------------------------------------------
@@ -642,13 +930,52 @@ export function LoansProvider({ children }) {
     (id) => {
       const target = findLoan(id);
       if (!target) return { ok: false, reason: 'not_found' };
+
+      const eventMatches = (record, event, amountField) =>
+        record.createdAt === event.date &&
+        Math.abs((Number(record.amount) || 0) - (Number(event[amountField]) || 0)) <= 1e-6;
+      const generatedTransferIds = new Set(
+        transfers
+          .filter((transfer) =>
+            transfer.linkedLoanId === target.id ||
+            transfer.id === target.linkedPrincipalTransferId ||
+            transfer.id === target.linkedDisbursementTransferId ||
+            (
+              !transfer.linkedLoanId &&
+              transfer.linkedNetWorthId === target.linkedLiabilityId &&
+              (transfer.note === `Loan principal · ${target.name}` ||
+                transfer.note === `Loan prepayment · ${target.name}`) &&
+              target.events.some((event) =>
+                ['emi', 'prepay'].includes(event.kind) && eventMatches(transfer, event, 'principal')
+              )
+            )
+          )
+          .map((transfer) => transfer.id),
+      );
+      for (const transferId of generatedTransferIds) {
+        deleteTransfer(transferId, { fromLoan: true, force: true });
+      }
+
+      for (const expense of expenses) {
+        const isGenerated = expense.linkedLoanId === target.id || (
+          !expense.linkedLoanId &&
+          expense.note === `Loan interest · ${target.name}` &&
+          target.events.some((event) =>
+            event.kind === 'emi' && eventMatches(expense, event, 'interest')
+          )
+        );
+        if (isGenerated) deleteTransaction('expense', expense.id, { fromLoan: true });
+      }
       if (target.linkedLiabilityId) {
         deleteLiability(target.linkedLiabilityId);
+      }
+      if (target.linkedIncomeTransactionId) {
+        deleteTransaction('income', target.linkedIncomeTransactionId, { fromLoan: true });
       }
       setLoans((prev) => prev.filter((l) => l.id !== id));
       return { ok: true, loan: target };
     },
-    [deleteLiability, findLoan],
+    [deleteLiability, deleteTransaction, deleteTransfer, expenses, findLoan, transfers],
   );
 
   // --------------------------------------------------------------------------
@@ -720,7 +1047,7 @@ export function LoansProvider({ children }) {
   //           would still price it against the initial principal — mostly
   //           correct but semantically nonsense.
   const logEmi = useCallback(
-    (loanId, { date, amount, note }) => {
+    (loanId, { date, amount, note, accountId }) => {
       const loan = findLoan(loanId);
       if (!loan) return { ok: false, reason: 'not_found' };
       if (loan.status === 'closed' || loan.currentOutstanding <= 1e-6) {
@@ -756,7 +1083,37 @@ export function LoansProvider({ children }) {
         principal: principalPortion,
         interest: Math.max(0, interestPortion),
         note: note ?? '',
+        accountId: accountId ?? loan.disbursementAccountId ?? null,
       });
+
+      if (interestPortion > 0) {
+        addTransaction('expense', {
+          id: `tx_${shortId()}_loan_interest`,
+          amount: interestPortion,
+          categoryId: 'bills',
+          subCategoryId: 'bills_loan_interest',
+          accountId: accountId ?? loan.disbursementAccountId ?? null,
+          note: `Loan interest · ${loan.name}`,
+          createdAt: eventDate,
+          linkedLoanId: loan.id,
+          linkedLoanEventId: event.id,
+        });
+      }
+
+      if (principalPortion > 0 && loan.linkedLiabilityId) {
+        addTransfer({
+          kind: 'loan_repayment',
+          amount: principalPortion,
+          accountId: accountId ?? loan.disbursementAccountId ?? null,
+          counterpartyName: loan.lenderName || loan.name,
+          linkedNetWorthId: loan.linkedLiabilityId,
+          interestAmount: 0,
+          note: `Loan principal · ${loan.name}`,
+          createdAt: eventDate,
+          linkedLoanId: loan.id,
+          linkedLoanEventId: event.id,
+        });
+      }
 
       // Append then rebuild splits so a back-dated / first EMI gets broken-
       // period interest and outstanding is replayed from the full ledger.
@@ -780,8 +1137,11 @@ export function LoansProvider({ children }) {
   // state update. Used when the user adds a loan that already started
   // earlier and has been paying EMIs outside the app.
   const backfillPaidEmis = useCallback(
-    (loanId, { throughDate } = {}) => {
-      const loan = findLoan(loanId);
+    (loanRef, { throughDate } = {}) => {
+      const loan =
+        loanRef && typeof loanRef === 'object' && 'id' in loanRef
+          ? loanRef
+          : findLoan(loanRef);
       if (!loan) return { ok: false, reason: 'not_found', recorded: 0 };
       if (loan.status === 'closed') return { ok: false, reason: 'loan_closed', recorded: 0 };
 
@@ -797,30 +1157,64 @@ export function LoansProvider({ children }) {
           .filter((e) => e.kind === 'emi')
           .map((e) => new Date(e.date).toDateString()),
       );
-      const dates = enumerateEmiDueDates({
+      const scheduledDates = enumerateEmiDueDates({
         disburseDate: loan.disburseDate,
         emiDayOfMonth: loan.emiDayOfMonth,
         throughDate: throughDate || new Date(),
         tenureMonths: tenureCap,
         firstEmiOffsetMonths: 1,
-      }).filter((d) => !existingEmiKeys.has(new Date(d).toDateString()));
+      });
+      const dates = scheduledDates.filter(
+        (d) => !existingEmiKeys.has(new Date(d).toDateString()),
+      );
       if (dates.length === 0) return { ok: true, loan, recorded: 0 };
 
       let current = loan;
       let recorded = 0;
       for (const date of dates) {
         if (current.status === 'closed' || current.currentOutstanding <= 1e-6) break;
-        const split = splitPrincipalInterestAtDate(current, date, emi);
+        const paymentAmount = emi;
+        const split = splitPrincipalInterestAtDate(current, date, paymentAmount);
         const principalPortion = Math.min(split.principal, current.currentOutstanding);
-        const interestPortion = emi - principalPortion;
+        const interestPortion = paymentAmount - principalPortion;
         const event = normalizeEvent({
           kind: 'emi',
           date,
-          amount: emi,
+          amount: paymentAmount,
           principal: principalPortion,
           interest: Math.max(0, interestPortion),
           note: 'Backfilled EMI',
         });
+
+        if (interestPortion > 0) {
+          addTransaction('expense', {
+            id: `tx_${shortId()}_loan_interest`,
+            amount: interestPortion,
+            categoryId: 'bills',
+            subCategoryId: 'bills_loan_interest',
+            accountId: current.disbursementAccountId ?? null,
+            note: `Loan interest · ${current.name}`,
+            createdAt: date,
+            linkedLoanId: current.id,
+            linkedLoanEventId: event.id,
+          });
+        }
+
+        if (principalPortion > 0 && current.linkedLiabilityId) {
+          addTransfer({
+            kind: 'loan_repayment',
+            amount: principalPortion,
+            accountId: current.disbursementAccountId ?? null,
+            counterpartyName: current.lenderName || current.name,
+            linkedNetWorthId: current.linkedLiabilityId,
+            interestAmount: 0,
+            note: `Loan principal · ${current.name}`,
+            createdAt: date,
+            linkedLoanId: current.id,
+            linkedLoanEventId: event.id,
+          });
+        }
+
         current = applyLedgerEvent(current, event, principalPortion);
         recorded += 1;
       }
@@ -831,7 +1225,7 @@ export function LoansProvider({ children }) {
           outstanding: current.currentOutstanding,
         });
       }
-      setLoans((prev) => prev.map((l) => (l.id === loanId ? current : l)));
+      setLoans((prev) => prev.map((l) => (l.id === loan.id ? current : l)));
       return { ok: true, loan: current, recorded };
     },
     [applyLedgerEvent, findLoan, updateLiability],
@@ -846,7 +1240,7 @@ export function LoansProvider({ children }) {
   // Default matches the pre-rate-change behaviour ('keep_emi'), so any
   // existing call sites that omit the field see no change.
   const logPrepayment = useCallback(
-    (loanId, { date, amount, note, adjustmentMode = 'keep_emi' }) => {
+    (loanId, { date, amount, note, adjustmentMode = 'keep_emi', accountId }) => {
       const loan = findLoan(loanId);
       if (!loan) return { ok: false, reason: 'not_found' };
       if (loan.status === 'closed' || loan.currentOutstanding <= 1e-6) {
@@ -901,6 +1295,7 @@ export function LoansProvider({ children }) {
         principal: amt,
         interest: 0,
         note: note ?? '',
+        accountId: accountId ?? loan.disbursementAccountId ?? null,
         // Rate-change bookkeeping — mirrored on rate_change events so the
         // timeline renderer + deleteEvent replay use one shape for both.
         adjustmentMode,
@@ -913,7 +1308,22 @@ export function LoansProvider({ children }) {
         unamortizable: adjustment.unamortizable ?? false,
       });
 
-      // applyLedgerEvent handles outstanding + mirror sync + close detection.
+      if (amt > 0 && loan.linkedLiabilityId) {
+        addTransfer({
+          kind: 'loan_repayment',
+          amount: amt,
+          accountId: accountId ?? loan.disbursementAccountId ?? null,
+          counterpartyName: loan.lenderName || loan.name,
+          linkedNetWorthId: loan.linkedLiabilityId,
+          interestAmount: 0,
+          note: `Loan prepayment · ${loan.name}`,
+          createdAt: eventDate,
+          linkedLoanId: loan.id,
+          linkedLoanEventId: event.id,
+        });
+      }
+      // Apply after recording the transfer so its authoritative recomputed
+      // balance wins over the transfer context's incremental mirror update.
       const withEvent = applyLedgerEvent(loan, event, amt);
       // Then patch the derived-terms fields so future EMIs use the
       // recomputed EMI / tenure.
@@ -984,7 +1394,7 @@ export function LoansProvider({ children }) {
       const withEvents = { ...loan, events };
       const currentRateNow = getRateAtDate(withEvents, new Date().toISOString());
 
-      const next = {
+      const next = rebuildReducingBalanceSplits({
         ...loan,
         ratePct:            currentRateNow ?? rate,
         emiAmount:          replayed.emiAmount,
@@ -993,16 +1403,17 @@ export function LoansProvider({ children }) {
         status:             replayed.status,
         events,
         updatedAt:          new Date().toISOString(),
-      };
+      });
+      reconcileGeneratedPaymentRecords(next);
       if (loan.linkedLiabilityId) {
         updateLiability(loan.linkedLiabilityId, {
-          outstanding: replayed.currentOutstanding,
+          outstanding: next.currentOutstanding,
         });
       }
       setLoans((prev) => prev.map((l) => (l.id === loanId ? next : l)));
       return { ok: true, loan: next, adjustment: built.adjustment };
     },
-    [findLoan, updateLiability],
+    [findLoan, reconcileGeneratedPaymentRecords, updateLiability],
   );
 
   // Manually close a loan (e.g. lender wrote it off, or user forgives a
@@ -1058,6 +1469,31 @@ export function LoansProvider({ children }) {
       if (!target) return { ok: false, reason: 'event_not_found' };
       if (target.kind === 'disburse') return { ok: false, reason: 'cannot_delete_disburse' };
 
+      const sameRecord = (record, amount) =>
+        record.createdAt === target.date &&
+        Math.abs((Number(record.amount) || 0) - (Number(amount) || 0)) <= 1e-6;
+      const transfer = transfers.find((item) =>
+        item.linkedLoanEventId === target.id ||
+        (
+          !item.linkedLoanEventId &&
+          item.linkedNetWorthId === loan.linkedLiabilityId &&
+          (item.note === `Loan principal · ${loan.name}` ||
+            item.note === `Loan prepayment · ${loan.name}`) &&
+          sameRecord(item, target.principal)
+        )
+      );
+      if (transfer) deleteTransfer(transfer.id, { fromLoan: true, force: true });
+
+      const expense = expenses.find((item) =>
+        item.linkedLoanEventId === target.id ||
+        (
+          !item.linkedLoanEventId &&
+          item.note === `Loan interest · ${loan.name}` &&
+          sameRecord(item, target.interest)
+        )
+      );
+      if (expense) deleteTransaction('expense', expense.id, { fromLoan: true });
+
       const remaining = loan.events.filter((e) => e.id !== eventId);
       const replayed = replayLoanState(loan, remaining);
 
@@ -1078,7 +1514,7 @@ export function LoansProvider({ children }) {
       setLoans((prev) => prev.map((l) => (l.id === loanId ? next : l)));
       return { ok: true, loan: next };
     },
-    [findLoan, updateLiability],
+    [deleteTransaction, deleteTransfer, expenses, findLoan, transfers, updateLiability],
   );
 
   // Bulk restore for backup/restore. Auto-persist writes them out.

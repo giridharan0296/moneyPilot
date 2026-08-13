@@ -16,14 +16,17 @@ import {
 
 import GoalForm from '../components/GoalForm';
 import GoalProgressBar from '../components/GoalProgressBar';
+import AppButton from '../components/AppButton';
+import ScreenHelpIntro from '../components/ScreenHelpIntro';
 import AppIcon from '../components/AppIcon';
+import { HELP_GOALS } from '../lib/helpContent';
 import { useGoals } from '../contexts/GoalsContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTransactions } from '../contexts/TransactionsContext';
-import { computeGoalProgress, KIND_META } from '../lib/goals';
+import { computeGoalProgress, KIND_META, filterAssetsForGoalPicker } from '../lib/goals';
 import { radii, spacing } from '../lib/theme';
 import {
   baseAmountOf,
@@ -129,15 +132,27 @@ export default function GoalsScreen({ navigation }) {
     return map;
   }, [goals, assetsInBase, expensesInBase]);
 
+  const assetsForNewGoal = useMemo(
+    () => filterAssetsForGoalPicker(assets, goals),
+    [assets, goals],
+  );
+
   return (
     <ScrollView
       style={styles.screen}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      <ScreenHelpIntro
+        title="Goals"
+        subtitle="Save toward a target or cap spending for a custom date window."
+        help={HELP_GOALS}
+      />
+
       {creating && (
         <GoalForm
-          assets={assets}
+          assets={assetsForNewGoal}
+          totalAssetCount={assets.length}
           expenseCategories={categories.expense}
           onSubmit={handleAdd}
           onCancel={() => setCreating(false)}
@@ -161,6 +176,7 @@ export default function GoalsScreen({ navigation }) {
               onDelete={() => handleDelete(g)}
               onArchive={() => setGoalActive(g.id, false)}
               assets={assets}
+              goals={goals}
               expenseCategories={categories.expense}
               baseCurrency={baseCurrency}
             />
@@ -183,6 +199,7 @@ export default function GoalsScreen({ navigation }) {
               onDelete={() => handleDelete(g)}
               onArchive={() => setGoalActive(g.id, true)}
               assets={assets}
+              goals={goals}
               expenseCategories={categories.expense}
               baseCurrency={baseCurrency}
               archived
@@ -205,6 +222,7 @@ function GoalCard({
   onDelete,
   onArchive,
   assets,
+  goals,
   expenseCategories,
   baseCurrency,
   archived = false,
@@ -212,6 +230,10 @@ function GoalCard({
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const meta = KIND_META[goal.kind];
+  const assetsForEdit = useMemo(
+    () => filterAssetsForGoalPicker(assets, goals, { excludeGoalId: goal.id }),
+    [assets, goals, goal.id],
+  );
   const {
     current, target, percent, status, daysLeft, monthlyNeeded,
   } = progress ?? {};
@@ -282,19 +304,32 @@ function GoalCard({
       <View style={styles.actionsRow}>
         {!isEditing ? (
           <>
-            <TouchableOpacity onPress={onEdit} style={styles.actionGhost}>
-              <Text style={styles.actionGhostText}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onArchive} style={styles.actionGhost}>
-              <Text style={styles.actionGhostText}>
-                {archived ? 'Reactivate' : 'Archive'}
-              </Text>
-            </TouchableOpacity>
+            <AppButton
+              label="Edit"
+              variant="ghost"
+              fullWidth={false}
+              onPress={onEdit}
+              style={styles.actionGhost}
+              textStyle={styles.actionGhostText}
+            />
+            <AppButton
+              label={archived ? 'Reactivate' : 'Archive'}
+              variant="ghost"
+              fullWidth={false}
+              onPress={onArchive}
+              style={styles.actionGhost}
+              textStyle={styles.actionGhostText}
+            />
           </>
         ) : (
-          <TouchableOpacity onPress={onCloseEdit} style={styles.actionGhost}>
-            <Text style={styles.actionGhostText}>Cancel edit</Text>
-          </TouchableOpacity>
+          <AppButton
+            label="Cancel edit"
+            variant="ghost"
+            fullWidth={false}
+            onPress={onCloseEdit}
+            style={styles.actionGhost}
+            textStyle={styles.actionGhostText}
+          />
         )}
       </View>
 
@@ -302,7 +337,8 @@ function GoalCard({
         <View style={{ marginTop: spacing.md }}>
           <GoalForm
             initialValues={goal}
-            assets={assets}
+            assets={assetsForEdit}
+            totalAssetCount={assets.length}
             expenseCategories={expenseCategories}
             submitLabel="Save changes"
             onSubmit={onSaveEdit}

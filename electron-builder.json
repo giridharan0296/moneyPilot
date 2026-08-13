@@ -1,6 +1,6 @@
 {
   "appId": "com.giridharan19.expensetracker.desktop",
-  "productName": "MyMoney",
+  "productName": "Worth",
   "copyright": "Copyright © 2026",
   "directories": {
     "output": "dist-desktop",
@@ -23,7 +23,7 @@
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "perMachine": false,
-    "shortcutName": "MyMoney"
+    "shortcutName": "Worth"
   },
   "mac": {
     "target": ["dmg"],

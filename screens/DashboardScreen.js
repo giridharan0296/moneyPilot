@@ -1,10 +1,7 @@
 import { useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react';
 import {
-  ActionSheetIOS,
-  Alert,
   DeviceEventEmitter,
   Dimensions,
-  Platform,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -13,6 +10,9 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import DateFilterBar from '../components/DateFilterBar';
+import SetupChecklist from '../components/SetupChecklist';
+import DashboardSection from '../components/DashboardSection';
+import HomeSectionsToolbar from '../components/HomeSectionsToolbar';
 import DashboardCashflowCard from '../components/DashboardCashflowCard';
 import SpendOverTimeChart from '../components/SpendOverTimeChart';
 import { useDateFilter } from '../contexts/DateFilterContext';
@@ -22,12 +22,15 @@ import { useTransactions } from '../contexts/TransactionsContext';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useBudgets } from '../contexts/BudgetContext';
 import { useTransfers } from '../contexts/TransfersContext';
+import { useLoans } from '../contexts/LoansContext';
 import { useGoals } from '../contexts/GoalsContext';
 import { useAiInsights } from '../contexts/AiInsightsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import BudgetProgressBar from '../components/BudgetProgressBar';
 import AppIcon from '../components/AppIcon';
-import { computeProgress, periodLabel } from '../lib/budget';
+import NavCard from '../components/NavCard';
+import QuickAddSheet from '../components/QuickAddSheet';
+import { budgetDisplayLabel, computeProgress, periodLabel } from '../lib/budget';
 import { goalsSummary } from '../lib/goals';
 import { upcomingOccurrence } from '../lib/recurring';
 import { buildMonthClose } from '../lib/monthClose';
@@ -40,6 +43,20 @@ import {
   lookupRateOrOne,
 } from '../lib/currency';
 import { computeAccountBalances } from '../lib/accountBalances';
+import { computeLoansLendingSummary } from '../lib/loansLendingSummary';
+import { KIND_META, kindLabel, transferSubtitle } from '../lib/transfers';
+import { useDemoRestore } from '../hooks/useDemoRestore';
+import { DEMO_RESTORE_MESSAGE_SHORT } from '../lib/demoRestore';
+import {
+  hasAnyTransactions,
+  hasUserConfiguredAccounts,
+  isSetupComplete,
+} from '../lib/setupChecklist';
+import {
+  broadcastDashboardSectionsBulk,
+  DASHBOARD_HOME_SECTION_KEYS,
+  persistDashboardSectionsBulk,
+} from '../lib/dashboardSections';
 
 export default function DashboardScreen() {
   const styles = useThemedStyles(makeStyles);
@@ -60,10 +77,10 @@ export default function DashboardScreen() {
   const netWorth = useNetWorth();
   const navigation = useNavigation();
 
-  // Chart width = screen minus dashboard container padding (16 each side)
+  // Chart width = screen minus dashboard container padding (20 each side)
   // minus card padding (14 each side).
   const spendChartWidth = useMemo(
-    () => Dimensions.get('window').width - 16 * 2 - 14 * 2,
+    () => Dimensions.get('window').width - 20 * 2 - 14 * 2,
     [],
   );
 
@@ -112,7 +129,70 @@ export default function DashboardScreen() {
     }
     return buckets;
   })();
+  const { loans } = useLoans();
   const { transfers } = useTransfers();
+
+  const [setupDismissed, setSetupDismissed] = useState(false);
+  const [currencyConfirmed, setCurrencyConfirmed] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEYS.setup_checklist_dismissed)
+      .then((v) => { if (v === '1') setSetupDismissed(true); })
+      .catch(() => {});
+    AsyncStorage.getItem(STORAGE_KEYS.setup_currency_confirmed)
+      .then((v) => { if (v === '1') setCurrencyConfirmed(true); })
+      .catch(() => {});
+  }, []);
+
+  const { loadDemoData } = useDemoRestore();
+  const hasUserAccounts = hasUserConfiguredAccounts(accounts);
+  const hasTransactions = hasAnyTransactions({ income, expenses, investments });
+  const setupComplete = isSetupComplete({
+    currencyConfirmed,
+    accounts,
+    income,
+    expenses,
+    investments,
+  });
+  const showSetupChecklist = ready && !setupDismissed && !setupComplete;
+
+  const dismissSetupChecklist = useCallback(() => {
+    setSetupDismissed(true);
+    AsyncStorage.setItem(STORAGE_KEYS.setup_checklist_dismissed, '1').catch(() => {});
+  }, []);
+
+  const markSetupFinished = useCallback(() => {
+    setCurrencyConfirmed(true);
+    setSetupDismissed(true);
+    AsyncStorage.multiSet([
+      [STORAGE_KEYS.setup_currency_confirmed, '1'],
+      [STORAGE_KEYS.setup_checklist_dismissed, '1'],
+    ]).catch(() => {});
+  }, []);
+
+  const exploreWithDemo = useCallback(() => {
+    loadDemoData({
+      message: DEMO_RESTORE_MESSAGE_SHORT,
+      onAfterLoad: markSetupFinished,
+    });
+  }, [loadDemoData, markSetupFinished]);
+
+  const openSearch = useCallback(() => {
+    navigation.navigate('More', { screen: 'Search', initial: false });
+  }, [navigation]);
+
+  const openAccounts = useCallback(() => {
+    navigation.navigate('More', { screen: 'Accounts', initial: false });
+  }, [navigation]);
+
+  const openSettingsAccountsData = useCallback(() => {
+    navigation.navigate('More', { screen: 'SettingsAccountsData', initial: false });
+  }, [navigation]);
+
+  const confirmCurrencyAndOpenSettings = useCallback(() => {
+    setCurrencyConfirmed(true);
+    AsyncStorage.setItem(STORAGE_KEYS.setup_currency_confirmed, '1').catch(() => {});
+    openSettingsAccountsData();
+  }, [openSettingsAccountsData]);
 
   // Auto-dismiss the banner after a while so it doesn't get stuck if the
   // user ignores it. Keeps the top of the Dashboard clean over time.
@@ -123,10 +203,11 @@ export default function DashboardScreen() {
   }, [lastSweep, clearLastSweep]);
 
   // ---- Date range filter (shared across the whole app) ----
-  const { filterByRange, isAllTime, label: rangeLabel, range } = useDateFilter();
+  const { filterByRange, isAllTime, label: rangeLabel, range, showMonthOf } = useDateFilter();
   const fIncome = filterByRange(income);
   const fExpenses = filterByRange(expenses);
   const fInvestments = filterByRange(investments);
+  const fTransfers = filterByRange(transfers);
 
   // ---- Derived totals (all against the filtered lists) ----
   // Sum in BASE currency (F9): each transaction contributes its
@@ -194,25 +275,20 @@ export default function DashboardScreen() {
     return { over, warn, safe, total: activeBudgets.length, worst };
   })();
 
-  // Transfers summary — count active lending / borrowing positions from
-  // the linked NetWorth items (source of truth). We show this strip only
-  // when there's activity; otherwise the Dashboard would sprawl.
-  const transfersSummary = (() => {
-    if (transfers.length === 0) return null;
-    // "Money lent out" = sum of assets whose category is 'lent'.
-    // Multi-currency: fold each row's base snapshot in.
-    const owedToYou = netWorth.assets
-      .filter((a) => a.categoryId === 'lent')
-      .reduce((s, a) => s + baseAmountOf(a, fxRates, baseCurrency, 'value'), 0);
-    // "You owe" for the transfers strip only counts liabilities auto-
-    // created by transfers ('borrowed' category) — mixing in home loans
-    // would misrepresent the "small personal loans" story.
-    const youOwe = netWorth.liabilities
-      .filter((l) => l.categoryId === 'borrowed')
-      .reduce((s, l) => s + baseAmountOf(l, fxRates, baseCurrency, 'outstanding'), 0);
-    if (owedToYou === 0 && youOwe === 0) return null;
-    return { owedToYou, youOwe };
-  })();
+  // Loans & lending — formal loans + transfer-linked Net Worth rows.
+  // Uses loan outstanding as source of truth; adds informal borrow rows
+  // that exist only on the Transfers side without double-counting mirrors.
+  const transfersSummary = useMemo(
+    () => computeLoansLendingSummary({
+      assets: netWorth.assets,
+      liabilities: netWorth.liabilities,
+      loans,
+      fxRates,
+      baseCurrency,
+    }),
+    [netWorth.assets, netWorth.liabilities, loans, fxRates, baseCurrency],
+  );
+  const showLoansLendingStrip = transfersSummary.hasActivity;
 
   // ---- Month-over-month spending trend ---------------------------------
   //
@@ -275,6 +351,11 @@ export default function DashboardScreen() {
       prevLabel: prevStart.toLocaleDateString(undefined, { month: 'short' }),
     };
   })();
+  const momTrendColor = momSpending?.delta > 0
+    ? incomeColor
+    : momSpending?.delta < 0
+      ? expenseColor
+      : themeColors.text.muted;
 
   // ---- Top spending categories (for the current filter window) --------
   //
@@ -298,7 +379,7 @@ export default function DashboardScreen() {
           amount,
           label: cat?.label ?? 'Uncategorized',
           emoji: cat?.emoji ?? '📌',
-          color: cat?.color ?? '#94a3b8',
+          color: cat?.color ?? themeColors.accent.chartFallback,
           percent: totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0,
         };
       })
@@ -349,12 +430,51 @@ export default function DashboardScreen() {
         income,
         expenses,
         investments,
+        transfers,
+        accounts,
         budgets,
         fxRates,
         baseCurrency,
       }),
-    [income, expenses, investments, budgets, fxRates, baseCurrency],
+    [income, expenses, investments, transfers, accounts, budgets, fxRates, baseCurrency],
   );
+
+  const monthClosePeek = useMemo(() => {
+    const saved = formatMoneyCurrency(monthClose.saved, baseCurrency, { decimals: 0 });
+    const rate = monthClose.savingsRate != null ? `${monthClose.savingsRate.toFixed(0)}% saved` : 'No income yet';
+    return `Saved ${saved} · ${rate} · ${monthClose.daysLeft === 0 ? 'last day' : `${monthClose.daysLeft}d left`}`;
+  }, [monthClose, baseCurrency]);
+
+  const spendingPeek = useMemo(() => {
+    const parts = [];
+    if (momSpending && (momSpending.thisSum > 0 || momSpending.prevSum > 0)) {
+      parts.push(`${momSpending.delta > 0 ? '+' : ''}${momSpending.percent.toFixed(0)}% vs last month`);
+    }
+    parts.push(`${formatMoneyCurrency(totalExpenses, baseCurrency, { decimals: 0 })} spent · ${rangeLabel}`);
+    if (topExpenseCategories[0]) {
+      parts.push(`Top: ${topExpenseCategories[0].emoji} ${topExpenseCategories[0].label}`);
+    }
+    return parts.join(' · ');
+  }, [momSpending, totalExpenses, baseCurrency, rangeLabel, topExpenseCategories]);
+
+  const upcomingPeek = useMemo(() => {
+    if (upcomingBills.length === 0) return 'Set up rent, salary, or SIP rules';
+    const due = billsDueToday > 0 ? `${billsDueToday} due today · ` : '';
+    const total = upcomingBillsTotal > 0
+      ? formatMoneyCurrency(upcomingBillsTotal, baseCurrency, { decimals: 0 })
+      : `${upcomingBills.length} upcoming`;
+    return `${due}${total} in next 14 days`;
+  }, [upcomingBills.length, billsDueToday, upcomingBillsTotal, baseCurrency]);
+
+  const expandAllHomeSections = useCallback(() => {
+    persistDashboardSectionsBulk(true);
+    broadcastDashboardSectionsBulk(true);
+  }, []);
+
+  const collapseAllHomeSections = useCallback(() => {
+    persistDashboardSectionsBulk(false);
+    broadcastDashboardSectionsBulk(false);
+  }, []);
 
   // ---- Backup nag (soft banner if last backup > 14 days / never) -----
   const BACKUP_NAG_DAYS = 14;
@@ -409,14 +529,51 @@ export default function DashboardScreen() {
     return null;
   })();
 
-  // Combined recent activity: tag each row with its type, then sort by date.
-  const recentActivity = [
-    ...fIncome.map((i) => ({ ...i, __type: 'income' })),
-    ...fExpenses.map((e) => ({ ...e, __type: 'expense' })),
-    ...fInvestments.map((v) => ({ ...v, __type: 'investment' })),
-  ]
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, 10);
+  // Combined recent activity: transactions + transfers, sorted by date.
+  const recentActivity = useMemo(
+    () => [
+      ...fIncome.map((i) => ({ ...i, __type: 'income' })),
+      ...fExpenses.map((e) => ({ ...e, __type: 'expense' })),
+      ...fInvestments.map((v) => ({ ...v, __type: 'investment' })),
+      ...fTransfers.map((t) => ({ ...t, __type: 'transfer' })),
+    ]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 10),
+    [fIncome, fExpenses, fInvestments, fTransfers],
+  );
+
+  const planningPeek = useMemo(() => {
+    const parts = [];
+    if (netWorth.assets.length > 0 || netWorth.liabilities.length > 0) {
+      parts.push(`NW ${formatMoneyCurrency(Math.abs(netWorth.summary.netWorth), baseCurrency, { decimals: 0 })}`);
+    }
+    if (heroGoal) {
+      parts.push(`${heroGoal.goal.emoji} ${(heroGoal.percent * 100).toFixed(0)}% of goal`);
+    } else if (goalsRoll?.count) {
+      parts.push(`${goalsRoll.count} active goal${goalsRoll.count === 1 ? '' : 's'}`);
+    }
+    if (budgetSummary) {
+      parts.push(`${budgetSummary.safe}/${budgetSummary.total} budgets OK`);
+    }
+    if (showLoansLendingStrip) {
+      parts.push(`Owed to you ${formatMoneyCurrency(transfersSummary.owedToYou, baseCurrency, { decimals: 0 })}`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : 'Goals, net worth, budgets, and lending';
+  }, [
+    netWorth, heroGoal, goalsRoll, budgetSummary, showLoansLendingStrip,
+    transfersSummary, baseCurrency,
+  ]);
+
+  const insightsPeek = useMemo(() => {
+    const parts = [];
+    if (aiConfigured && aiTopInsight) {
+      parts.push(`${aiInsights.length} AI insight${aiInsights.length === 1 ? '' : 's'}`);
+    } else if (aiConfigured) {
+      parts.push('Generate your first AI review');
+    }
+    parts.push(`${recentActivity.length} recent item${recentActivity.length === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+  }, [aiConfigured, aiTopInsight, aiInsights.length, recentActivity.length]);
 
   const isPositive = availableBalance >= 0;
 
@@ -426,6 +583,8 @@ export default function DashboardScreen() {
   //
   // Entry point is the header "+" — Income / Expense / Investment are
   // picked from an action sheet so the dashboard stays uncluttered.
+  const [addSheetVisible, setAddSheetVisible] = useState(false);
+
   const openQuickAdd = useCallback((type) => {
     if (type === 'investment') {
       navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
@@ -438,50 +597,52 @@ export default function DashboardScreen() {
   }, [navigation]);
 
   const showAddMenu = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Cancel', 'Income', 'Expense', 'Investment'],
-          cancelButtonIndex: 0,
-        },
-        (index) => {
-          if (index === 1) openQuickAdd('income');
-          else if (index === 2) openQuickAdd('expense');
-          else if (index === 3) openQuickAdd('investment');
-        },
-      );
-      return;
-    }
-    Alert.alert('Add transaction', 'What would you like to add?', [
-      { text: 'Income', onPress: () => openQuickAdd('income') },
-      { text: 'Expense', onPress: () => openQuickAdd('expense') },
-      { text: 'Investment', onPress: () => openQuickAdd('investment') },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setAddSheetVisible(true);
+  }, []);
+
+  const handleAddType = useCallback((type) => {
+    openQuickAdd(type);
   }, [openQuickAdd]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity
-          onPress={showAddMenu}
-          hitSlop={12}
-          style={{ paddingHorizontal: 12 }}
-          accessibilityRole="button"
-          accessibilityLabel="Add transaction"
-        >
-          <AppIcon
-            name="plus"
-            size={22}
-            color={themeColors.text.primary}
-            strokeWidth={2.4}
-          />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={openSearch}
+            hitSlop={12}
+            style={{ paddingHorizontal: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Search transactions"
+          >
+            <AppIcon
+              name="search"
+              size={21}
+              color={themeColors.text.primary}
+              strokeWidth={2.2}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={showAddMenu}
+            hitSlop={12}
+            style={{ paddingHorizontal: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Add transaction"
+          >
+            <AppIcon
+              name="plus"
+              size={22}
+              color={themeColors.text.primary}
+              strokeWidth={2.4}
+            />
+          </TouchableOpacity>
+        </View>
       ),
     });
-  }, [navigation, showAddMenu, themeColors.text.primary]);
+  }, [navigation, showAddMenu, openSearch, themeColors.text.primary]);
 
   return (
+    <>
     <ScrollView
       style={styles.root}
       contentContainerStyle={styles.container}
@@ -502,7 +663,7 @@ export default function DashboardScreen() {
           style={styles.recurringBanner}
         >
           <View style={styles.recurringBannerIcon}>
-            <AppIcon name="repeat" size={20} color="#0369a1" strokeWidth={2.2} />
+            <AppIcon name="repeat" size={20} color={themeColors.banner.recurringIcon} strokeWidth={2.2} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.recurringBannerTitle}>
@@ -518,12 +679,26 @@ export default function DashboardScreen() {
             hitSlop={12}
             style={styles.recurringBannerClose}
           >
-            <AppIcon name="x" size={14} color="#334155" strokeWidth={2.4} />
+            <AppIcon name="x" size={14} color={themeColors.banner.recurringCloseIcon} strokeWidth={2.4} />
           </TouchableOpacity>
         </TouchableOpacity>
       )}
 
-      {/* Global date filter — shared with all other screens */}
+      {showSetupChecklist && (
+        <SetupChecklist
+          baseCurrency={baseCurrency}
+          currencyConfirmed={currencyConfirmed}
+          hasUserAccounts={hasUserAccounts}
+          hasTransactions={hasTransactions}
+          onOpenAccounts={openAccounts}
+          onOpenSettings={confirmCurrencyAndOpenSettings}
+          onAddTransaction={showAddMenu}
+          onExploreWithDemo={exploreWithDemo}
+          onDismiss={dismissSetupChecklist}
+        />
+      )}
+
+      {/* Global date filter — shared with transaction surfaces and Reports */}
       <DateFilterBar />
 
       <DashboardCashflowCard
@@ -541,30 +716,38 @@ export default function DashboardScreen() {
         baseCurrency={baseCurrency}
       />
 
+      <HomeSectionsToolbar
+        sectionCount={DASHBOARD_HOME_SECTION_KEYS.length}
+        onExpandAll={expandAllHomeSections}
+        onCollapseAll={collapseAllHomeSections}
+      />
+
       {/* MONTH CLOSE — calendar month-to-date snapshot (income / spend /
           saved / rate). Independent of the date-filter chip so the
           story stays "how is this month going?". */}
-      {(monthClose.income > 0 || monthClose.expense > 0 || monthClose.invested > 0) && (
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() =>
-            navigation.navigate('More', { screen: 'Reports', initial: false })
-          }
-          style={styles.monthCloseCard}
+      {(
+        monthClose.income > 0
+        || monthClose.expense > 0
+        || monthClose.repayment > 0
+        || monthClose.invested > 0
+      ) && (
+        <DashboardSection
+          persistKey="dashboard.monthClose"
+          title={`${monthClose.monthLabel} snapshot`}
+          icon="calendar"
+          collapsedHint={monthClosePeek}
+          expandedSubtitle={`Day ${monthClose.dayOfMonth} · tap for full ${monthClose.monthLabel} report`}
+          defaultOpen
+          accent={primaryColor}
+          badge={monthClose.daysLeft === 0 ? 'Today' : `${monthClose.daysLeft}d left`}
         >
-          <View style={styles.monthCloseHeader}>
-            <View style={styles.monthCloseTitleRow}>
-              <AppIcon name="calendar" size={14} color={primaryColor} strokeWidth={2.2} />
-              <Text style={styles.monthCloseTitle}>
-                {monthClose.monthLabel.toUpperCase()} · DAY {monthClose.dayOfMonth}
-              </Text>
-            </View>
-            <Text style={styles.monthCloseDaysLeft}>
-              {monthClose.daysLeft === 0
-                ? 'Last day'
-                : `${monthClose.daysLeft}d left`}
-            </Text>
-          </View>
+        <NavCard
+          onPress={() => {
+            showMonthOf(new Date());
+            navigation.navigate('More', { screen: 'Reports', initial: false });
+          }}
+          style={styles.sectionBlock}
+        >
           <View style={styles.monthCloseGrid}>
             <View style={styles.monthCloseCell}>
               <Text style={styles.monthCloseLabel}>In</Text>
@@ -576,6 +759,12 @@ export default function DashboardScreen() {
               <Text style={styles.monthCloseLabel}>Spent</Text>
               <Text style={[styles.monthCloseValue, { color: expenseColor }]}>
                 {formatMoneyCurrency(monthClose.expense, baseCurrency)}
+              </Text>
+            </View>
+            <View style={styles.monthCloseCell}>
+              <Text style={styles.monthCloseLabel}>Repayment</Text>
+              <Text style={[styles.monthCloseValue, { color: investmentColor }]}>
+                {formatMoneyCurrency(monthClose.repayment, baseCurrency)}
               </Text>
             </View>
             <View style={styles.monthCloseCell}>
@@ -600,7 +789,7 @@ export default function DashboardScreen() {
           </View>
           {monthClose.invested > 0 ? (
             <Text style={styles.monthCloseSub}>
-              Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month
+              Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month (included in Saved)
               {monthClose.budget
                 ? ` · Budget “${monthClose.budget.label}” ${Math.round(monthClose.budget.percent)}% (${monthClose.budget.status})`
                 : ''}
@@ -610,31 +799,32 @@ export default function DashboardScreen() {
               Budget “{monthClose.budget.label}” {Math.round(monthClose.budget.percent)}% · {monthClose.budget.status}
             </Text>
           ) : null}
-        </TouchableOpacity>
+        </NavCard>
+        </DashboardSection>
       )}
 
-      {/* MONTH-OVER-MONTH SPENDING TREND — the single most actionable
-          number on the dashboard: "are you spending more or less than
-          you did last month, so far?". Compares equal windows (day-
-          of-month to day-of-month) so early in the month the number
-          isn't misleadingly small. Colour follows semantics — red
-          if trending up (bad), green if trending down (good).
-          Hidden when there's zero data in both months so we don't
-          show a lonely "0%" pill. */}
+      <DashboardSection
+        persistKey="dashboard.spendingInsights"
+        title="Spending"
+        icon="trending-up"
+        collapsedHint={spendingPeek}
+        expandedSubtitle="Trend, chart, and top categories for the filtered period"
+        defaultOpen
+        accent={expenseColor}
+      >
       {momSpending && (momSpending.thisSum > 0 || momSpending.prevSum > 0) && (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'Reports', initial: false })
           }
-          style={styles.momStrip}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.momHeader}>
             <View style={styles.momTitleRow}>
               <AppIcon
                 name={momSpending.delta > 0 ? 'trending-up' : 'trending-down'}
                 size={14}
-                color={momSpending.delta > 0 ? expenseColor : incomeColor}
+                color={momTrendColor}
                 strokeWidth={2.2}
               />
               <Text style={styles.momTitle}>Spending vs last month</Text>
@@ -655,7 +845,7 @@ export default function DashboardScreen() {
                 styles.momDeltaPill,
                 {
                   backgroundColor: withAlpha(
-                    momSpending.delta > 0 ? expenseColor : incomeColor,
+                    momTrendColor,
                     0.16,
                   ),
                 },
@@ -664,13 +854,13 @@ export default function DashboardScreen() {
               <AppIcon
                 name={momSpending.delta > 0 ? 'trending-up' : 'trending-down'}
                 size={12}
-                color={momSpending.delta > 0 ? expenseColor : incomeColor}
+                color={momTrendColor}
                 strokeWidth={2.4}
               />
               <Text
                 style={[
                   styles.momDeltaText,
-                  { color: momSpending.delta > 0 ? expenseColor : incomeColor },
+                  { color: momTrendColor },
                 ]}
               >
                 {momSpending.delta > 0 ? '+' : ''}
@@ -685,21 +875,33 @@ export default function DashboardScreen() {
                 ? `${formatMoneyCurrency(Math.abs(momSpending.delta), baseCurrency)} less than ${momSpending.prevLabel} at day ${momSpending.dayOfMonth}`
                 : `On pace with ${momSpending.prevLabel}`}
           </Text>
-        </TouchableOpacity>
+        </NavCard>
       )}
 
       {/* This chart keeps its own short-range control for trend exploration. */}
-      <View style={[styles.card, styles.chartCard]}>
-        <Text style={styles.cardTitle}>Spend over time</Text>
-        <Text style={styles.spendChartSub}>
-          Your daily spending trend
-        </Text>
-        <SpendOverTimeChart
-          expenses={expenses}
-          fxRates={fxRates}
-          baseCurrency={baseCurrency}
-          width={Math.max(260, spendChartWidth)}
-        />
+      <View style={[styles.sectionBlock, styles.chartCard]}>
+        <View style={styles.spendChartHeader}>
+          <View style={styles.spendChartIcon}>
+            <AppIcon name={'trending-up'} size={17} color={expenseColor} strokeWidth={2.3} />
+          </View>
+          <View style={styles.spendChartHeading}>
+            <Text style={[styles.cardTitle, styles.spendChartTitle]}>Spend over time</Text>
+            <Text style={styles.spendChartSub}>See pace, peaks, and cumulative cash outflow</Text>
+          </View>
+          <View style={styles.spendChartBadge}>
+            <View style={styles.spendChartBadgeDot} />
+            <Text style={styles.spendChartBadgeText}>LIVE TREND</Text>
+          </View>
+        </View>
+        <View style={styles.spendChartBody}>
+          <SpendOverTimeChart
+            expenses={expenses}
+            fxRates={fxRates}
+            baseCurrency={baseCurrency}
+            width={Math.max(260, spendChartWidth)}
+            lineColor={expenseColor}
+          />
+        </View>
       </View>
 
       {/* TOP SPENDING CATEGORIES — "where did the money go?" without
@@ -709,12 +911,11 @@ export default function DashboardScreen() {
           screen for the deep-dive. Hidden when there are no expenses
           in the current window (nothing to break down). */}
       {topExpenseCategories.length > 0 && (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'Reports', initial: false })
           }
-          style={styles.topCatCard}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.topCatHeader}>
             <View style={styles.topCatTitleRow}>
@@ -752,19 +953,27 @@ export default function DashboardScreen() {
               </Text>
             </View>
           ))}
-        </TouchableOpacity>
+        </NavCard>
       )}
 
-      {/* UPCOMING BILLS — next 14 days from active recurring rules.
-          "Today" rows get a stronger badge. Empty state nudges the user
-          to set up rent/salary/SIP rules. */}
+      </DashboardSection>
+
+      <DashboardSection
+        persistKey="dashboard.upcomingBills"
+        title="Upcoming bills"
+        icon="calendar"
+        collapsedHint={upcomingPeek}
+        expandedSubtitle="Next 14 days from recurring rules"
+        defaultOpen
+        accent={primaryColor}
+        badge={billsDueToday > 0 ? `${billsDueToday} today` : null}
+      >
       {upcomingBills.length > 0 ? (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'RecurringTransactions', initial: false })
           }
-          style={styles.upcomingCard}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.upcomingHeader}>
             <View style={styles.upcomingTitleRow}>
@@ -830,14 +1039,13 @@ export default function DashboardScreen() {
               </View>
             );
           })}
-        </TouchableOpacity>
+        </NavCard>
       ) : (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'RecurringTransactions', initial: false })
           }
-          style={styles.upcomingEmpty}
+          style={styles.sectionBlockDashed}
         >
           <AppIcon name="calendar" size={16} color={primaryColor} strokeWidth={2.2} />
           <View style={{ flex: 1 }}>
@@ -847,8 +1055,9 @@ export default function DashboardScreen() {
             </Text>
           </View>
           <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
-        </TouchableOpacity>
+        </NavCard>
       )}
+      </DashboardSection>
 
       {/* BACKUP NAG — soft reminder if export is stale / never done. */}
       {backupNag && !backupNagDismissed ? (
@@ -860,7 +1069,7 @@ export default function DashboardScreen() {
               navigation.navigate('More', { screen: 'Settings', initial: false })
             }
           >
-            <AppIcon name="download" size={16} color="#1d4ed8" strokeWidth={2.2} />
+            <AppIcon name="download" size={16} color={themeColors.banner.backupIcon} strokeWidth={2.2} />
             <View style={{ flex: 1 }}>
               <Text style={styles.backupNagTitle}>
                 {backupNag.never
@@ -885,28 +1094,21 @@ export default function DashboardScreen() {
         </View>
       ) : null}
 
-      {/* GOALS HERO — the single most-relevant goal right now. Prefers
-          a spend-cap that's ≥60% used (something to watch) over a
-          save-goal that's making progress. Progress bar uses the same
-          visual language as the budget strip so users learn one
-          pattern for "how am I doing on X". */}
+      <DashboardSection
+        persistKey="dashboard.planning"
+        title="Planning & balances"
+        icon="layers"
+        collapsedHint={planningPeek}
+        expandedSubtitle="Goals, net worth, budgets, and lending"
+        accent={primaryColor}
+      >
       {heroGoal && (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'Goals', initial: false })
           }
-          style={styles.goalsStrip}
+          style={styles.sectionBlockFlat}
         >
-          <View style={styles.goalsHeader}>
-            <View style={styles.goalsTitleRow}>
-              <AppIcon name="flag" size={14} color={incomeColor} strokeWidth={2.2} />
-              <Text style={styles.goalsTitle}>
-                Goals · {goalsRoll?.count ?? 0} active
-              </Text>
-            </View>
-            <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
-          </View>
           <View style={styles.goalsBody}>
             <Text style={styles.goalsLabel} numberOfLines={1}>
               {heroGoal.goal.emoji} {heroGoal.goal.name}
@@ -949,23 +1151,18 @@ export default function DashboardScreen() {
               )}
             </View>
           </View>
-        </TouchableOpacity>
+        </NavCard>
       )}
 
-      {/* NET WORTH STRIP — snapshot of what you own vs owe.
-          Distinct from the summary row above: that shows FLOW (income /
-          expense / invested over a date range). This shows STATE (what you're
-          worth right now, regardless of date filter). */}
       {(netWorth.assets.length > 0 || netWorth.liabilities.length > 0) ? (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('Invest', {
               screen: 'NetWorth',
               initial: false,
             })
           }
-          style={styles.networthStrip}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.networthLeft}>
             <View style={styles.networthLabelRow}>
@@ -999,17 +1196,16 @@ export default function DashboardScreen() {
               </Text>
             </View>
           </View>
-        </TouchableOpacity>
+        </NavCard>
       ) : (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('Invest', {
               screen: 'NetWorth',
               initial: false,
             })
           }
-          style={styles.networthEmpty}
+          style={styles.sectionBlockDashed}
         >
           <View style={styles.networthEmptyTitleRow}>
             <AppIcon name="gem" size={16} color={investmentColor} strokeWidth={2.2} />
@@ -1018,20 +1214,15 @@ export default function DashboardScreen() {
           <Text style={styles.networthEmptySub}>
             Tap to add assets and liabilities →
           </Text>
-        </TouchableOpacity>
+        </NavCard>
       )}
 
-      {/* BUDGET HEALTH STRIP — tap to open Budgets.
-          Two states:
-            - Some active budgets: show worst-off progress bar + counts.
-            - No budgets at all: teaser card that navigates to setup. */}
       {budgetSummary ? (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'Budgets', initial: false })
           }
-          style={styles.budgetStrip}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.budgetStripHeader}>
             <View style={styles.budgetStripTitleRow}>
@@ -1045,7 +1236,7 @@ export default function DashboardScreen() {
           {budgetSummary.worst && (
             <View style={styles.budgetStripInner}>
               <Text style={styles.budgetStripWorstLabel}>
-                {budgetLabelFor(budgetSummary.worst.budget, findCategory)}
+                {budgetDisplayLabel(budgetSummary.worst.budget, [], findCategory)}
                 {' · '}
                 {periodLabel(budgetSummary.worst.budget.period)}
               </Text>
@@ -1064,14 +1255,13 @@ export default function DashboardScreen() {
               {budgetSummary.warn > 0 && `${budgetSummary.warn} nearing limit`}
             </Text>
           )}
-        </TouchableOpacity>
+        </NavCard>
       ) : (
-        <TouchableOpacity
-          activeOpacity={0.7}
+        <NavCard
           onPress={() =>
             navigation.navigate('More', { screen: 'Budgets', initial: false })
           }
-          style={styles.budgetEmpty}
+          style={styles.sectionBlockDashed}
         >
           <View style={styles.budgetEmptyTitleRow}>
             <AppIcon name="target" size={16} color={expenseColor} strokeWidth={2.2} />
@@ -1080,19 +1270,15 @@ export default function DashboardScreen() {
           <Text style={styles.budgetEmptySub}>
             Cap Food, Fun, or overall spending each month →
           </Text>
-        </TouchableOpacity>
+        </NavCard>
       )}
 
-      {/* TRANSFERS STRIP — only visible when the user has ANY lending or
-          personal-loan activity. Two pills: money owed to you vs money
-          you owe. Tap navigates to the Transfers screen. */}
-      {transfersSummary && (
-        <TouchableOpacity
-          activeOpacity={0.7}
+      {showLoansLendingStrip && (
+        <NavCard
           onPress={() =>
-            navigation.navigate('More', { screen: 'Transfers', initial: false })
+            navigation.navigate('Transactions', { initialTab: 'transfer' })
           }
-          style={styles.transfersStrip}
+          style={styles.sectionBlockFlat}
         >
           <View style={styles.transfersHeader}>
             <View style={styles.transfersTitleRow}>
@@ -1116,16 +1302,23 @@ export default function DashboardScreen() {
               </Text>
             </View>
           </View>
-        </TouchableOpacity>
+        </NavCard>
       )}
+      </DashboardSection>
 
-      {/* AI is intentionally lower: money movement and planning stay first. */}
+      <DashboardSection
+        persistKey="dashboard.insightsActivity"
+        title="Insights & activity"
+        icon="sparkles"
+        collapsedHint={insightsPeek}
+        expandedSubtitle="AI review and your latest transactions"
+        accent={investmentColor}
+      >
       {aiConfigured && aiGeneratedAt && aiTopInsight ? (
-        <TouchableOpacity
-          activeOpacity={0.85}
+        <NavCard
           onPress={() => navigation.navigate('Insights')}
           style={styles.aiHero}
-          accessibilityRole="button"
+          scaleTo={0.99}
           accessibilityLabel={`AI Insights: ${aiInsights.length} to review, top: ${aiTopInsight.title}`}
         >
           <View style={styles.aiHeroHeader}>
@@ -1170,13 +1363,12 @@ export default function DashboardScreen() {
           <Text style={[styles.aiHeroFooter, { color: investmentColor }]}>
             View all {aiInsights.length} insight{aiInsights.length === 1 ? '' : 's'}
           </Text>
-        </TouchableOpacity>
+        </NavCard>
       ) : aiConfigured ? (
-        <TouchableOpacity
-          activeOpacity={0.85}
+        <NavCard
           onPress={() => navigation.navigate('Insights')}
           style={styles.aiEmpty}
-          accessibilityRole="button"
+          scaleTo={0.99}
           accessibilityLabel="Generate your first AI insights"
         >
           <View style={styles.aiEmptyIconBadge}>
@@ -1189,16 +1381,15 @@ export default function DashboardScreen() {
             </Text>
           </View>
           <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
-        </TouchableOpacity>
+        </NavCard>
       ) : null}
 
-      {/* RECENT ACTIVITY */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Recent Activity</Text>
+      <View style={styles.sectionBlockFlat}>
+        <Text style={styles.sectionInnerTitle}>Recent activity</Text>
         {recentActivity.length === 0 ? (
           <Text style={styles.emptyText}>
             {ready
-              ? 'No activity yet. Add income or expenses to see them here.'
+              ? 'No activity yet. Add income, expenses, or transfers to see them here.'
               : 'Loading…'}
           </Text>
         ) : (
@@ -1208,13 +1399,21 @@ export default function DashboardScreen() {
               item={item}
               findCategory={findCategory}
               findAccount={findAccount}
+              accounts={accounts}
               baseCurrency={baseCurrency}
               fxRates={fxRates}
             />
           ))
         )}
       </View>
+      </DashboardSection>
     </ScrollView>
+    <QuickAddSheet
+      visible={addSheetVisible}
+      onClose={() => setAddSheetVisible(false)}
+      onSelect={handleAddType}
+    />
+    </>
   );
 }
 
@@ -1222,12 +1421,24 @@ export default function DashboardScreen() {
 // One row in the "Recent Activity" list. Looks up its category via the
 // CATEGORY_LOOKUP defined above.
 // ----------------------------------------------------------------------------
-function ActivityRow({ item, findCategory, findAccount, baseCurrency, fxRates }) {
+function ActivityRow({ item, findCategory, findAccount, accounts, baseCurrency, fxRates }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+
+  if (item.__type === 'transfer') {
+    return (
+      <TransferActivityRow
+        transfer={item}
+        accounts={accounts}
+        baseCurrency={baseCurrency}
+      />
+    );
+  }
+
   const typeMeta = {
-    income:     { prefix: '+',  color: '#059669' },
-    expense:    { prefix: '-',  color: '#dc2626' },
-    investment: { prefix: '→ ', color: '#4f46e5' },
+    income:     { prefix: '+',  color: themeColors.accent.income },
+    expense:    { prefix: '-',  color: themeColors.accent.expense },
+    investment: { prefix: '→ ', color: themeColors.accent.investment },
   }[item.__type];
 
   const rowCurrency = item.currency ?? baseCurrency;
@@ -1282,6 +1493,58 @@ function ActivityRow({ item, findCategory, findAccount, baseCurrency, fxRates })
   );
 }
 
+function TransferActivityRow({ transfer, accounts, baseCurrency }) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const km = KIND_META[transfer.kind] ?? KIND_META.internal_transfer;
+  const cashPrefix = km.cashDirection === 'between'
+    ? '↔ '
+    : km.cashDirection === 'out'
+      ? '−'
+      : '+';
+  const cashColor = km.cashDirection === 'between'
+    ? km.color
+    : km.cashDirection === 'out'
+      ? themeColors.accent.expense
+      : themeColors.accent.income;
+  const title = transfer.kind === 'internal_transfer' || !transfer.counterpartyName
+    ? kindLabel(transfer.kind)
+    : `${kindLabel(transfer.kind)} · ${transfer.counterpartyName}`;
+  const subtitle = transfer.note?.trim()
+    || transferSubtitle(transfer, accounts)
+    || null;
+
+  return (
+    <View style={styles.activityRow}>
+      <View style={[styles.activityIconWrap, { backgroundColor: withAlpha(km.color, 0.14) }]}>
+        <AppIcon
+          name={km.icon ?? 'arrow-right-left'}
+          size={16}
+          color={km.color}
+          strokeWidth={2.2}
+        />
+      </View>
+      <View style={styles.activityMiddle}>
+        <Text style={styles.activityLabel} numberOfLines={1}>{title}</Text>
+        {subtitle ? (
+          <Text style={styles.activityNote} numberOfLines={1}>{subtitle}</Text>
+        ) : null}
+        <View style={styles.activityMetaRow}>
+          <Text style={styles.activityDate}>{formatDate(transfer.createdAt)}</Text>
+          <Text style={[styles.activityAccount, { color: km.color }]}>
+            · Transfer
+          </Text>
+        </View>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[styles.activityAmount, { color: cashColor }]}>
+          {cashPrefix}{formatMoneyCurrency(transfer.amount, baseCurrency, { decimals: 0 })}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function SeverityChip({ count, label, icon, color }) {
   const styles = useThemedStyles(makeStyles);
   return (
@@ -1292,15 +1555,6 @@ function SeverityChip({ count, label, icon, color }) {
       </Text>
     </View>
   );
-}
-
-// Resolves a display label for a budget row on the Dashboard strip.
-// Overall budgets (categoryId == null) get a distinct emoji + label so
-// they don't look like a nameless category.
-function budgetLabelFor(budget, findCategory) {
-  if (!budget.categoryId) return 'Overall';
-  const cat = findCategory('expense', budget.categoryId);
-  return cat ? `${cat.emoji} ${cat.label}` : '📌 Unknown';
 }
 
 // ---- Formatters ----
@@ -1335,32 +1589,32 @@ const makeStyles = (c) => ({
   recurringBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fffbeb',
+    backgroundColor: c.banner.recurringBg,
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#fde68a',
+    borderColor: c.banner.recurringBorder,
     gap: 10,
   },
   recurringBannerIcon: { marginRight: 4 },
   recurringBannerTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#92400e',
+    color: c.banner.recurringTitle,
   },
   recurringBannerSub: {
     fontSize: 11,
-    color: '#b45309',
+    color: c.banner.recurringSub,
     marginTop: 2,
   },
   recurringBannerClose: {
     width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#fef3c7',
+    backgroundColor: c.banner.recurringCloseBg,
     alignItems: 'center', justifyContent: 'center',
   },
   recurringBannerCloseText: {
-    color: '#92400e',
+    color: c.banner.recurringTitle,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -1556,9 +1810,10 @@ const makeStyles = (c) => ({
   },
   monthCloseGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
-  monthCloseCell: { flex: 1, gap: 2 },
+  monthCloseCell: { flexGrow: 1, flexBasis: '28%', gap: 2 },
   monthCloseLabel: {
     fontSize: 10,
     fontWeight: '700',
@@ -1581,14 +1836,14 @@ const makeStyles = (c) => ({
   backupNag: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#eff6ff',
+    backgroundColor: c.banner.backupBg,
     borderRadius: 14,
     paddingVertical: 10,
     paddingLeft: 12,
     paddingRight: 6,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: c.banner.backupBorder,
     gap: 4,
   },
   backupNagMain: {
@@ -1600,18 +1855,18 @@ const makeStyles = (c) => ({
   backupNagTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1e3a8a',
+    color: c.banner.backupTitle,
   },
   backupNagSub: {
     fontSize: 11,
-    color: '#1d4ed8',
+    color: c.banner.backupSub,
     marginTop: 2,
     lineHeight: 15,
   },
   backupNagCta: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#1d4ed8',
+    color: c.banner.backupCta,
   },
   backupNagDismiss: {
     padding: 8,
@@ -1980,10 +2235,95 @@ const makeStyles = (c) => ({
     borderWidth: 1,
     borderColor: c.border.subtle,
   },
-  chartCard: {
-    borderLeftWidth: 4,
-    borderLeftColor: c.accent.primary,
+  sectionBlock: {
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
   },
+  sectionBlockFlat: {
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  sectionBlockDashed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderStyle: 'dashed',
+  },
+  sectionInnerTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    color: c.text.muted,
+    marginBottom: 10,
+  },
+  chartCard: {
+    padding: 0,
+    overflow: 'hidden',
+    borderColor: c.border.strong,
+    shadowColor: c.palette.n900,
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  spendChartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: c.bg.surfaceAlt,
+    borderBottomWidth: 1,
+    borderBottomColor: c.border.subtle,
+  },
+  spendChartIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accent.expense + '14',
+    borderWidth: 1,
+    borderColor: c.accent.expense + '24',
+  },
+  spendChartHeading: { flex: 1, minWidth: 0 },
+  spendChartTitle: { marginBottom: 0 },
+  spendChartBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  spendChartBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: c.accent.expense,
+  },
+  spendChartBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: c.text.secondary,
+  },
+  spendChartBody: { paddingHorizontal: 14, paddingVertical: 14 },
   cardTitle: {
     fontSize: 14,
     fontWeight: '700',
@@ -1991,11 +2331,10 @@ const makeStyles = (c) => ({
     marginBottom: 12,
   },
   spendChartSub: {
-    fontSize: 12,
+    fontSize: 11,
     color: c.text.secondary,
-    marginTop: -6,
-    marginBottom: 12,
-    lineHeight: 17,
+    marginTop: 3,
+    lineHeight: 15,
   },
 
   // Activity list
@@ -2007,6 +2346,14 @@ const makeStyles = (c) => ({
     borderTopColor: c.border.subtle,
   },
   activityEmoji: { fontSize: 22, marginRight: 10 },
+  activityIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
   activityMiddle: { flex: 1 },
   activityLabelRow: { flexDirection: 'row', alignItems: 'center' },
   activityLabel: { fontSize: 14, fontWeight: '600', color: c.text.primary },

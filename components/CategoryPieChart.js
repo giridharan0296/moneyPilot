@@ -1,38 +1,137 @@
-import { Text, View } from 'react-native';
-import Svg, { Circle, G } from 'react-native-svg';
+import { useMemo, useState } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import Svg, { G, Path, Rect } from 'react-native-svg';
 import { useSettings } from '../contexts/SettingsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { radii, spacing } from '../lib/theme';
 
-// A donut chart drawn with SVG.
-//
-// Trick used: we render one <Circle> per segment, all with the SAME radius
-// and center. We use `strokeDasharray` to control the length of each arc,
-// and `strokeDashoffset` to shift where each arc starts on the circle.
-// The circles stack on top of each other, giving the illusion of a
-// segmented ring.
-//
-// This is exactly the same technique used for progress rings on the web.
-//
-// Props:
-//   data:  [{ label, value, color }]
-//   size:  outer diameter (px)
-//   thickness: ring thickness (px)
+// Interactive donut chart — tap a slice (or legend row) to pop it out and
+// show amount + % in the centre. Percentages live in the legend only.
+
+const SEGMENT_GAP = 2.2;
+const POP_OFFSET = 12;
+const POP_PADDING = POP_OFFSET + 6;
+
+function polarToCartesian(cx, cy, radius, angleDeg) {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(rad),
+    y: cy + radius * Math.sin(rad),
+  };
+}
+
+function describeDonutSegment(cx, cy, innerR, outerR, startAngle, endAngle) {
+  if (endAngle - startAngle >= 359.99) {
+    endAngle = startAngle + 359.99;
+  }
+  const outerStart = polarToCartesian(cx, cy, outerR, startAngle);
+  const outerEnd = polarToCartesian(cx, cy, outerR, endAngle);
+  const innerEnd = polarToCartesian(cx, cy, innerR, endAngle);
+  const innerStart = polarToCartesian(cx, cy, innerR, startAngle);
+  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerEnd.x} ${innerEnd.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
+    'Z',
+  ].join(' ');
+}
+
+function formatPercent(pct) {
+  if (pct < 10) return `${pct.toFixed(1)}%`;
+  return `${Math.round(pct)}%`;
+}
+
+function formatCenterAmount(value, baseCurrency) {
+  const full = formatMoneyCurrency(value, baseCurrency, { decimals: 0 });
+  if (full.length > 11) {
+    return formatMoneyCurrency(value, baseCurrency, { decimals: 0, compact: true });
+  }
+  return full;
+}
+
+function buildSegments(data, cx, cy, innerR, outerR, gapDeg = SEGMENT_GAP) {
+  const total = data.reduce((sum, d) => sum + d.value, 0);
+  if (total <= 0) return { total: 0, segments: [] };
+
+  const sliceCount = data.filter((d) => d.value > 0).length;
+  const gap = sliceCount > 1 ? gapDeg : 0;
+  let angle = 0;
+
+  const segments = data.map((d, index) => {
+    const fraction = d.value / total;
+    const sweep = Math.max(0, fraction * 360 - gap);
+    const startAngle = angle + gap / 2;
+    const endAngle = startAngle + sweep;
+    angle = endAngle + gap / 2;
+    const midAngle = startAngle + sweep / 2;
+    const popRad = ((midAngle - 90) * Math.PI) / 180;
+    return {
+      index,
+      color: d.color,
+      label: d.label,
+      value: d.value,
+      fraction,
+      percent: fraction * 100,
+      startAngle,
+      endAngle,
+      midAngle,
+      popDx: Math.cos(popRad) * POP_OFFSET,
+      popDy: Math.sin(popRad) * POP_OFFSET,
+      path: describeDonutSegment(cx, cy, innerR, outerR, startAngle, endAngle),
+    };
+  });
+  return { total, segments };
+}
+
 export default function CategoryPieChart({
   data,
-  size = 180,
-  thickness = 26,
+  size = 188,
+  thickness = 30,
   emptyLabel = 'No spending in this period',
   emptyHint = 'Try widening the date range.',
+  selectedIndex: controlledIndex,
+  onSelectedIndexChange,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { baseCurrency } = useSettings();
+  const [internalIndex, setInternalIndex] = useState(null);
+  const selectedIndex = controlledIndex !== undefined ? controlledIndex : internalIndex;
+
+  const setSelectedIndex = (index) => {
+    if (onSelectedIndexChange) onSelectedIndexChange(index);
+    else setInternalIndex(index);
+  };
+
   const total = data.reduce((sum, d) => sum + d.value, 0);
+  const canvasSize = size + POP_PADDING * 2;
+  const cx = canvasSize / 2;
+  const cy = canvasSize / 2;
+  const outerR = size / 2 - 4;
+  const innerR = outerR - thickness;
+  const sliceStroke = themeColors.bg.canvas;
+
+  const { segments } = useMemo(
+    () => buildSegments(data, cx, cy, innerR, outerR),
+    [data, cx, cy, innerR, outerR],
+  );
+
+  const selected = selectedIndex != null ? segments[selectedIndex] : null;
+  const holeDiameter = innerR * 2;
+  const hubInset = 14;
+  const selectedBorder = 2;
+  const borderPad = selected ? selectedBorder * 2 + 4 : 0;
+  const maxHubSize = holeDiameter - hubInset * 2 - borderPad;
+  const hubWidth = Math.min(maxHubSize, innerR * (selected ? 1.14 : 0.82));
+  const hubHeight = Math.min(
+    maxHubSize,
+    selected ? innerR * 1.08 : innerR * 0.74,
+  );
+
   if (total <= 0) {
-    // Render an inline empty state INSIDE the ring's footprint. Returning
-    // null used to leave the surrounding ReportsScreen card with a legend
-    // and totals strip but no chart, which read as a UI bug when the user
-    // narrowed the filter to a period with no expenses.
     return (
       <View style={{ alignItems: 'center' }}>
         <View
@@ -48,86 +147,423 @@ export default function CategoryPieChart({
     );
   }
 
-  const radius = (size - thickness) / 2;
-  const cx = size / 2;
-  const cy = size / 2;
-  const circumference = 2 * Math.PI * radius;
-
-  // Compute cumulative fraction so each segment starts where the last ended.
-  let cumulativeFraction = 0;
-  const segments = data.map((d) => {
-    const fraction = d.value / total;
-    const dashLength = fraction * circumference;
-    // Offset shifts the arc's starting point around the circle.
-    // Negative because SVG dashoffset moves clockwise when negative.
-    const dashOffset = -cumulativeFraction * circumference;
-    cumulativeFraction += fraction;
-    return {
-      color: d.color,
-      dashLength,
-      dashOffset,
-    };
-  });
-
-  return (
-    <View style={{ alignItems: 'center' }}>
-      <View style={{ width: size, height: size }}>
-        <Svg width={size} height={size}>
-          {/* rotate -90deg so the ring starts at the top (12 o'clock) */}
-          <G rotation={-90} originX={cx} originY={cy}>
-            {segments.map((s, i) => (
-              <Circle
-                key={i}
-                cx={cx}
-                cy={cy}
-                r={radius}
-                stroke={s.color}
-                strokeWidth={thickness}
-                fill="transparent"
-                strokeDasharray={`${s.dashLength} ${circumference}`}
-                strokeDashoffset={s.dashOffset}
-                strokeLinecap="butt"
+  const chartBody = (
+    <View style={{ width: canvasSize, height: canvasSize, position: 'relative' }}>
+      <Svg width={canvasSize} height={canvasSize}>
+        <Rect
+          x={0}
+          y={0}
+          width={canvasSize}
+          height={canvasSize}
+          fill="transparent"
+          onPress={() => {
+            if (selectedIndex != null) setSelectedIndex(null);
+          }}
+        />
+        {segments.map((seg) => {
+          const isSelected = selectedIndex === seg.index;
+          const isDimmed = selectedIndex != null && !isSelected;
+          const tx = isSelected ? seg.popDx : 0;
+          const ty = isSelected ? seg.popDy : 0;
+          return (
+            <G
+              key={seg.index}
+              transform={tx || ty ? `translate(${tx}, ${ty})` : undefined}
+            >
+              <Path
+                d={seg.path}
+                fill={seg.color}
+                stroke={sliceStroke}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                opacity={isDimmed ? 0.28 : 1}
+                onPress={() => setSelectedIndex(isSelected ? null : seg.index)}
               />
-            ))}
-          </G>
-        </Svg>
-        {/* Center label overlaid on top of the SVG */}
-        <View style={[styles.centerLabel, { width: size, height: size }]}>
-          <Text style={styles.centerHint}>TOTAL</Text>
-          <Text style={styles.centerValue}>
-            {formatMoneyCurrency(total, baseCurrency, { decimals: 2 })}
-          </Text>
+            </G>
+          );
+        })}
+      </Svg>
+      <View style={[styles.centerLabel, { width: canvasSize, height: canvasSize }]} pointerEvents="none">
+        <View
+          style={[
+            styles.centerHub,
+            {
+              width: hubWidth,
+              height: hubHeight,
+            },
+            selected && styles.centerHubSelected,
+            selected && {
+              borderColor: selected.color,
+              backgroundColor: `${selected.color}18`,
+            },
+          ]}
+        >
+          {selected ? (
+            <>
+              <Text
+                style={styles.centerSliceLabel}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+              >
+                {selected.label}
+              </Text>
+              <Text
+                style={styles.centerValueSelected}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {formatCenterAmount(selected.value, baseCurrency)}
+              </Text>
+              <Text
+                style={[styles.centerPercent, { color: selected.color }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+              >
+                {formatPercent(selected.percent)}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.centerHint}>TOTAL</Text>
+              <Text
+                style={styles.centerValue}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {formatCenterAmount(total, baseCurrency)}
+              </Text>
+            </>
+          )}
         </View>
       </View>
     </View>
   );
+
+  return (
+    <View
+      style={{ alignItems: 'center' }}
+      accessibilityRole="image"
+      accessibilityLabel="Category breakdown chart"
+    >
+      {chartBody}
+    </View>
+  );
 }
 
-function formatMoney(n) {
-  if (!isFinite(n)) return '0.00';
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+/** Shared legend with proportion bars — syncs with chart selection. */
+export function PieLegendList({
+  rows,
+  total: totalProp,
+  baseCurrency,
+  selectedIndex,
+  onSelect,
+  maxItems,
+  style,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const total = totalProp ?? rows.reduce((s, r) => s + r.value, 0);
+  const visible = maxItems ? rows.slice(0, maxItems) : rows;
+
+  return (
+    <View style={[styles.legendList, style]}>
+      {visible.map((r, index) => {
+        const selected = selectedIndex === index;
+        const pct = total > 0 ? (r.value / total) * 100 : 0;
+        const key = r.categoryId ?? r.id ?? `${r.label}-${index}`;
+        return (
+          <Pressable
+            key={key}
+            onPress={() => onSelect(selected ? null : index)}
+            style={[
+              styles.legendItem,
+              selected && styles.legendItemSelected,
+              selected && { borderLeftColor: r.color },
+            ]}
+          >
+            <View style={styles.legendHeader}>
+              <View style={[
+                styles.legendSwatch,
+                { backgroundColor: r.color },
+                selected && styles.legendSwatchSelected,
+              ]}
+              />
+              <View style={styles.legendTextCol}>
+                <Text
+                  style={[styles.legendLabel, selected && styles.legendLabelSelected]}
+                  numberOfLines={1}
+                >
+                  {r.emoji ? `${r.emoji} ` : ''}{r.label}
+                </Text>
+                {selected && (
+                  <Text style={[styles.legendAmount, styles.legendAmountSelected]} numberOfLines={1}>
+                    {formatMoneyCurrency(r.value, baseCurrency, { decimals: 0 })}
+                  </Text>
+                )}
+              </View>
+              <View style={styles.legendPercentCol}>
+                <Text
+                  style={[
+                    styles.legendPercent,
+                    selected && { color: r.color },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {formatPercent(pct)}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${Math.max(pct, 2)}%`,
+                    backgroundColor: r.color,
+                    opacity: selected ? 1 : 0.72,
+                  },
+                ]}
+              />
+            </View>
+          </Pressable>
+        );
+      })}
+      {maxItems && rows.length > maxItems && (
+        <Text style={styles.legendMore}>
+          +{rows.length - maxItems} more categories
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/** Chart + synced legend — used on Reports breakdown cards. */
+export function PieBreakdownView({
+  rows,
+  baseCurrency,
+  size = 200,
+  thickness = 34,
+  emptyLabel,
+  emptyText,
+  maxLegend = 8,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const [selectedIndex, setSelectedIndex] = useState(null);
+
+  if (!rows?.length) {
+    return <Text style={styles.emptyInline}>{emptyText}</Text>;
+  }
+
+  const data = rows.map((r) => ({
+    label: r.label,
+    value: r.value,
+    color: r.color,
+  }));
+  const total = rows.reduce((s, x) => s + x.value, 0);
+
+  return (
+    <Pressable
+      style={styles.pieBreakdown}
+      onPress={() => {
+        if (selectedIndex != null) setSelectedIndex(null);
+      }}
+    >
+      <View style={styles.chartCol}>
+        <CategoryPieChart
+          data={data}
+          size={size}
+          thickness={thickness}
+          emptyLabel={emptyLabel}
+          selectedIndex={selectedIndex}
+          onSelectedIndexChange={setSelectedIndex}
+        />
+      </View>
+      <PieLegendList
+        rows={rows}
+        total={total}
+        baseCurrency={baseCurrency}
+        selectedIndex={selectedIndex}
+        onSelect={setSelectedIndex}
+        maxItems={maxLegend}
+        style={styles.legendFullWidth}
+      />
+    </Pressable>
+  );
 }
 
 const makeStyles = (c) => ({
+  pieBreakdown: {
+    gap: spacing.md,
+    minWidth: 0,
+  },
+  chartCol: {
+    alignItems: 'center',
+  },
+  legendFullWidth: {
+    width: '100%',
+  },
+  legendList: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.sm,
+  },
+  legendItem: {
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.sm,
+    paddingLeft: spacing.sm + 2,
+    borderRadius: radii.md,
+    borderLeftWidth: 3,
+    borderLeftColor: 'transparent',
+    overflow: 'hidden',
+  },
+  legendItemSelected: {
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderLeftWidth: 3,
+  },
+  legendHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+  legendTextCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  legendSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 3,
+    flexShrink: 0,
+  },
+  legendSwatchSelected: {
+    width: 12,
+    height: 12,
+    borderRadius: 4,
+  },
+  legendLabel: {
+    fontSize: 12,
+    color: c.text.primary,
+    fontWeight: '600',
+  },
+  legendLabelSelected: {
+    fontWeight: '800',
+  },
+  legendAmount: {
+    fontSize: 10,
+    color: c.text.secondary,
+    fontWeight: '700',
+  },
+  legendAmountSelected: {
+    color: c.text.primary,
+    fontWeight: '800',
+  },
+  legendPercentCol: {
+    width: 44,
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  legendPercent: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: c.text.secondary,
+    textAlign: 'right',
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: c.border.subtle,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  legendMore: {
+    fontSize: 11,
+    color: c.text.muted,
+    fontStyle: 'italic',
+    marginTop: 2,
+    paddingLeft: spacing.sm,
+  },
+  emptyInline: {
+    fontSize: 13,
+    color: c.text.muted,
+    fontStyle: 'italic',
+  },
   centerLabel: {
     position: 'absolute',
+    top: 0,
+    left: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  centerHub: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: radii.md,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  centerHubSelected: {
+    borderWidth: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+  },
   centerHint: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '800',
     color: c.text.muted,
-    letterSpacing: 1,
+    letterSpacing: 1.2,
+    marginBottom: 2,
+    textAlign: 'center',
+    width: '100%',
+  },
+  centerSliceLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: c.text.secondary,
+    textAlign: 'center',
+    lineHeight: 11,
+    marginBottom: 2,
+    width: '100%',
   },
   centerValue: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '800',
     color: c.text.primary,
+    textAlign: 'center',
+    lineHeight: 17,
+    width: '100%',
+  },
+  centerValueSelected: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: c.text.primary,
+    textAlign: 'center',
+    lineHeight: 16,
+    width: '100%',
+  },
+  centerPercent: {
+    fontSize: 11,
+    fontWeight: '800',
     marginTop: 2,
+    textAlign: 'center',
+    width: '100%',
+    lineHeight: 13,
   },
   emptyRing: {
     borderWidth: 2,
@@ -135,7 +571,7 @@ const makeStyles = (c) => ({
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.xl,
   },
   emptyLabel: {
     fontSize: 13,
@@ -147,6 +583,6 @@ const makeStyles = (c) => ({
     fontSize: 11,
     color: c.text.muted,
     textAlign: 'center',
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
 });

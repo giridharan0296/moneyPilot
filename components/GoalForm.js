@@ -9,8 +9,9 @@ import {
 } from 'react-native';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import AmountCalculatorButton from './AmountCalculatorButton';
 
-import { KIND_META, KINDS } from '../lib/goals';
+import { KIND_META, KINDS, assetPickerTag } from '../lib/goals';
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
@@ -29,6 +30,7 @@ const EMOJI_SUGGESTIONS = [
 export default function GoalForm({
   initialValues = null,
   assets = [],
+  totalAssetCount = null,
   expenseCategories = [],
   submitLabel = 'Save goal',
   onSubmit,
@@ -170,6 +172,12 @@ export default function GoalForm({
         </>
       )}
 
+      {kind === 'spend_cap' && (
+        <Text style={styles.budgetHint}>
+          For monthly limits, use Budgets instead.
+        </Text>
+      )}
+
       <Text style={styles.label}>Goal name</Text>
       <TextInput
         style={styles.input}
@@ -202,35 +210,48 @@ export default function GoalForm({
       </ScrollView>
 
       <Text style={styles.label}>Target amount (₹)</Text>
-      <TextInput
-        style={styles.input}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        placeholder="e.g. 500000"
-        placeholderTextColor={themeColors.text.muted}
-      />
-
+      <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="decimal-pad"
+          placeholder="e.g. 500000"
+          placeholderTextColor={themeColors.text.muted}
+        />
+      </AmountCalculatorButton>
       {kind === 'save' && (
         <>
           <Text style={styles.label}>Assets that count toward this goal</Text>
           {assets.length === 0 ? (
             <Text style={styles.emptyHint}>
-              Add an asset in Net Worth first (e.g. a savings account).
+              {(totalAssetCount ?? 0) > 0
+                ? 'Every Net Worth asset is already linked to another goal. Edit or archive that goal to free an asset.'
+                : 'Add an asset in Net Worth first (e.g. a savings account or synced stock).'}
             </Text>
           ) : (
             <View style={styles.chipWrap}>
               {assets.map((a) => {
                 const active = linkedAssetIds.includes(a.id);
+                const tag = assetPickerTag(a);
                 return (
                   <TouchableOpacity
                     key={a.id}
                     onPress={() => toggle(linkedAssetIds, setLinkedAssetIds, a.id)}
                     style={[styles.chip, active && styles.chipActive]}
                   >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                      {a.name}
-                    </Text>
+                    <View style={styles.chipInner}>
+                      <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                        {a.name}
+                      </Text>
+                      {tag ? (
+                        <View style={[styles.assetTag, active && styles.assetTagActive]}>
+                          <Text style={[styles.assetTagText, active && styles.assetTagTextActive]}>
+                            {tag}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </TouchableOpacity>
                 );
               })}
@@ -462,6 +483,40 @@ const makeStyles = (c) => ({
   chipActive: {
     backgroundColor: c.accent.primary,
     borderColor: c.accent.primary,
+  },
+  chipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  assetTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: c.bg.canvas,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  assetTagActive: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  assetTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: c.text.secondary,
+    letterSpacing: 0.2,
+  },
+  assetTagTextActive: {
+    color: c.text.onHero,
+  },
+  budgetHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: c.text.secondary,
+    marginTop: 8,
+    marginBottom: 2,
+    fontStyle: 'italic',
   },
   chipText: {
     fontSize: 12,

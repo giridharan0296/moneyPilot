@@ -44,11 +44,11 @@ import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { AGE_BANDS, CAPS, compareRegimes } from '../lib/tax';
 import { radii, spacing } from '../lib/theme';
-import { pickFile } from '../lib/openFile';
-import { extractPdfText } from '../lib/pdfExtract';
-import { parsePayslip, PAYSLIP_FIELDS } from '../lib/parsePayslip';
+import { PAYSLIP_PDF_ALERTS, readPayslipPdf } from '../lib/readPayslipPdf';
 import AppIcon from '../components/AppIcon';
+import AmountCalculatorButton from '../components/AmountCalculatorButton';
 import HelpSheet from '../components/HelpSheet';
+import PayslipReviewDialog from '../components/PayslipReviewDialog';
 
 // FY dropdown values (only 2025-26 is modeled today; a v2 could extend
 // SLABS by FY and switch based on the selection).
@@ -194,45 +194,20 @@ export default function TaxCalculatorScreen() {
   const handleUploadPdf = async () => {
     setPdfPhase('reading');
     try {
-      const picked = await pickFile({ mimeTypes: ['application/pdf'] });
-      if (picked.cancelled) {
+      const result = await readPayslipPdf();
+      if (result.cancelled) {
         setPdfPhase('idle');
         return;
       }
-      setPdfFileName(picked.name || 'payslip.pdf');
-      // Pass the whole picked object — the web extractor uses
-      // readBase64 / uri, the native extractor uses uri directly.
-      const { text, error, message } = await extractPdfText(picked);
-
-      if (error === 'encrypted') {
+      if (result.error) {
         setPdfPhase('idle');
-        alertUser(
-          'Password-protected PDF',
-          'This payslip is encrypted. Unlock it in your PDF viewer '
-          + '(usually last 4 of your PAN + your DOB), export/save as '
-          + 'an unlocked PDF, then upload that.',
-        );
+        const spec = PAYSLIP_PDF_ALERTS[result.error];
+        if (spec) alertUser(spec.title, spec.message);
+        else alertUser('Couldn\'t read the PDF', result.message ?? 'Unknown error while extracting text.');
         return;
       }
-      if (error === 'empty' || (!error && (!text || !text.trim()))) {
-        setPdfPhase('idle');
-        alertUser(
-          'No text found in PDF',
-          'This looks like a scanned image PDF — we can\'t read text '
-          + 'from images. Try downloading a fresh digital payslip '
-          + 'directly from your payroll portal, or enter the values '
-          + 'manually below.',
-        );
-        return;
-      }
-      if (error === 'unknown') {
-        setPdfPhase('idle');
-        alertUser('Couldn\'t read the PDF', message ?? 'Unknown error while extracting text.');
-        return;
-      }
-
-      const parsed = parsePayslip(text);
-      setPdfParseResult(parsed);
+      setPdfFileName(result.fileName);
+      setPdfParseResult(result.parsed);
       setPdfPhase('review');
     } catch (e) {
       setPdfPhase('idle');
@@ -527,6 +502,7 @@ export default function TaxCalculatorScreen() {
         visible={pdfPhase === 'review'}
         fileName={pdfFileName}
         result={pdfParseResult}
+        mode="tax"
         onClose={closePdfReview}
         onApply={applyPdfValues}
       />
@@ -822,170 +798,6 @@ function AutoFillDialog({ visible, total, onClose, onGross, onTakeHome }) {
 }
 
 // ---------------------------------------------------------------------------
-// Payslip review dialog
-// ---------------------------------------------------------------------------
-
-function PayslipReviewDialog({ visible, fileName, result, onClose, onApply }) {
-  const styles = useThemedStyles(makeStyles);
-  if (!result) {
-    return (
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={onClose}
-      >
-        <View style={styles.modalScrim} />
-      </Modal>
-    );
-  }
-
-  const { fields, summary, warnings } = result;
-  const nothingFound = summary.detected.length === 0;
-
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <TouchableOpacity
-        style={styles.modalScrim}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity activeOpacity={1} style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Review extracted values</Text>
-          <Text style={styles.modalSub} numberOfLines={2}>
-            From <Text style={{ fontWeight: '700' }}>{fileName}</Text>
-            {' — '}
-            verify these before applying. Anything wrong? Edit inline after.
-          </Text>
-
-          {/* Extracted rows — one per canonical field, showing amount
-              (with the alias that matched + the source line) or
-              "not detected". The source line lets the user (and me,
-              when debugging) see WHICH row on the payslip was picked
-              — usually enough to diagnose a wrong number. */}
-          <ScrollView
-            style={styles.reviewList}
-            contentContainerStyle={{ paddingVertical: 4 }}
-            showsVerticalScrollIndicator
-          >
-            {PAYSLIP_FIELDS
-              .filter((f) => f.target === 'earning')
-              .map((f) => (
-                <ReviewRow key={f.key} field={f} hit={fields[f.key]} />
-              ))}
-          </ScrollView>
-
-          {/* Also-detected (Deductions column) — informational only.
-              Payslip mode inputs are Earnings-only; we surface TDS/PF
-              so the user knows the parser saw them, and can switch to
-              Take-home mode manually if they want to use those. */}
-          {(fields.tds?.amount || fields.pf?.amount) && (
-            <View style={styles.reviewFooter}>
-              <Text style={styles.reviewFooterLabel}>
-                Also detected (Deductions side — for Take-home mode):
-              </Text>
-              {fields.tds?.amount ? (
-                <>
-                  <Text style={styles.reviewFooterRow}>
-                    · TDS ₹{Math.round(fields.tds.amount).toLocaleString('en-IN')}/mo
-                  </Text>
-                  <Text style={styles.reviewFooterLine} numberOfLines={1}>
-                    &nbsp;&nbsp;from: {fields.tds.line}
-                  </Text>
-                </>
-              ) : null}
-              {fields.pf?.amount ? (
-                <>
-                  <Text style={styles.reviewFooterRow}>
-                    · PF  ₹{Math.round(fields.pf.amount).toLocaleString('en-IN')}/mo
-                  </Text>
-                  <Text style={styles.reviewFooterLine} numberOfLines={1}>
-                    &nbsp;&nbsp;from: {fields.pf.line}
-                  </Text>
-                </>
-              ) : null}
-            </View>
-          )}
-
-          {warnings.length > 0 && (
-            <View style={styles.reviewWarnBox}>
-              {warnings.map((w, i) => (
-                <View key={i} style={styles.reviewWarnRow}>
-                  <AppIcon name="alert-triangle" size={12} color="#b45309" strokeWidth={2} />
-                  <Text style={styles.reviewWarnText}>{w}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          <View style={styles.modalBtnRow}>
-            <View style={{ flex: 1 }} />
-            <TouchableOpacity
-              style={styles.modalCancel}
-              onPress={onClose}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.modalCancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.modalApply,
-                nothingFound && styles.modalApplyDisabled,
-              ]}
-              onPress={onApply}
-              disabled={nothingFound}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.modalApplyText}>
-                {nothingFound ? 'Nothing to apply' : 'Apply values'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
-  );
-}
-
-function ReviewRow({ field, hit }) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <View style={styles.reviewRow}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.reviewRowLabel}>{field.label}</Text>
-        {hit ? (
-          <>
-            <Text style={styles.reviewRowMatch} numberOfLines={2}>
-              Matched: {hit.matched}
-            </Text>
-            <Text style={styles.reviewRowLine} numberOfLines={2}>
-              from: {hit.line}
-            </Text>
-          </>
-        ) : (
-          <Text style={styles.reviewRowMissing}>Not detected</Text>
-        )}
-      </View>
-      <Text
-        style={[
-          styles.reviewRowAmount,
-          !hit && styles.reviewRowAmountMissing,
-        ]}
-      >
-        {hit
-          ? `₹${Math.round(hit.amount).toLocaleString('en-IN')}`
-          : '—'}
-      </Text>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Sub-components (unchanged from earlier version)
 // ---------------------------------------------------------------------------
 
@@ -995,17 +807,19 @@ function MoneyInput({ label, value, onChangeText, hint }) {
   return (
     <View style={styles.inputWrap}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <View style={styles.inputBox}>
-        <Text style={styles.rupee}>₹</Text>
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          keyboardType="numeric"
-          style={styles.input}
-          placeholder="0"
-          placeholderTextColor={themeColors.text.muted}
-        />
-      </View>
+      <AmountCalculatorButton value={value} onChangeText={onChangeText}>
+        <View style={styles.inputBox}>
+          <Text style={styles.rupee}>₹</Text>
+          <TextInput
+            value={value}
+            onChangeText={onChangeText}
+            keyboardType="numeric"
+            style={styles.input}
+            placeholder="0"
+            placeholderTextColor={themeColors.text.muted}
+          />
+        </View>
+      </AmountCalculatorButton>
       {hint && <Text style={styles.inputHint}>{hint}</Text>}
     </View>
   );

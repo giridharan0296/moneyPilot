@@ -34,8 +34,13 @@ import {
 } from '../lib/netWorthHistory';
 import { prefixedId } from '../lib/ids';
 import { DEFAULT_BASE_CURRENCY, isKnownCurrency } from '../lib/currency';
+import { normalizeUan } from '../lib/epfAssets';
 
 const NetWorthContext = createContext(null);
+
+function normalizeUanField(raw) {
+  return normalizeUan(raw);
+}
 
 // F9-Tier2 normalizer for balance-sheet rows. Every asset / liability now
 // carries an optional `currency` code + a snapshot `valueInBase` /
@@ -132,6 +137,22 @@ export function NetWorthProvider({ children }) {
     valueInBase,
     fxRate,
     linkedAccountId,
+    assetNature,
+    valuationMethod,
+    metal,
+    purity,
+    weightGrams,
+    referenceRatePerGram,
+    valuedAt,
+    valuationSource,
+    investmentSubCategoryId,
+    epfUan,
+    linkedPortfolioSync,
+    portfolioSymbol,
+    portfolioInstrumentKind,
+    instrumentSymbol,
+    linkedChitSchemeId,
+    chitOpen,
   }) => {
     const trimmed = (name ?? '').trim();
     const amount = Number(value);
@@ -157,6 +178,22 @@ export function NetWorthProvider({ children }) {
       // Optional mirror of a Settings account ledger. AccountNetWorthSync
       // keeps these in lock-step with opening balance + activity.
       linkedAccountId: linkedAccountId ?? null,
+      assetNature: assetNature ?? null,
+      valuationMethod: valuationMethod ?? null,
+      metal: metal ?? null,
+      purity: purity ?? null,
+      weightGrams: weightGrams != null && isFinite(Number(weightGrams)) ? Number(weightGrams) : null,
+      referenceRatePerGram: referenceRatePerGram != null && isFinite(Number(referenceRatePerGram)) ? Number(referenceRatePerGram) : null,
+      valuedAt: valuedAt ?? null,
+      valuationSource: valuationSource ?? null,
+      investmentSubCategoryId: investmentSubCategoryId ?? null,
+      epfUan: normalizeUanField(epfUan),
+      linkedPortfolioSync: linkedPortfolioSync === true,
+      portfolioSymbol: portfolioSymbol ? String(portfolioSymbol).trim().toUpperCase() : null,
+      portfolioInstrumentKind: portfolioInstrumentKind ?? null,
+      instrumentSymbol: instrumentSymbol ? String(instrumentSymbol).trim() : null,
+      linkedChitSchemeId: linkedChitSchemeId ? String(linkedChitSchemeId) : null,
+      chitOpen: chitOpen === true,
       createdAt: now,
       updatedAt: now,
     };
@@ -188,7 +225,7 @@ export function NetWorthProvider({ children }) {
   }, []);
 
   // ---- Liabilities: CRUD ----
-  const addLiability = useCallback(({ name, categoryId, outstanding, note, currency, outstandingInBase, fxRate }) => {
+  const addLiability = useCallback(({ name, categoryId, outstanding, note, currency, outstandingInBase, fxRate, linkedAccountId }) => {
     const trimmed = (name ?? '').trim();
     const amount = Number(outstanding);
     if (!trimmed || !isFinite(amount) || amount < 0) return null;
@@ -205,6 +242,7 @@ export function NetWorthProvider({ children }) {
       // is the classic footgun.
       fxRate:            (fxRate            != null && isFinite(Number(fxRate))            && Number(fxRate) > 0) ? Number(fxRate)            : null,
       outstandingInBase: (outstandingInBase != null && isFinite(Number(outstandingInBase)))                       ? Number(outstandingInBase) : null,
+      linkedAccountId: linkedAccountId ?? null,
       createdAt: now,
       updatedAt: now,
     };

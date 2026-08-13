@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ScrollView,
   Text,
@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import AmountCalculatorButton from './AmountCalculatorButton';
 
 // ----------------------------------------------------------------------------
 // BudgetForm — add / edit a budget rule.
@@ -21,6 +22,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 //
 // Fields:
 //   - Category (chip row; a special "Overall" chip = all expenses)
+//   - Sub-category (optional chip row when the category has subs)
 //   - Amount (currency input)
 //   - Period (chip row: Monthly / Weekly / Yearly)
 //
@@ -51,6 +53,9 @@ export default function BudgetForm({
       ? (categories[0]?.id ?? null)
       : initialValues.categoryId,
   );
+  const [subCategoryId, setSubCategoryId] = useState(
+    initialValues?.subCategoryId ?? null,
+  );
   const [amount, setAmount] = useState(
     initialValues?.amount != null ? String(initialValues.amount) : '',
   );
@@ -66,6 +71,10 @@ export default function BudgetForm({
     setError(null);
     onSubmit({
       categoryId: categoryId === '__overall' ? null : categoryId,
+      subCategoryId:
+        categoryId === '__overall' || categoryId == null || !subCategoryId
+          ? null
+          : subCategoryId,
       amount: amt,
       period,
     });
@@ -73,6 +82,13 @@ export default function BudgetForm({
 
   const selectedIsOverall =
     categoryId === null || categoryId === '__overall';
+
+  const selectedCategory = useMemo(() => {
+    if (selectedIsOverall) return null;
+    return categories.find((c) => c.id === categoryId) ?? null;
+  }, [categories, categoryId, selectedIsOverall]);
+
+  const subCategories = selectedCategory?.subCategories ?? [];
 
   return (
     <View style={styles.card}>
@@ -87,7 +103,10 @@ export default function BudgetForm({
             immediately reachable without scrolling. */}
         <TouchableOpacity
           key="__overall"
-          onPress={() => setCategoryId('__overall')}
+          onPress={() => {
+            setCategoryId('__overall');
+            setSubCategoryId(null);
+          }}
           activeOpacity={0.7}
           style={[
             styles.chip,
@@ -111,7 +130,10 @@ export default function BudgetForm({
           return (
             <TouchableOpacity
               key={c.id}
-              onPress={() => setCategoryId(c.id)}
+              onPress={() => {
+                setCategoryId(c.id);
+                setSubCategoryId(null);
+              }}
               activeOpacity={0.7}
               style={[
                 styles.chip,
@@ -131,16 +153,77 @@ export default function BudgetForm({
         })}
       </ScrollView>
 
-      <Text style={styles.label}>Amount (₹)</Text>
-      <TextInput
-        style={styles.input}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        placeholder="e.g. 5000"
-        placeholderTextColor={themeColors.text.muted}
-      />
+      {subCategories.length > 0 && (
+        <>
+          <Text style={styles.label}>Sub-category (optional)</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipRow}
+          >
+            <TouchableOpacity
+              onPress={() => setSubCategoryId(null)}
+              activeOpacity={0.7}
+              style={[
+                styles.subChip,
+                !subCategoryId && {
+                  backgroundColor: accentColor,
+                  borderColor: accentColor,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.subChipText,
+                  !subCategoryId && styles.chipTextSelected,
+                ]}
+              >
+                All {selectedCategory?.label ?? 'category'}
+              </Text>
+            </TouchableOpacity>
+            {subCategories.map((s) => {
+              const selected = s.id === subCategoryId;
+              return (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() =>
+                    setSubCategoryId((prev) => (prev === s.id ? null : s.id))
+                  }
+                  activeOpacity={0.7}
+                  style={[
+                    styles.subChip,
+                    selected && {
+                      backgroundColor: accentColor,
+                      borderColor: accentColor,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.subChipText,
+                      selected && styles.chipTextSelected,
+                    ]}
+                  >
+                    {s.emoji} {s.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </>
+      )}
 
+      <Text style={styles.label}>Amount (₹)</Text>
+      <AmountCalculatorButton value={amount} onChangeText={setAmount}>
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="decimal-pad"
+          placeholder="e.g. 5000"
+          placeholderTextColor={themeColors.text.muted}
+        />
+      </AmountCalculatorButton>
       <Text style={styles.label}>Period</Text>
       <View style={styles.periodRow}>
         {PERIODS.map((p) => {
@@ -224,6 +307,15 @@ const makeStyles = (c) => ({
   },
   chipText: { fontSize: 13, fontWeight: '600', color: c.palette.n700 },
   chipTextSelected: { color: c.text.inverse },
+  subChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.xl,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
   input: {
     backgroundColor: c.bg.surfaceAlt,
     borderRadius: radii.md,

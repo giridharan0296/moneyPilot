@@ -86,6 +86,7 @@ function normalize(t) {
     ? 'internal_transfer'
     : t.kind;
   return {
+    ...t,
     id:               t.id ?? `xfer_${shortId()}`,
     kind,
     amount:           Number(t.amount) || 0,
@@ -192,6 +193,8 @@ export function TransfersProvider({ children }) {
       note,
       voiceNote,
       createdAt,
+      linkedLoanId,
+      linkedLoanEventId,
     }) => {
       if (!KIND_META[kind]) return { ok: false, reason: 'invalid_kind' };
       const amt = Number(amount);
@@ -320,6 +323,8 @@ export function TransfersProvider({ children }) {
         note,
         voiceNote,
         createdAt,
+        linkedLoanId: linkedLoanId ?? null,
+        linkedLoanEventId: linkedLoanEventId ?? null,
       });
       setTransfers((prev) => [item, ...prev]);
       return { ok: true, transfer: item };
@@ -352,9 +357,12 @@ export function TransfersProvider({ children }) {
   // validation error.
   // --------------------------------------------------------------------------
   const updateTransfer = useCallback(
-    (id, patch) => {
+    (id, patch, opts = {}) => {
       const current = transfers.find((t) => t.id === id);
       if (!current) return { ok: false, reason: 'not_found' };
+      if (current.linkedLoanId && !opts.fromLoan) {
+        return { ok: false, reason: 'managed_by_loan' };
+      }
 
       // Only mutate fields the caller asked to change. Everything else
       // preserves the current value.
@@ -405,7 +413,7 @@ export function TransfersProvider({ children }) {
       //     manually deleted the asset from Net Worth), we refuse edits
       //     that would need to touch NetWorth to preserve ledger integrity.
       //     User can delete the transfer and re-add it.
-      if (adjust !== 0) {
+      if (adjust !== 0 && !opts.skipNetWorth) {
         if (current.kind === 'lend' || current.kind === 'repay_received') {
           const linkedId = current.linkedNetWorthId;
           let asset = linkedId ? findAsset(linkedId) : null;
@@ -501,11 +509,11 @@ export function TransfersProvider({ children }) {
             // the OLD voiceNote so passing undefined preserves it.
             createdAt: next.createdAt,
             linkedTransferId: current.id,
-          });
+          }, { fromTransfer: true });
           next.linkedExpenseId = linkedExpId;
         } else if (oldInt > 0 && newInt === 0 && linkedExpId) {
           // Remove the linked expense entirely.
-          deleteTransaction('expense', linkedExpId, { cleanupFiles: false });
+          deleteTransaction('expense', linkedExpId, { cleanupFiles: false, fromTransfer: true });
           next.linkedExpenseId = null;
         } else if (newInt > 0 && (oldInt === 0 || treatAsMissing)) {
           // Create a new linked expense — either the user just introduced
@@ -565,9 +573,12 @@ export function TransfersProvider({ children }) {
   // --------------------------------------------------------------------------
   const deleteTransfer = useCallback(
     (id, opts = {}) => {
-      const { cascade = true, force = false } = opts;
+      const { cascade = true, force = false, fromLoan = false } = opts;
       const target = transfers.find((t) => t.id === id);
       if (!target) return { ok: false, reason: 'not_found' };
+      if (target.linkedLoanId && !fromLoan) {
+        return { ok: false, reason: 'managed_by_loan' };
+      }
 
       // Safety rail #4 — deleting a base lend/borrow would orphan any child
       // repayments that still link to its NetWorth item. Refuse and let the
@@ -652,7 +663,7 @@ export function TransfersProvider({ children }) {
           }
           // Remove the auto-created interest expense, if any.
           if (t.linkedExpenseId) {
-            deleteTransaction('expense', t.linkedExpenseId, { cleanupFiles: false });
+            deleteTransaction('expense', t.linkedExpenseId, { cleanupFiles: false, fromTransfer: true });
           }
         }
       }

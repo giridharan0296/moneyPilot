@@ -36,6 +36,7 @@ import AppIcon from '../components/AppIcon';
 const FIELDS = [
   { key: 'dateCol',        label: 'Date',          required: true,  hint: 'When the transaction happened' },
   { key: 'amountCol',      label: 'Amount',        required: true,  hint: 'The amount (signs are ignored)' },
+  { key: 'typeCol',        label: 'Type',          required: false, hint: 'Per-row type: expense, income, or investment' },
   { key: 'categoryCol',    label: 'Category',      required: false, hint: 'Auto-matches by label to your categories' },
   { key: 'subCategoryCol', label: 'Sub-category',  required: false, hint: 'Auto-matches within the matched category' },
   { key: 'accountCol',     label: 'Account',       required: false, hint: 'Auto-matches by label to your accounts' },
@@ -87,6 +88,7 @@ export default function ImportTransactionsScreen({ navigation }) {
   const [mapping, setMapping] = useState({
     dateCol: null,
     amountCol: null,
+    typeCol: null,
     categoryCol: null,
     subCategoryCol: null,
     accountCol: null,
@@ -96,7 +98,16 @@ export default function ImportTransactionsScreen({ navigation }) {
   const [fallbackCategoryId, setFallbackCategoryId] = useState(null);
   const [fallbackSubCategoryId, setFallbackSubCategoryId] = useState(null);
   const [fallbackAccountId, setFallbackAccountId] = useState(null);
+  const [fallbacksByType, setFallbacksByType] = useState({
+    expense: { categoryId: null, subCategoryId: null },
+    income: { categoryId: null, subCategoryId: null },
+    investment: { categoryId: null, subCategoryId: null },
+  });
   const [importing, setImporting] = useState(false);
+  const [previewFilter, setPreviewFilter] = useState('all');
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+
+  const mixedMode = !!mapping.typeCol;
 
   // Category list for the currently selected type.
   const typeCategories = categories[type] ?? [];
@@ -107,11 +118,29 @@ export default function ImportTransactionsScreen({ navigation }) {
   const fallbackParent = typeCategories.find((c) => c.id === fallbackCategoryId) ?? null;
   const fallbackSubOptions = fallbackParent?.subCategories ?? [];
 
-  // Auto-reset fallback category when type changes (a category from
-  // "expense" doesn't exist under "income" and vice versa).
+  // Seed per-type fallbacks when categories load.
   useEffect(() => {
+    setFallbacksByType((prev) => ({
+      expense: {
+        categoryId: prev.expense.categoryId ?? categories.expense?.[0]?.id ?? null,
+        subCategoryId: null,
+      },
+      income: {
+        categoryId: prev.income.categoryId ?? categories.income?.[0]?.id ?? null,
+        subCategoryId: null,
+      },
+      investment: {
+        categoryId: prev.investment.categoryId ?? categories.investment?.[0]?.id ?? null,
+        subCategoryId: null,
+      },
+    }));
+  }, [categories.expense, categories.income, categories.investment]);
+
+  // Auto-reset fallback category when type changes (single-type mode only).
+  useEffect(() => {
+    if (mixedMode) return;
     setFallbackCategoryId(typeCategories[0]?.id ?? null);
-  }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [type, mixedMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fallback sub-category must belong to the fallback category. Reset when
   // the fallback parent changes.
@@ -134,18 +163,55 @@ export default function ImportTransactionsScreen({ navigation }) {
       mapping,
       type,
       categories: typeCategories,
+      categoriesByType: mixedMode ? categories : undefined,
       accounts,
       fallbackCategoryId,
       fallbackAccountId,
       fallbackSubCategoryId,
+      fallbacksByType: mixedMode ? fallbacksByType : undefined,
     });
-  }, [rows, mapping, type, typeCategories, accounts, fallbackCategoryId, fallbackAccountId, fallbackSubCategoryId]);
+  }, [
+    rows,
+    mapping,
+    type,
+    typeCategories,
+    categories,
+    mixedMode,
+    accounts,
+    fallbackCategoryId,
+    fallbackAccountId,
+    fallbackSubCategoryId,
+    fallbacksByType,
+  ]);
+
+  const previewRows = useMemo(() => {
+    if (!result?.rowPreviews?.length) return [];
+    if (previewFilter === 'valid') {
+      return result.rowPreviews.filter((r) => r.status === 'valid');
+    }
+    if (previewFilter === 'skipped') {
+      return result.rowPreviews.filter((r) => r.status === 'skipped');
+    }
+    return result.rowPreviews;
+  }, [result, previewFilter]);
+
+  const previewCap = previewExpanded ? previewRows.length : 30;
+  const visiblePreviewRows = previewRows.slice(0, previewCap);
+
+  const mappingReady = !!mapping.dateCol && !!mapping.amountCol;
+
+  const mixedFallbacksReady = TYPES.every(
+    (t) => (categories[t.id]?.length ?? 0) === 0 || !!fallbacksByType[t.id]?.categoryId,
+  );
 
   const ready =
     rows.length > 0 &&
     mapping.dateCol && mapping.amountCol &&
-    fallbackCategoryId && fallbackAccountId &&
-    result?.transactions.length > 0;
+    fallbackAccountId &&
+    result?.transactions.length > 0 &&
+    (mixedMode
+      ? mixedFallbacksReady
+      : !!fallbackCategoryId);
 
   // ---- Handlers ----
   async function handlePickFile() {
@@ -192,6 +258,8 @@ export default function ImportTransactionsScreen({ navigation }) {
       setFileName(picked.name);
       setSheets(nonEmpty);
       setSheetIdx(0);
+      setPreviewFilter('all');
+      setPreviewExpanded(false);
       // Best-effort auto-mapping by column name for the first sheet.
       setMapping(autoDetectMapping(nonEmpty[0].headers));
     } catch (e) {
@@ -205,6 +273,8 @@ export default function ImportTransactionsScreen({ navigation }) {
   // mapping since the new sheet almost certainly has different columns.
   function handleSheetChange(idx) {
     setSheetIdx(idx);
+    setPreviewFilter('all');
+    setPreviewExpanded(false);
     setMapping(autoDetectMapping(sheets[idx]?.headers ?? []));
   }
 
@@ -220,21 +290,47 @@ export default function ImportTransactionsScreen({ navigation }) {
     if (!result || !ready) return;
     setImporting(true);
     try {
-      // Delegate to the context — it prepends the new batch onto the
-      // existing list and auto-persists to AsyncStorage. Cleaner than
-      // reading + writing storage from this screen directly.
-      importTransactions(type, result.transactions);
-
-      Alert.alert(
-        'Imported',
-        `${result.transactions.length} ${type} transaction${result.transactions.length === 1 ? '' : 's'} added.`,
-        [{ text: 'OK', onPress: () => navigation.goBack() }],
-      );
+      if (result.mixed && result.buckets) {
+        let total = 0;
+        for (const t of TYPES) {
+          const batch = result.buckets[t.id] ?? [];
+          if (batch.length > 0) {
+            importTransactions(t.id, batch);
+            total += batch.length;
+          }
+        }
+        Alert.alert(
+          'Imported',
+          `${total} transaction${total === 1 ? '' : 's'} added across expense, income, and investment.`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+      } else {
+        importTransactions(type, result.transactions);
+        Alert.alert(
+          'Imported',
+          `${result.transactions.length} ${type} transaction${result.transactions.length === 1 ? '' : 's'} added.`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+      }
     } catch (e) {
       Alert.alert('Import failed', e.message ?? 'Could not save transactions.');
     } finally {
       setImporting(false);
     }
+  }
+
+  function setFallbackForType(typeId, categoryId) {
+    setFallbacksByType((prev) => ({
+      ...prev,
+      [typeId]: { categoryId, subCategoryId: null },
+    }));
+  }
+
+  function setFallbackSubForType(typeId, subCategoryId) {
+    setFallbacksByType((prev) => ({
+      ...prev,
+      [typeId]: { ...prev[typeId], subCategoryId },
+    }));
   }
 
   // ---- Render ----
@@ -311,7 +407,11 @@ export default function ImportTransactionsScreen({ navigation }) {
       {rows.length > 0 && (
         <>
           {/* STEP 2 */}
-          <StepHeader index={2} title="Transaction type" done={!!type} />
+          <StepHeader
+            index={2}
+            title={mixedMode ? 'Default type' : 'Transaction type'}
+            done={!!type}
+          />
           <View style={styles.chipRow}>
             {TYPES.map((t) => {
               const active = type === t.id;
@@ -339,8 +439,9 @@ export default function ImportTransactionsScreen({ navigation }) {
             })}
           </View>
           <Text style={styles.hint}>
-            All rows in this file will be imported as {type}s. To import a mix,
-            filter your CSV first and run the importer once per type.
+            {mixedMode
+              ? 'Type column mapped — each row uses its own type (expense, income, investment). Blank or unrecognized values fall back to the default above.'
+              : `All rows in this file will be imported as ${type}s. Map a Type column in step 3 to import mixed types in one file.`}
           </Text>
 
           {/* STEP 3 */}
@@ -363,13 +464,83 @@ export default function ImportTransactionsScreen({ navigation }) {
           <StepHeader
             index={4}
             title="Fallbacks"
-            done={!!fallbackCategoryId && !!fallbackAccountId}
+            done={mixedMode ? mixedFallbacksReady && !!fallbackAccountId : !!fallbackCategoryId && !!fallbackAccountId}
           />
           <Text style={styles.hint}>
             Used when a row's category or account doesn't exactly match one
             of yours (case-insensitive label match).
           </Text>
 
+          {mixedMode ? (
+            TYPES.map((t) => {
+              const typeCats = categories[t.id] ?? [];
+              const fb = fallbacksByType[t.id] ?? {};
+              const fbParent = typeCats.find((c) => c.id === fb.categoryId) ?? null;
+              const fbSubs = fbParent?.subCategories ?? [];
+              if (typeCats.length === 0) {
+                return (
+                  <View key={t.id} style={{ marginBottom: 12 }}>
+                    <Text style={styles.mapLabel}>Fallback category ({t.label})</Text>
+                    <Text style={styles.warnBox}>No {t.label.toLowerCase()} categories — add some in Settings.</Text>
+                  </View>
+                );
+              }
+              return (
+                <View key={t.id} style={{ marginBottom: 12 }}>
+                  <Text style={styles.mapLabel}>Fallback category ({t.label})</Text>
+                  <View style={styles.chipRow}>
+                    {typeCats.map((c) => {
+                      const active = fb.categoryId === c.id;
+                      return (
+                        <TouchableOpacity
+                          key={c.id}
+                          style={[styles.chip, active && { borderColor: c.color, backgroundColor: c.color + '20' }]}
+                          onPress={() => setFallbackForType(t.id, c.id)}
+                        >
+                          <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
+                            {c.emoji}  {c.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  {fbSubs.length > 0 && (
+                    <>
+                      <Text style={styles.mapLabel}>Fallback sub-category ({t.label}, optional)</Text>
+                      <View style={styles.chipRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.chip,
+                            !fb.subCategoryId && { borderColor: '#2563eb', backgroundColor: '#dbeafe' },
+                          ]}
+                          onPress={() => setFallbackSubForType(t.id, null)}
+                        >
+                          <Text style={[styles.chipText, !fb.subCategoryId && { color: '#2563eb', fontWeight: '700' }]}>
+                            None
+                          </Text>
+                        </TouchableOpacity>
+                        {fbSubs.map((s) => {
+                          const active = fb.subCategoryId === s.id;
+                          return (
+                            <TouchableOpacity
+                              key={s.id}
+                              style={[styles.chip, active && { borderColor: s.color, backgroundColor: s.color + '20' }]}
+                              onPress={() => setFallbackSubForType(t.id, s.id)}
+                            >
+                              <Text style={[styles.chipText, active && { color: s.color, fontWeight: '700' }]}>
+                                {s.emoji}  {s.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </>
+                  )}
+                </View>
+              );
+            })
+          ) : (
+            <>
           <Text style={styles.mapLabel}>Fallback category ({type})</Text>
           {typeCategories.length === 0 ? (
             <Text style={styles.warnBox}>
@@ -426,6 +597,8 @@ export default function ImportTransactionsScreen({ navigation }) {
               </View>
             </>
           )}
+            </>
+          )}
 
           <Text style={styles.mapLabel}>Fallback account</Text>
           {accounts.length === 0 ? (
@@ -452,60 +625,100 @@ export default function ImportTransactionsScreen({ navigation }) {
           )}
 
           {/* STEP 5 */}
-          <StepHeader index={5} title="Preview & import" done={false} />
+          <StepHeader
+            index={5}
+            title="Preview & import"
+            done={!!ready}
+          />
 
-          {result && (
+          {mappingReady && result && (
             <>
               <View style={styles.summaryCard}>
                 <SummaryRow label="Total rows"   value={String(result.summary.total)} />
                 <SummaryRow label="Will import"  value={String(result.summary.valid)} emphasize />
                 <SummaryRow label="Skipped"      value={String(result.summary.skipped)} negative={result.summary.skipped > 0} />
+                {result.mixed && result.summary.typeCounts && (
+                  <>
+                    <SummaryRow label="Expenses" value={String(result.summary.typeCounts.expense ?? 0)} />
+                    <SummaryRow label="Income" value={String(result.summary.typeCounts.income ?? 0)} />
+                    <SummaryRow label="Investments" value={String(result.summary.typeCounts.investment ?? 0)} />
+                  </>
+                )}
                 <SummaryRow label="Matched to your data" value={String(result.summary.matched)} />
                 <SummaryRow label="Used fallback"        value={String(result.summary.fallback)} />
               </View>
 
-              {result.transactions.length > 0 && (
-                <View style={styles.previewCard}>
-                  {result.transactions.slice(0, 8).map((t, i) => {
-                    const cat = typeCategories.find((c) => c.id === t.categoryId);
-                    const sub = t.subCategoryId
-                      ? cat?.subCategories?.find((s) => s.id === t.subCategoryId)
-                      : null;
-                    const acc = accounts.find((a) => a.id === t.accountId);
-                    return (
-                      <View
-                        key={t.id}
-                        style={[styles.previewRow, i > 0 && styles.previewRowBorder]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.previewTop}>
-                            {cat?.emoji ?? '📌'}  {cat?.label ?? 'Unknown'}
-                            {sub ? ` · ${sub.emoji} ${sub.label}` : ''}
-                            {' · '}{formatDate(t.createdAt)}
+              {result.rowPreviews?.length > 0 && (
+                <>
+                  <Text style={[styles.mapLabel, { marginTop: 14, marginBottom: 8 }]}>
+                    Row preview
+                  </Text>
+                  <Text style={styles.hint}>
+                    Review every row before importing. Skipped rows show the raw CSV values so you can fix mapping or fallbacks above.
+                  </Text>
+
+                  <View style={styles.chipRow}>
+                    {[
+                      { id: 'all', label: `All (${result.rowPreviews.length})` },
+                      { id: 'valid', label: `Ready (${result.summary.valid})` },
+                      { id: 'skipped', label: `Skipped (${result.summary.skipped})` },
+                    ].map((f) => {
+                      const active = previewFilter === f.id;
+                      return (
+                        <TouchableOpacity
+                          key={f.id}
+                          style={[
+                            styles.chip,
+                            styles.chipSmall,
+                            active && styles.chipSmallActive,
+                          ]}
+                          onPress={() => {
+                            setPreviewFilter(f.id);
+                            setPreviewExpanded(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.chipTextSmall,
+                              active && { color: '#fff', fontWeight: '700' },
+                            ]}
+                          >
+                            {f.label}
                           </Text>
-                          {t.note ? (
-                            <Text style={styles.previewNote} numberOfLines={1}>
-                              {t.note}
-                            </Text>
-                          ) : null}
-                          {acc && (
-                            <Text style={[styles.previewMeta, { color: acc.color }]}>
-                              {acc.emoji} {acc.label}
-                            </Text>
-                          )}
-                        </View>
-                        <Text style={styles.previewAmount}>
-                          {formatMoney(t.amount)}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <View style={styles.previewCard}>
+                    {visiblePreviewRows.length === 0 ? (
+                      <Text style={styles.previewEmpty}>
+                        No rows in this filter.
+                      </Text>
+                    ) : (
+                      visiblePreviewRows.map((row, i) => (
+                        <ImportPreviewRow
+                          key={`${row.rowNum}-${row.status}`}
+                          row={row}
+                          defaultType={type}
+                          categories={categories}
+                          accounts={accounts}
+                          bordered={i > 0}
+                        />
+                      ))
+                    )}
+                    {previewRows.length > 30 && !previewExpanded && (
+                      <TouchableOpacity
+                        style={styles.previewExpandBtn}
+                        onPress={() => setPreviewExpanded(true)}
+                      >
+                        <Text style={styles.previewExpandText}>
+                          Show all {previewRows.length} rows
                         </Text>
-                      </View>
-                    );
-                  })}
-                  {result.transactions.length > 8 && (
-                    <Text style={styles.previewMore}>
-                      + {result.transactions.length - 8} more
-                    </Text>
-                  )}
-                </View>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
               )}
 
               {result.summary.unmatchedCategoryValues?.length > 0 && (
@@ -532,19 +745,15 @@ export default function ImportTransactionsScreen({ navigation }) {
                 </View>
               )}
 
-              {result.errors.length > 0 && (
-                <View style={styles.errorList}>
-                  <Text style={styles.errorListTitle}>
-                    {result.errors.length} row{result.errors.length === 1 ? '' : 's'} skipped:
+              {result.summary.unmatchedAccountValues?.length > 0 && (
+                <View style={styles.warnList}>
+                  <Text style={styles.warnListTitle}>
+                    {result.summary.unmatchedAccountValues.length} account value{result.summary.unmatchedAccountValues.length === 1 ? '' : 's'} weren't recognized — using fallback:
                   </Text>
-                  {result.errors.slice(0, 5).map((e, i) => (
-                    <Text key={i} style={styles.errorListItem}>• {e}</Text>
-                  ))}
-                  {result.errors.length > 5 && (
-                    <Text style={styles.errorListItem}>
-                      … and {result.errors.length - 5} more
-                    </Text>
-                  )}
+                  <Text style={styles.warnListBody} numberOfLines={3}>
+                    {result.summary.unmatchedAccountValues.slice(0, 8).join(', ')}
+                    {result.summary.unmatchedAccountValues.length > 8 ? ', …' : ''}
+                  </Text>
                 </View>
               )}
 
@@ -565,10 +774,18 @@ export default function ImportTransactionsScreen({ navigation }) {
 
               {!ready && (
                 <Text style={styles.footer}>
-                  Complete the required steps above to enable Import.
+                  {result.transactions.length === 0
+                    ? 'Fix skipped rows using the preview above, then import when at least one row is ready.'
+                    : 'Complete the required steps above to enable Import.'}
                 </Text>
               )}
             </>
+          )}
+
+          {!mappingReady && rows.length > 0 && (
+            <Text style={styles.footer}>
+              Map Date and Amount columns in step 3 to see the row preview.
+            </Text>
           )}
         </>
       )}
@@ -606,11 +823,11 @@ function ColumnMapper({ field, headers, selected, onSelect }) {
         <Text style={styles.mapHint}>{field.hint}</Text>
       </View>
       <View style={styles.chipRow}>
-        {headers.map((h) => {
+        {headers.map((h, colIdx) => {
           const active = selected === h;
           return (
             <TouchableOpacity
-              key={h}
+              key={`col-${colIdx}`}
               style={[
                 styles.chip,
                 styles.chipSmall,
@@ -648,6 +865,89 @@ function SummaryRow({ label, value, emphasize, negative }) {
         ]}
       >
         {value}
+      </Text>
+    </View>
+  );
+}
+
+function displayRaw(value) {
+  if (value == null || value === '') return '—';
+  return String(value);
+}
+
+function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) {
+  const styles = useThemedStyles(makeStyles);
+  const isValid = row.status === 'valid';
+  const tx = row.transaction;
+  const rowType = tx?.importType ?? defaultType;
+  const rowCategories = categories[rowType] ?? [];
+  const cat = tx ? rowCategories.find((c) => c.id === tx.categoryId) : null;
+  const sub = tx?.subCategoryId
+    ? cat?.subCategories?.find((s) => s.id === tx.subCategoryId)
+    : null;
+  const acc = tx ? accounts.find((a) => a.id === tx.accountId) : null;
+  const typeMeta = TYPES.find((x) => x.id === rowType);
+
+  const rawParts = [];
+  if (row.raw.date != null && row.raw.date !== '') rawParts.push(`Date: ${displayRaw(row.raw.date)}`);
+  if (row.raw.amount != null && row.raw.amount !== '') rawParts.push(`Amount: ${displayRaw(row.raw.amount)}`);
+  if (row.raw.type != null && row.raw.type !== '') rawParts.push(`Type: ${displayRaw(row.raw.type)}`);
+  if (row.raw.category != null && row.raw.category !== '') rawParts.push(`Category: ${displayRaw(row.raw.category)}`);
+  if (row.raw.subCategory != null && row.raw.subCategory !== '') rawParts.push(`Sub: ${displayRaw(row.raw.subCategory)}`);
+  if (row.raw.account != null && row.raw.account !== '') rawParts.push(`Account: ${displayRaw(row.raw.account)}`);
+  if (row.raw.note != null && row.raw.note !== '') rawParts.push(`Note: ${displayRaw(row.raw.note)}`);
+
+  const flagNotes = [];
+  if (row.flags?.usedFallbackCategory) flagNotes.push('fallback category');
+  if (row.flags?.usedFallbackAccount) flagNotes.push('fallback account');
+  if (row.flags?.unmatchedSubCategory) flagNotes.push('sub-category not matched');
+
+  return (
+    <View style={[styles.previewRowBlock, bordered && styles.previewRowBorder]}>
+      <View style={styles.previewRowHeader}>
+        <View style={styles.previewRowHeaderLeft}>
+          <View style={[styles.statusBadge, isValid ? styles.statusBadgeValid : styles.statusBadgeSkipped]}>
+            <Text style={[styles.statusBadgeText, isValid ? styles.statusBadgeTextValid : styles.statusBadgeTextSkipped]}>
+              {isValid ? 'Ready' : 'Skipped'}
+            </Text>
+          </View>
+          <Text style={styles.previewRowNum}>Row {row.rowNum}</Text>
+        </View>
+        {isValid && tx ? (
+          <Text style={styles.previewAmount}>{formatMoney(tx.amount)}</Text>
+        ) : null}
+      </View>
+
+      {isValid && tx ? (
+        <>
+          <Text style={styles.previewResolved}>
+            {typeMeta ? (
+              <Text style={{ color: typeMeta.color, fontWeight: '700' }}>
+                {typeMeta.label} ·{' '}
+              </Text>
+            ) : null}
+            {cat?.emoji ?? '📌'} {cat?.label ?? 'Unknown'}
+            {sub ? ` · ${sub.emoji} ${sub.label}` : ''}
+            {' · '}{formatDate(tx.createdAt)}
+            {acc ? ` · ${acc.emoji} ${acc.label}` : ''}
+          </Text>
+          {tx.note ? (
+            <Text style={styles.previewNote} numberOfLines={2}>
+              {tx.note}
+            </Text>
+          ) : null}
+          {flagNotes.length > 0 && (
+            <Text style={styles.previewFlagNote}>
+              Used {flagNotes.join(', ')}
+            </Text>
+          )}
+        </>
+      ) : (
+        <Text style={styles.previewSkipReason}>{row.reason}</Text>
+      )}
+
+      <Text style={styles.previewRaw} numberOfLines={3}>
+        CSV: {rawParts.join(' · ') || '—'}
       </Text>
     </View>
   );
@@ -691,9 +991,10 @@ function autoDetectMapping(headers) {
   return {
     dateCol:        find(['date', 'time', 'when']),
     amountCol:      find(['amount', 'value', 'sum', 'debit', 'credit', 'price']),
+    typeCol:        find(['type', 'transaction type', 'transactiontype', 'txn type', 'entry type']),
     // Exclude any header containing `sub` so 'Sub-Category' can't win the
     // categoryCol slot before subCategoryCol gets a chance.
-    categoryCol:    find(['category'], { excludeTokens: ['sub'] }),
+    categoryCol:    find(['category'], { excludeTokens: ['sub', 'type'] }),
     subCategoryCol: find(['sub category', 'subcategory', 'subtype', 'subtag']),
     accountCol:     find(['account', 'wallet', 'source']),
     noteCol:        find(['note', 'description', 'narration', 'memo', 'remark']),
@@ -780,8 +1081,39 @@ const makeStyles = (c) => ({
   summaryValueBold: { fontSize: 16, fontWeight: '800', color: '#059669' },
 
   previewCard: {
-    backgroundColor: c.bg.surface, borderRadius: 14, padding: 12, marginTop: 12,
+    backgroundColor: c.bg.surface, borderRadius: 14, padding: 12, marginTop: 8,
   },
+  previewEmpty: {
+    textAlign: 'center',
+    color: c.text.secondary,
+    fontSize: 13,
+    paddingVertical: 12,
+  },
+  previewRowBlock: { paddingVertical: 10 },
+  previewRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  previewRowHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  previewRowNum: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
+  statusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusBadgeValid: { backgroundColor: '#d1fae5' },
+  statusBadgeSkipped: { backgroundColor: '#fee2e2' },
+  statusBadgeText: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+  statusBadgeTextValid: { color: '#047857' },
+  statusBadgeTextSkipped: { color: '#b91c1c' },
+  previewResolved: { fontSize: 13, color: c.text.primary, fontWeight: '600' },
+  previewSkipReason: { fontSize: 13, color: '#b45309', fontWeight: '600', marginBottom: 2 },
+  previewFlagNote: { fontSize: 11, color: '#92400e', marginTop: 2, fontStyle: 'italic' },
+  previewRaw: { fontSize: 11, color: c.text.secondary, marginTop: 4 },
+  previewExpandBtn: { paddingVertical: 10, alignItems: 'center' },
+  previewExpandText: { fontSize: 13, fontWeight: '700', color: '#2563eb' },
   previewRow: {
     flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
   },

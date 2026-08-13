@@ -556,11 +556,11 @@ function ColumnPicker({ field, headers, selected, onSelect }) {
         <Text style={styles.mapHint}>{field.hint}</Text>
       </View>
       <View style={styles.chipRow}>
-        {headers.map((h) => {
+        {headers.map((h, colIdx) => {
           const active = selected === h;
           return (
             <TouchableOpacity
-              key={h}
+              key={`col-${colIdx}`}
               style={[styles.chipSm, active && styles.chipSmActive]}
               onPress={() => onSelect(h)}
             >

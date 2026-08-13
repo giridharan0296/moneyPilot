@@ -14,6 +14,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   ScrollView,
   View,
   Text,
@@ -27,12 +28,28 @@ import { useTransactions } from '../contexts/TransactionsContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
 import { baseAmountOf } from '../lib/currency';
+import { fetchLiveQuotes } from '../lib/fundamentals';
+import {
+  buildDisplayHoldings,
+  symbolsNeedingQuotes,
+  sumHoldingsValue,
+} from '../lib/portfolioHoldings';
 import AppIcon from '../components/AppIcon';
+import ScreenHelpIntro from '../components/ScreenHelpIntro';
+import { HELP_PORTFOLIO } from '../lib/helpContent';
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
   const rounded = Math.round(n).toLocaleString('en-IN');
   return '₹ ' + rounded;
+}
+
+function formatPrice(n) {
+  if (!isFinite(Number(n))) return '—';
+  return '₹ ' + Number(n).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatDate(iso) {
@@ -69,6 +86,7 @@ export default function PortfolioScreen({ navigation }) {
   const { baseCurrency, fxRates, brokers } = useSettings();
   const { showToast } = useToast();
   const [refreshing, setRefreshing] = useState(false);
+  const [transactionQuotes, setTransactionQuotes] = useState({});
 
   // Lookup indexed by id — cheap to build, and every render of a broker
   // row calls this at least twice (label + color). Keeping it as a Map
@@ -88,6 +106,16 @@ export default function PortfolioScreen({ navigation }) {
     [brokerById],
   );
 
+  const logMissingInvestment = useCallback((brokerId) => {
+    navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
+    setTimeout(() => {
+      DeviceEventEmitter.emit('transactions:openAdd', {
+        type: 'investment',
+        prefill: { brokerId },
+      });
+    }, 80);
+  }, [navigation]);
+
   // Tiny colored dot used everywhere a broker is referenced.
   const BrokerDot = useCallback(({ id, size = 8 }) => {
     const c = brokerColor(id);
@@ -104,10 +132,20 @@ export default function PortfolioScreen({ navigation }) {
     );
   }, [brokerColor]);
 
+  const displayHoldings = useMemo(
+    () => buildDisplayHoldings(holdings, investments, transactionQuotes),
+    [holdings, investments, transactionQuotes],
+  );
+  const displaySummary = useMemo(() => {
+    const totalValue = sumHoldingsValue(displayHoldings);
+    const totalCost = displayHoldings.reduce((sum, h) => sum + (Number(h.avgCost) || 0) * (Number(h.quantity) || 0), 0);
+    return { totalValue, totalCost, totalPnL: totalValue - totalCost, count: displayHoldings.length };
+  }, [displayHoldings]);
+
   // Sort so the biggest positions show up first.
   const sortedHoldings = useMemo(
-    () => [...holdings].sort((a, b) => b.currentValue - a.currentValue),
-    [holdings],
+    () => [...displayHoldings].sort((a, b) => b.currentValue - a.currentValue),
+    [displayHoldings],
   );
 
   // Actual SWP payouts only. Dividends, interest, and other investment
@@ -215,8 +253,8 @@ export default function PortfolioScreen({ navigation }) {
     return rows;
   }, [investments, summary.byBroker, fxRates, baseCurrency]);
 
-  const hasHoldings = holdings.length > 0;
-  const pnlIsPositive = summary.totalPnL >= 0;
+  const hasHoldings = displayHoldings.length > 0;
+  const pnlIsPositive = displaySummary.totalPnL >= 0;
 
   function handleClearAll() {
     Alert.alert(
@@ -234,6 +272,11 @@ export default function PortfolioScreen({ navigation }) {
     setRefreshing(true);
     try {
       const result = await refreshLivePrices();
+      const trackedSymbols = symbolsNeedingQuotes(holdings, investments);
+      const tracked = trackedSymbols.length ? await fetchLiveQuotes(trackedSymbols) : null;
+      if (tracked) setTransactionQuotes(tracked.quotes || {});
+      result.updated += tracked?.resolved || 0;
+      result.failed = [...(result.failed || []), ...(tracked?.failed || [])];
       const failedCount = result.failed?.length || 0;
       if (result.updated > 0) {
         const msg = failedCount > 0
@@ -260,22 +303,32 @@ export default function PortfolioScreen({ navigation }) {
   // ---- Empty state ----
   if (!hasHoldings) {
     return (
-      <View style={styles.emptyScreen}>
-        <View style={styles.emptyEmoji}>
-          <AppIcon name="download" size={56} color="#9ca3af" strokeWidth={1.7} />
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={[styles.emptyScreen, { justifyContent: 'flex-start', paddingTop: 16 }]}
+      >
+        <ScreenHelpIntro
+          title="Portfolio"
+          subtitle="Holdings sync to Net Worth automatically."
+          help={HELP_PORTFOLIO}
+        />
+        <View style={styles.emptyBodyWrap}>
+          <View style={styles.emptyEmoji}>
+            <AppIcon name="download" size={56} color="#9ca3af" strokeWidth={1.7} />
+          </View>
+          <Text style={styles.emptyTitle}>No holdings imported</Text>
+          <Text style={styles.emptyBody}>
+            Import a CSV export from Zerodha, Groww, or any broker to see your
+            portfolio summary here. Or log investments with symbol and units.
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => navigation.navigate('ImportHoldings')}
+          >
+            <Text style={styles.primaryButtonText}>Import Holdings</Text>
+          </TouchableOpacity>
         </View>
-        <Text style={styles.emptyTitle}>No holdings imported</Text>
-        <Text style={styles.emptyBody}>
-          Import a CSV export from Zerodha, Groww, or any broker to see your
-          portfolio summary here.
-        </Text>
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={() => navigation.navigate('ImportHoldings')}
-        >
-          <Text style={styles.primaryButtonText}>Import Holdings</Text>
-        </TouchableOpacity>
-      </View>
+      </ScrollView>
     );
   }
 
@@ -285,6 +338,11 @@ export default function PortfolioScreen({ navigation }) {
       style={styles.screen}
       contentContainerStyle={styles.container}
     >
+      <ScreenHelpIntro
+        title="Portfolio"
+        subtitle="Market value of stocks and MFs — cash already left via investment logs."
+        help={HELP_PORTFOLIO}
+      />
       {/* Big summary card */}
       <View style={styles.heroCard}>
         <View style={styles.heroTopRow}>
@@ -306,7 +364,7 @@ export default function PortfolioScreen({ navigation }) {
             )}
           </TouchableOpacity>
         </View>
-        <Text style={styles.heroValue}>{formatMoney(summary.totalValue)}</Text>
+        <Text style={styles.heroValue}>{formatMoney(displaySummary.totalValue)}</Text>
         <View style={styles.heroPnlRow}>
           <View
             style={[
@@ -320,7 +378,7 @@ export default function PortfolioScreen({ navigation }) {
                 { color: pnlIsPositive ? '#065f46' : '#991b1b' },
               ]}
             >
-              {pnlIsPositive ? '▲' : '▼'} {formatMoney(Math.abs(summary.totalPnL))}
+              {pnlIsPositive ? '▲' : '▼'} {formatMoney(Math.abs(displaySummary.totalPnL))}
             </Text>
             <Text
               style={[
@@ -333,7 +391,7 @@ export default function PortfolioScreen({ navigation }) {
           </View>
         </View>
         <Text style={styles.heroSub}>
-          Invested {formatMoney(summary.totalCost)} · {summary.count} holdings
+          Invested {formatMoney(displaySummary.totalCost)} · {displaySummary.count} holdings
         </Text>
         <Text style={styles.heroLive}>
           {pricesUpdatedAt
@@ -341,6 +399,20 @@ export default function PortfolioScreen({ navigation }) {
             : 'Prices from last import — tap Refresh for live quotes'}
         </Text>
       </View>
+
+      <TouchableOpacity
+        style={styles.balanceBanner}
+        onPress={() => navigation.navigate('PortfolioBalance')}
+        activeOpacity={0.85}
+      >
+        <View style={styles.balanceBannerBody}>
+          <Text style={styles.balanceBannerTitle}>Balance allocation</Text>
+          <Text style={styles.balanceBannerSub}>
+            Set target % mix and see what to add or trim
+          </Text>
+        </View>
+        <AppIcon name="target" size={20} color="#6366f1" strokeWidth={2.2} />
+      </TouchableOpacity>
 
       {/* Actual SWP payouts. Log payouts as Income → Investments → SWP Payout;
           do not use negative
@@ -498,6 +570,17 @@ export default function PortfolioScreen({ navigation }) {
                     </Text>
                   </View>
                 )}
+                {(r.delta < -0.01 || (r.loggedCount === 0 && r.holdingCount > 0)) && (
+                  <TouchableOpacity
+                    onPress={() => logMissingInvestment(r.broker)}
+                    style={styles.reconAction}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Log missing investment for ${brokerLabel(r.broker)}`}
+                  >
+                    <AppIcon name="plus" size={14} color={styles.reconActionText.color} strokeWidth={2.4} />
+                    <Text style={styles.reconActionText}>Log missing investment</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             );
           })}
@@ -523,10 +606,15 @@ export default function PortfolioScreen({ navigation }) {
             >
               <View style={styles.holdingLeft}>
                 <Text style={styles.holdingSymbol}>{h.symbol}</Text>
+                {h.dayChangePct != null && (
+                  <Text style={[styles.holdingPnl, { color: h.dayChangePct >= 0 ? '#059669' : '#dc2626' }]}>
+                    Today {h.dayChangePct >= 0 ? '+' : ''}{Number(h.dayChangePct).toFixed(2)}%
+                  </Text>
+                )}
                 <View style={styles.holdingMetaRow}>
                   <BrokerDot id={h.broker} size={7} />
                   <Text style={styles.holdingMeta}>
-                    {h.quantity} × {formatMoney(h.currentPrice)}
+                    {h.quantity} × {formatPrice(h.currentPrice)} · Avg buy {formatPrice(h.avgCost)}
                   </Text>
                 </View>
               </View>
@@ -571,11 +659,19 @@ const makeStyles = (c) => ({
 
   // ---- Empty state ----
   emptyScreen: {
-    flex: 1, backgroundColor: c.bg.canvas,
-    alignItems: 'center', justifyContent: 'center',
-    padding: 32,
+    flexGrow: 1,
+    backgroundColor: c.bg.canvas,
+    padding: 16,
+    paddingBottom: 40,
   },
-  emptyEmoji: { fontSize: 64, marginBottom: 16 },
+  emptyBodyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 16,
+  },
+  emptyEmoji: { marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: c.text.primary, marginBottom: 8 },
   emptyBody:  {
     fontSize: 14, color: c.text.secondary, textAlign: 'center',
@@ -588,6 +684,29 @@ const makeStyles = (c) => ({
     borderRadius: 18,
     padding: 20,
     marginBottom: 16,
+  },
+  balanceBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: c.bg.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    gap: 12,
+  },
+  balanceBannerBody: { flex: 1 },
+  balanceBannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: c.text.primary,
+  },
+  balanceBannerSub: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: 2,
+    lineHeight: 16,
   },
   heroTopRow: {
     flexDirection: 'row',
@@ -699,6 +818,23 @@ const makeStyles = (c) => ({
   reconLabel: { fontSize: 12, color: c.text.secondary, fontWeight: '600' },
   reconValue: { fontSize: 13, color: c.text.primary, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
   reconHint:  { fontSize: 11, color: c.text.secondary, fontWeight: '500' },
+  reconAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: c.accent.primary + '14',
+    borderWidth: 1,
+    borderColor: c.accent.primary + '33',
+  },
+  reconActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: c.accent.primary,
+  },
 
   // ---- Holdings list ----
   listCard: {

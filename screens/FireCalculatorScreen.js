@@ -34,6 +34,7 @@ import { useNetWorth } from '../contexts/NetWorthContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AppIcon from '../components/AppIcon';
+import AmountCalculatorButton from '../components/AmountCalculatorButton';
 import HelpSheet from '../components/HelpSheet';
 import {
   computeFire,
@@ -599,17 +600,19 @@ function MoneyInput({ label, value, onChangeText, hint }) {
   return (
     <View style={styles.inputWrap}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <View style={styles.inputBox}>
-        <Text style={styles.rupee}>₹</Text>
-        <TextInput
-          style={styles.input}
-          keyboardType="numeric"
-          value={value}
-          onChangeText={onChangeText}
-          placeholder="0"
-          placeholderTextColor={themeColors.text.muted}
-        />
-      </View>
+      <AmountCalculatorButton value={value} onChangeText={onChangeText}>
+        <View style={styles.inputBox}>
+          <Text style={styles.rupee}>₹</Text>
+          <TextInput
+            style={styles.input}
+            keyboardType="numeric"
+            value={value}
+            onChangeText={onChangeText}
+            placeholder="0"
+            placeholderTextColor={themeColors.text.muted}
+          />
+        </View>
+      </AmountCalculatorButton>
       {hint && <Text style={styles.inputHint}>{hint}</Text>}
     </View>
   );

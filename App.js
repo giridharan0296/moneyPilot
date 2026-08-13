@@ -21,7 +21,7 @@
 //                   │                    / App)
 //                   ├── Reports · CashFlow · Search        (Analyze)
 //                   ├── Budgets · Loans · Goals · Recurring
-//                   │   · Transfers                        (Track & rules)
+//                   │   · Transfers → Transactions tab (legacy redirect)
 //                   ├── ImportBankStatement
 //                   │   · ImportTransactions               (Import)
 //                   ├── EMICalculator · SIPCalculator
@@ -51,13 +51,20 @@ import {
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Platform, View } from 'react-native';
+
+import { elevation } from './lib/theme';
 
 import DashboardScreen        from './screens/DashboardScreen';
 import TransactionsScreen     from './screens/TransactionsScreen';
 import InvestmentsScreen      from './screens/InvestmentsScreen';
-import SettingsScreen         from './screens/SettingsScreen';
+import SettingsHubScreen      from './screens/SettingsHubScreen';
+import AdvancedSettingsScreen from './screens/SettingsScreen';
+import SettingsAccountScreen  from './screens/SettingsAccountScreen';
+import SettingsAppearanceScreen from './screens/SettingsAppearanceScreen';
+import SettingsAccountsDataScreen from './screens/SettingsAccountsDataScreen';
+import SettingsAIScreen       from './screens/SettingsAIScreen';
 import CategoriesScreen       from './screens/CategoriesScreen';
 import AccountsScreen         from './screens/AccountsScreen';
 import AccountActivityScreen  from './screens/AccountActivityScreen';
@@ -74,7 +81,7 @@ import ImportTransactionsScreen  from './screens/ImportTransactionsScreen';
 import ImportBankStatementScreen from './screens/ImportBankStatementScreen';
 import RecurringTransactionsScreen from './screens/RecurringTransactionsScreen';
 import BudgetScreen              from './screens/BudgetScreen';
-import TransfersScreen           from './screens/TransfersScreen';
+import TransfersRedirectScreen    from './screens/TransfersRedirectScreen';
 import SearchScreen              from './screens/SearchScreen';
 import ReportsScreen             from './screens/ReportsScreen';
 import GoalsScreen               from './screens/GoalsScreen';
@@ -85,8 +92,10 @@ import SWPCalculatorScreen       from './screens/SWPCalculatorScreen';
 import MISCalculatorScreen       from './screens/MISCalculatorScreen';
 import FundamentalAnalysisScreen from './screens/FundamentalAnalysisScreen';
 import StockMarketScreen         from './screens/StockMarketScreen';
+import StockHistoryScreen        from './screens/StockHistoryScreen';
 import MarketBoardScreen         from './screens/MarketBoardScreen';
 import PortfolioScreen        from './screens/PortfolioScreen';
+import PortfolioBalanceScreen from './screens/PortfolioBalanceScreen';
 import ImportHoldingsScreen   from './screens/ImportHoldingsScreen';
 import NetWorthScreen         from './screens/NetWorthScreen';
 import LoansScreen            from './screens/LoansScreen';
@@ -94,6 +103,8 @@ import LoanDetailScreen       from './screens/LoanDetailScreen';
 
 import AppIcon                  from './components/AppIcon';
 import AccountNetWorthSync      from './components/AccountNetWorthSync';
+import PortfolioNetWorthSync    from './components/PortfolioNetWorthSync';
+import GoldChitNetWorthSync     from './components/GoldChitNetWorthSync';
 import HeaderTitleWithIcon      from './components/HeaderTitleWithIcon';
 import { DateFilterProvider }   from './contexts/DateFilterContext';
 import { SettingsProvider }     from './contexts/SettingsContext';
@@ -105,8 +116,12 @@ import { NetWorthProvider }     from './contexts/NetWorthContext';
 import { TransfersProvider }    from './contexts/TransfersContext';
 import { LoansProvider }        from './contexts/LoansContext';
 import { ToastProvider }        from './contexts/ToastContext';
+import { ConfirmSheetProvider } from './contexts/ConfirmSheetContext';
+import { AndroidDateTimePickerProvider } from './contexts/AndroidDateTimePickerContext';
+import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { GoalsProvider }        from './contexts/GoalsContext';
+import { AllocationProvider }   from './contexts/AllocationContext';
 import { AiInsightsProvider }   from './contexts/AiInsightsContext';
 
 const Tab   = createBottomTabNavigator();
@@ -191,6 +206,7 @@ const HEADER_TINTS = {
   // InvestmentsStack
   Investments:   TAB_TINTS.Invest,    // violet
   Portfolio:     '#7c3aed',            // violet family
+  PortfolioBalance: '#6366f1',        // indigo — allocation rebalance
   ImportHoldings:'#8b5cf6',            // lighter violet
   NetWorth:      '#14b8a6',            // teal — feels like "wealth"
 
@@ -223,6 +239,7 @@ const HEADER_TINTS = {
   MISCalculator: '#0d9488',            // fixed-income monthly interest
   FundamentalAnalysis: '#7c3aed',      // violet — stock research
   StockMarket: '#0f766e',              // teal — live market overview
+  StockHistory: '#0891b2',             // cyan — price history
   MarketIndices: '#0f766e',
   MarketGainers: '#059669',
   MarketLosers: '#dc2626',
@@ -266,6 +283,11 @@ function InvestmentsStack() {
         name="Portfolio"
         component={PortfolioScreen}
         options={{ headerTitle: hdr('bar-chart-2', 'Portfolio', HEADER_TINTS.Portfolio) }}
+      />
+      <Stack.Screen
+        name="PortfolioBalance"
+        component={PortfolioBalanceScreen}
+        options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio', HEADER_TINTS.PortfolioBalance) }}
       />
       <Stack.Screen
         name="ImportHoldings"
@@ -361,7 +383,7 @@ function MoreStack() {
       />
       <Stack.Screen
         name="Transfers"
-        component={TransfersScreen}
+        component={TransfersRedirectScreen}
         options={{ headerTitle: hdr('arrow-right-left', 'Transfers', HEADER_TINTS.Transfers) }}
       />
 
@@ -424,6 +446,11 @@ function MoreStack() {
         options={{ headerTitle: hdr('trending-up', 'Stock Market', HEADER_TINTS.StockMarket) }}
       />
       <Stack.Screen
+        name="StockHistory"
+        component={StockHistoryScreen}
+        options={{ headerTitle: hdr('bar-chart-2', 'Price History', HEADER_TINTS.StockHistory) }}
+      />
+      <Stack.Screen
         name="MarketIndices"
         component={MarketBoardScreen}
         initialParams={{ board: 'indices' }}
@@ -445,8 +472,34 @@ function MoreStack() {
       {/* ---- App ---- */}
       <Stack.Screen
         name="Settings"
-        component={SettingsScreen}
+        component={SettingsHubScreen}
         options={{ headerTitle: hdr('settings', 'Settings', HEADER_TINTS.Settings) }}
+      />
+      <Stack.Screen
+        name={'SettingsAccount'}
+        component={SettingsAccountScreen}
+        options={{ headerTitle: hdr('user', 'Account', '#2563eb') }}
+      />
+      <Stack.Screen
+        name={'SettingsAppearance'}
+        component={SettingsAppearanceScreen}
+        options={{ headerTitle: hdr('sun', 'Appearance', '#7c3aed') }}
+      />
+      <Stack.Screen
+        name={'SettingsAccountsData'}
+        component={SettingsAccountsDataScreen}
+        options={{ headerTitle: hdr('wallet', 'Accounts & data', '#0ea5e9') }}
+      />
+      <Stack.Screen
+        name={'SettingsAI'}
+        component={SettingsAIScreen}
+        options={{ headerTitle: hdr('sparkles', 'AI', '#0891b2') }}
+      />
+      <Stack.Screen
+        name={'SettingsAdvanced'}
+        component={AdvancedSettingsScreen}
+        initialParams={{ section: 'advanced' }}
+        options={{ headerTitle: hdr('wrench', 'Advanced', '#f97316') }}
       />
       {/* Categories were extracted out of Settings in the v4 polish
           pass — Settings now shows a compact hub card that pushes
@@ -464,7 +517,7 @@ function MoreStack() {
       <Stack.Screen
         name="Accounts"
         component={AccountsScreen}
-        options={{ headerTitle: hdr('credit-card', 'Accounts', HEADER_TINTS.Accounts) }}
+        options={{ headerTitle: hdr('wallet', 'Accounts', HEADER_TINTS.Accounts) }}
       />
       <Stack.Screen
         name="AccountActivity"
@@ -506,10 +559,20 @@ function MoreStack() {
 // -----------------------------------------------------------------------------
 function ThemedApp() {
   const { colors, isDark, ready, fontFamilyBold } = useTheme();
+  const insets = useSafeAreaInsets();
 
   // Wait for the persisted theme choice before rendering anything so we
   // don't briefly flash the wrong palette on cold start.
   if (!ready) return null;
+
+  // Android edge-to-edge (app.json) draws behind the system nav bar — pad the
+  // tab bar by the real bottom inset so icons/labels aren't covered.
+  const tabBarPadTop = 8;
+  const tabBarPadBottom = Math.max(
+    insets.bottom,
+    Platform.OS === 'ios' ? 20 : Platform.OS === 'android' ? 10 : 8,
+  );
+  const tabBarHeight = 56 + tabBarPadTop + tabBarPadBottom;
 
   const navTheme = {
     ...(isDark ? NavDarkTheme : NavLightTheme),
@@ -539,12 +602,26 @@ function ThemedApp() {
               fontSize: 11,
               fontWeight: fontFamilyBold ? undefined : '600',
               fontFamily: fontFamilyBold || undefined,
+              letterSpacing: 0.15,
+              marginTop: 2,
             },
             tabBarStyle: {
               backgroundColor: colors.bg.surface,
-              borderTopColor:  colors.border.subtle,
+              borderTopColor: colors.border.subtle,
+              borderTopWidth: Platform.OS === 'web' ? 1 : 0,
+              paddingTop: tabBarPadTop,
+              paddingBottom: tabBarPadBottom,
+              height: tabBarHeight,
+              ...(Platform.OS === 'web'
+                ? { boxShadow: '0 -4px 20px rgba(15,23,42,0.08)' }
+                : elevation.tabBar),
             },
-            headerStyle:      { backgroundColor: colors.bg.surface },
+            headerStyle: {
+              backgroundColor: colors.bg.surface,
+              ...(Platform.OS === 'web'
+                ? { boxShadow: '0 1px 0 rgba(15,23,42,0.06)' }
+                : elevation.none),
+            },
             headerTitleStyle: {
               fontWeight: fontFamilyBold ? undefined : '700',
               fontFamily: fontFamilyBold,
@@ -563,9 +640,8 @@ function ThemedApp() {
               tabBarIcon: tabIcon('home', TAB_TINTS.Dashboard),
             }}
           />
-          {/* Consolidated Income + Expense into a single tab. The screen
-              renders a segmented top-tab strip and swaps between the two
-              lists internally. See screens/TransactionsScreen.js. */}
+          {/* Consolidated Income + Expense + Transfers into a single tab.
+              See screens/TransactionsScreen.js. */}
           <Tab.Screen
             name="Transactions"
             component={TransactionsScreen}
@@ -633,6 +709,9 @@ export default function App() {
     <SafeAreaProvider>
       <ThemeProvider>
         <ToastProvider>
+          <AndroidDateTimePickerProvider>
+          <ConfirmSheetProvider>
+          <AuthProvider>
           <SettingsProvider>
           <TransactionsProvider>
             <RecurringProvider>
@@ -642,6 +721,7 @@ export default function App() {
                     <TransfersProvider>
                       <LoansProvider>
                         <GoalsProvider>
+                          <AllocationProvider>
                           {/* AiInsightsProvider must sit INSIDE all the
                               data providers above — it reads from every
                               one of them to build the LLM summary. Kept
@@ -650,9 +730,12 @@ export default function App() {
                           <AiInsightsProvider>
                             <DateFilterProvider>
                               <AccountNetWorthSync />
+                              <PortfolioNetWorthSync />
+                              <GoldChitNetWorthSync />
                               <ThemedApp />
                             </DateFilterProvider>
                           </AiInsightsProvider>
+                          </AllocationProvider>
                         </GoalsProvider>
                       </LoansProvider>
                     </TransfersProvider>
@@ -662,6 +745,9 @@ export default function App() {
             </RecurringProvider>
           </TransactionsProvider>
           </SettingsProvider>
+          </AuthProvider>
+          </ConfirmSheetProvider>
+          </AndroidDateTimePickerProvider>
         </ToastProvider>
       </ThemeProvider>
     </SafeAreaProvider>

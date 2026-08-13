@@ -174,8 +174,9 @@ const CATEGORY_MIGRATION_KEYS = [
   'backfill_default_subcats_v1',
   'merge_default_subcats_v2',
   'merge_default_subcats_v3',
+  'merge_default_subcats_v4',
 ];
-const CURRENT_CATEGORY_MIGRATION = 'merge_default_subcats_v3';
+const CURRENT_CATEGORY_MIGRATION = 'merge_default_subcats_v4';
 
 // Persist categories THEN the migration flag, IN THAT ORDER. Ordering
 // matters because of the crash-window (BK-M3):
@@ -216,6 +217,18 @@ function normalizeAccounts(list, defaultCurrency = DEFAULT_BASE_CURRENCY) {
     ...a,
     currency: isKnownCurrency(a?.currency) ? String(a.currency).toUpperCase() : defaultCurrency,
   }));
+}
+
+function normalizeAccountGroups(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((group) => {
+    if (group?.id !== 'grp_wallet') return group;
+    return {
+      ...group,
+      label: group.label === 'Wallets' ? 'Digital Accounts' : group.label,
+      emoji: group.emoji === '📱' ? '📲' : group.emoji,
+    };
+  });
 }
 
 // ---- Migration: pre-groups shape (flat accounts) → grouped shape ----------
@@ -446,6 +459,7 @@ export function SettingsProvider({ children }) {
         //        Real Estate, Other-invest). Any user who deliberately
         //        deleted a default sub will see it re-appear once —
         //        after which they can delete again and it stays gone.
+        //   v4 → Gold Chit sub-category under Gold investments.
         if (!migApplied.has(CURRENT_CATEGORY_MIGRATION)) {
           expense    = mergeMissingDefaultSubcats(expense,    DEFAULT_EXPENSE_CATEGORIES);
           income     = mergeMissingDefaultSubcats(income,     DEFAULT_INCOME_CATEGORIES);
@@ -467,7 +481,7 @@ export function SettingsProvider({ children }) {
         // Decide accountGroups + accounts based on what's in storage.
         if (grpRaw && accRaw) {
           // Already on the new schema — load as-is.
-          setAccountGroups(JSON.parse(grpRaw));
+          setAccountGroups(normalizeAccountGroups(JSON.parse(grpRaw)));
           setAccounts(normalizeAccounts(JSON.parse(accRaw), loadedBase));
         } else if (accRaw && !grpRaw) {
           // Old flat accounts exist but no groups — migrate.
@@ -725,10 +739,11 @@ export function SettingsProvider({ children }) {
   }, []);
 
   // ---- Accounts: add / delete ----
-  const addAccount = useCallback(({ label, emoji, color, groupId, currency, openingBalance }) => {
+  const addAccount = useCallback(({ label, emoji, color, groupId, currency, openingBalance, openingBalanceDate }) => {
     const trimmed = (label ?? '').trim();
     if (!trimmed || !groupId) return null;
     const parsedOpeningBalance = Number(openingBalance);
+    const parsedOpeningDate = openingBalanceDate ? new Date(openingBalanceDate) : new Date();
     const newAcc = {
       id: prefixedId('acc'),
       groupId,
@@ -739,7 +754,9 @@ export function SettingsProvider({ children }) {
       // deliberately lives with the account so it cannot affect budgets or
       // income/cash-flow reports.
       openingBalance: Number.isFinite(parsedOpeningBalance) ? parsedOpeningBalance : 0,
-      openingBalanceDate: new Date().toISOString(),
+      openingBalanceDate: Number.isNaN(parsedOpeningDate.getTime())
+        ? new Date().toISOString()
+        : parsedOpeningDate.toISOString(),
       // Optional per-account currency. Falls back to the app-wide base so
       // legacy INR-only flows stay identical. New accounts opened
       // deliberately in USD/EUR/AED override this.
@@ -773,11 +790,20 @@ export function SettingsProvider({ children }) {
                 ? String(patch.currency).toUpperCase()
                 : (a.currency ?? baseCurrency),
               ...(patch.openingBalance != null && Number.isFinite(Number(patch.openingBalance))
-                ? {
-                    openingBalance: Number(patch.openingBalance),
-                    openingBalanceDate: a.openingBalanceDate ?? new Date().toISOString(),
-                  }
+                ? { openingBalance: Number(patch.openingBalance) }
                 : {}),
+              ...(patch.openingBalanceDate != null
+                ? {
+                    openingBalanceDate: (() => {
+                      const d = new Date(patch.openingBalanceDate);
+                      return Number.isNaN(d.getTime())
+                        ? (a.openingBalanceDate ?? new Date().toISOString())
+                        : d.toISOString();
+                    })(),
+                  }
+                : patch.openingBalance != null && Number.isFinite(Number(patch.openingBalance))
+                  ? { openingBalanceDate: a.openingBalanceDate ?? new Date().toISOString() }
+                  : {}),
               ...(patch.reconciliationBalance != null && Number.isFinite(Number(patch.reconciliationBalance))
                 ? {
                     reconciliationBalance: Number(patch.reconciliationBalance),
@@ -894,7 +920,9 @@ export function SettingsProvider({ children }) {
       migApplied,
     );
 
-    setAccountGroups(Array.isArray(payload.accountGroups) ? payload.accountGroups : DEFAULT_ACCOUNT_GROUPS);
+    setAccountGroups(normalizeAccountGroups(
+      Array.isArray(payload.accountGroups) ? payload.accountGroups : DEFAULT_ACCOUNT_GROUPS,
+    ));
 
     // Currency plumbing (F9). SettingsScreen passes either the modern
     // { baseCurrency, fxRates } shape (schemaVersion >= 6) inline on

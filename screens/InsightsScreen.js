@@ -44,7 +44,7 @@ const ROUTE_TO_TAB = {
   Loans:                  'More',
   Goals:                  'More',
   RecurringTransactions:  'More',
-  Transfers:              'More',
+  Transfers:              'Transactions',
   Portfolio:              'Invest',
   NetWorth:               'Invest',
   Reports:                'More',
@@ -110,6 +110,10 @@ export default function InsightsScreen({ navigation }) {
   // (React Navigation resolves `screen` inside the tab's stack).
   const handleAction = (action) => {
     if (!action?.route) return;
+    if (action.route === 'Transfers') {
+      navigation.navigate('Transactions', { initialTab: 'transfer' });
+      return;
+    }
     const tab = ROUTE_TO_TAB[action.route];
     if (!tab) return;
     if (tab === 'Analysis') {

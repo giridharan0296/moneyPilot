@@ -20,7 +20,14 @@
 // primitive here is small enough to own.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ScrollView,
   Text,
@@ -34,36 +41,56 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
 const MAX_TAGS = 8;
 
-export default function TagInput({
+const TagInput = forwardRef(function TagInput({
   value = [],
   onChange,
   suggestions = [],
   placeholder = 'Add a tag',
   disabled = false,
-}) {
+}, ref) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const [draft, setDraft] = useState('');
+  const valueRef = useRef(value);
+  const draftRef = useRef('');
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  const setLiveDraft = (next) => {
+    draftRef.current = next;
+    setDraft(next);
+  };
+
+  const appendTag = (current, raw) => {
+    const trimmed = String(raw ?? '').trim().replace(/,+$/, '');
+    if (!trimmed) return current;
+    const lower = trimmed.toLowerCase();
+    if (current.some((t) => t.toLowerCase() === lower)) return current;
+    if (current.length >= MAX_TAGS) return current;
+    return [...current, trimmed];
+  };
+
+  // Parent forms use this at submit time so a tag that is still in the
+  // text field is included even when the input's blur state update has not
+  // rendered yet.
+  useImperativeHandle(ref, () => ({
+    getValue: () => appendTag(valueRef.current, draftRef.current),
+  }), []);
 
   const addTag = (rawArg) => {
-    const raw = rawArg ?? draft;
-    const trimmed = raw.trim().replace(/,+$/, '');
-    if (!trimmed) {
-      setDraft('');
-      return;
-    }
-    const lower = trimmed.toLowerCase();
-    if (value.some((t) => t.toLowerCase() === lower)) {
-      setDraft('');
-      return;
-    }
-    if (value.length >= MAX_TAGS) return;
-    onChange([...value, trimmed]);
-    setDraft('');
+    const raw = rawArg ?? draftRef.current;
+    const next = appendTag(valueRef.current, raw);
+    valueRef.current = next;
+    onChange(next);
+    setLiveDraft('');
   };
 
   const removeTag = (tag) => {
-    onChange(value.filter((t) => t !== tag));
+    const next = valueRef.current.filter((t) => t !== tag);
+    valueRef.current = next;
+    onChange(next);
   };
 
   // Autocomplete matches: suggestions that start with the draft (case-
@@ -89,10 +116,10 @@ export default function TagInput({
       for (let i = 0; i < parts.length - 1; i++) {
         addTag(parts[i]);
       }
-      setDraft(parts[parts.length - 1] ?? '');
+      setLiveDraft(parts[parts.length - 1] ?? '');
       return;
     }
-    setDraft(text);
+    setLiveDraft(text);
   };
 
   const atLimit = value.length >= MAX_TAGS;
@@ -159,7 +186,9 @@ export default function TagInput({
       )}
     </View>
   );
-}
+});
+
+export default TagInput;
 
 const makeStyles = (c) => ({
   chipWrap: {
