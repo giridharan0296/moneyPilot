@@ -1,5 +1,6 @@
-import { ScrollView, Text } from 'react-native';
+import { Text } from 'react-native';
 
+import FormScreen from '../components/FormScreen';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { spacing } from '../lib/theme';
@@ -17,10 +18,9 @@ export default function SettingsAIScreen() {
   } = useSettings();
 
   return (
-    <ScrollView
+    <FormScreen
       style={styles.screen}
       contentContainerStyle={styles.container}
-      keyboardShouldPersistTaps={'handled'}
     >
       <Text style={styles.heading}>AI</Text>
       <Text style={styles.subtitle}>Configure optional AI Insights and voice transcription.</Text>
@@ -31,7 +31,7 @@ export default function SettingsAIScreen() {
         onChange={setAiConfig}
       />
       <WhisperKeySection apiKey={whisperApiKey} onSave={setWhisperApiKey} />
-    </ScrollView>
+    </FormScreen>
   );
 }
 

@@ -31,6 +31,8 @@ import StockPriceChart from '../components/StockPriceChart';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
+import { useTransactions } from '../contexts/TransactionsContext';
+import { computePortfolioSummary } from '../lib/portfolioHoldings';
 import {
   fetchFundamentals,
   fetchPriceHistory,
@@ -403,8 +405,14 @@ export default function FundamentalAnalysisScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
   const navigation = useNavigation();
-  const { holdings, summary: portfolioSummary } = usePortfolio();
-  const { assets } = useNetWorth();
+  const { holdings } = usePortfolio();
+  const { investments } = useTransactions();
+  const { assets, isPortfolioSymbolHidden } = useNetWorth();
+  const portfolioSummary = useMemo(
+    () => computePortfolioSummary(holdings, investments, {}, { isSymbolHidden: isPortfolioSymbolHidden }),
+    [holdings, investments, isPortfolioSymbolHidden],
+  );
+  const displayHoldings = portfolioSummary.displayHoldings;
   const initial = route?.params?.symbol ? String(route.params.symbol) : '';
 
   const [query, setQuery] = useState(initial);
@@ -446,10 +454,10 @@ export default function FundamentalAnalysisScreen({ route }) {
   // before sector enrichment finishes.
   const risk = useMemo(() => {
     if (!data) return null;
-    const list = enrichedHoldings.length ? enrichedHoldings : holdings;
+    const list = enrichedHoldings.length ? enrichedHoldings : displayHoldings;
     // Use thesis max % of portfolio as a stand-in proposed amount for projection.
-    const port = portfolioSummary?.totalValue || 0;
-    const held = holdingValueForSymbol(holdings, data.symbol);
+    const port = portfolioSummary.totalValue || 0;
+    const held = holdingValueForSymbol(displayHoldings, data.symbol);
     const maxPct = data.thesis?.maxPortfolioPct ?? 0.05;
     const proposed = Math.max(0, port * maxPct - held);
     return assessPortfolioRisk({
@@ -461,19 +469,19 @@ export default function FundamentalAnalysisScreen({ route }) {
       portfolioValue: port,
       proposedAmount: proposed,
     });
-  }, [data, holdings, enrichedHoldings, portfolioSummary?.totalValue]);
+  }, [data, displayHoldings, enrichedHoldings, portfolioSummary.totalValue]);
 
   const suggestion = useMemo(() => {
     if (!data?.thesis) return null;
     return suggestInvestAmount({
       thesis: data.thesis,
-      portfolioValue: portfolioSummary?.totalValue || 0,
-      holdingValue: holdingValueForSymbol(holdings, data.symbol),
+      portfolioValue: portfolioSummary.totalValue || 0,
+      holdingValue: holdingValueForSymbol(displayHoldings, data.symbol),
       cashAvailable,
       currency: data.currency || 'INR',
       risk,
     });
-  }, [data, holdings, portfolioSummary?.totalValue, cashAvailable, risk]);
+  }, [data, displayHoldings, portfolioSummary.totalValue, cashAvailable, risk]);
 
   // Price history for the chart — refetch when symbol or range changes.
   useEffect(() => {
@@ -576,16 +584,16 @@ export default function FundamentalAnalysisScreen({ route }) {
     })();
 
     (async () => {
-      if (!holdings?.length) {
+      if (!displayHoldings?.length) {
         setEnrichedHoldings([]);
         return;
       }
       setRiskLoading(true);
       try {
-        const enriched = await enrichHoldingsProfiles(holdings, { max: 12 });
+        const enriched = await enrichHoldingsProfiles(displayHoldings, { max: 12 });
         if (!cancelled) setEnrichedHoldings(enriched);
       } catch {
-        if (!cancelled) setEnrichedHoldings(holdings);
+        if (!cancelled) setEnrichedHoldings(displayHoldings);
       } finally {
         if (!cancelled) setRiskLoading(false);
       }
@@ -594,8 +602,7 @@ export default function FundamentalAnalysisScreen({ route }) {
     return () => {
       cancelled = true;
     };
-    // Re-run when the analyzed symbol changes; holdings are read from closure.
-  }, [data?.symbol]);
+  }, [data?.symbol, displayHoldings]);
 
   // Debounced symbol search while typing.
   useEffect(() => {

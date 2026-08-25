@@ -29,11 +29,13 @@ import {
 } from '../constants';
 import {
   appendSnapshot,
+  realEstateValueAt,
   sanitizeHistory,
   shouldSnapshot,
 } from '../lib/netWorthHistory';
 import { prefixedId } from '../lib/ids';
 import { DEFAULT_BASE_CURRENCY, isKnownCurrency } from '../lib/currency';
+import { portfolioSymbolKey } from '../lib/portfolioNetWorthSync';
 import { normalizeUan } from '../lib/epfAssets';
 
 const NetWorthContext = createContext(null);
@@ -73,16 +75,18 @@ export function NetWorthProvider({ children }) {
   // lib/netWorthHistory.js — feeds NetWorthChart. See the snapshot effect
   // below for the sampling rules.
   const [history, setHistory] = useState([]);
+  const [portfolioSyncHiddenSymbols, setPortfolioSyncHiddenSymbols] = useState([]);
   const [ready, setReady] = useState(false);
 
   // ---- Load persisted data on mount ----
   useEffect(() => {
     (async () => {
       try {
-        const [assetsRaw, liabRaw, histRaw] = await Promise.all([
+        const [assetsRaw, liabRaw, histRaw, hiddenRaw] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.assets),
           AsyncStorage.getItem(STORAGE_KEYS.liabilities),
           AsyncStorage.getItem(STORAGE_KEYS.networth_history),
+          AsyncStorage.getItem(STORAGE_KEYS.portfolio_sync_hidden_symbols),
         ]);
         if (assetsRaw) {
           const parsed = JSON.parse(assetsRaw);
@@ -98,6 +102,18 @@ export function NetWorthProvider({ children }) {
           } catch (e) {
             console.warn('Failed to parse NW history — starting fresh:', e);
             setHistory([]);
+          }
+        }
+        if (hiddenRaw) {
+          try {
+            const parsed = JSON.parse(hiddenRaw);
+            setPortfolioSyncHiddenSymbols(
+              Array.isArray(parsed)
+                ? parsed.map((s) => portfolioSymbolKey(s)).filter(Boolean)
+                : [],
+            );
+          } catch {
+            setPortfolioSyncHiddenSymbols([]);
           }
         }
       } catch (e) {
@@ -127,6 +143,33 @@ export function NetWorthProvider({ children }) {
       .catch((e) => console.warn('Save NW history failed:', e));
   }, [history, ready]);
 
+  useEffect(() => {
+    if (!ready) return;
+    AsyncStorage.setItem(
+      STORAGE_KEYS.portfolio_sync_hidden_symbols,
+      JSON.stringify(portfolioSyncHiddenSymbols),
+    ).catch((e) => console.warn('Save portfolio hidden symbols failed:', e));
+  }, [portfolioSyncHiddenSymbols, ready]);
+
+  const isPortfolioSymbolHidden = useCallback(
+    (symbol) => portfolioSyncHiddenSymbols.includes(portfolioSymbolKey(symbol)),
+    [portfolioSyncHiddenSymbols],
+  );
+
+  const hidePortfolioSymbol = useCallback((symbol) => {
+    const key = portfolioSymbolKey(symbol);
+    if (!key) return;
+    setPortfolioSyncHiddenSymbols((prev) => (
+      prev.includes(key) ? prev : [...prev, key]
+    ));
+  }, []);
+
+  const unhidePortfolioSymbol = useCallback((symbol) => {
+    const key = portfolioSymbolKey(symbol);
+    if (!key) return;
+    setPortfolioSyncHiddenSymbols((prev) => prev.filter((s) => s !== key));
+  }, []);
+
   // ---- Assets: CRUD ----
   const addAsset = useCallback(({
     name,
@@ -145,11 +188,15 @@ export function NetWorthProvider({ children }) {
     referenceRatePerGram,
     valuedAt,
     valuationSource,
+    purchasePrice,
+    purchaseDate,
+    annualGrowthPct,
     investmentSubCategoryId,
     epfUan,
     linkedPortfolioSync,
     portfolioSymbol,
     portfolioInstrumentKind,
+    portfolioInvestedValue,
     instrumentSymbol,
     linkedChitSchemeId,
     chitOpen,
@@ -186,11 +233,17 @@ export function NetWorthProvider({ children }) {
       referenceRatePerGram: referenceRatePerGram != null && isFinite(Number(referenceRatePerGram)) ? Number(referenceRatePerGram) : null,
       valuedAt: valuedAt ?? null,
       valuationSource: valuationSource ?? null,
+      purchasePrice: purchasePrice != null && isFinite(Number(purchasePrice)) ? Number(purchasePrice) : null,
+      purchaseDate: purchaseDate ?? null,
+      annualGrowthPct: annualGrowthPct != null && isFinite(Number(annualGrowthPct)) ? Number(annualGrowthPct) : null,
       investmentSubCategoryId: investmentSubCategoryId ?? null,
       epfUan: normalizeUanField(epfUan),
       linkedPortfolioSync: linkedPortfolioSync === true,
       portfolioSymbol: portfolioSymbol ? String(portfolioSymbol).trim().toUpperCase() : null,
       portfolioInstrumentKind: portfolioInstrumentKind ?? null,
+      portfolioInvestedValue: portfolioInvestedValue != null && isFinite(Number(portfolioInvestedValue))
+        ? Math.max(0, Math.round(Number(portfolioInvestedValue)))
+        : null,
       instrumentSymbol: instrumentSymbol ? String(instrumentSymbol).trim() : null,
       linkedChitSchemeId: linkedChitSchemeId ? String(linkedChitSchemeId) : null,
       chitOpen: chitOpen === true,
@@ -309,8 +362,24 @@ export function NetWorthProvider({ children }) {
   // rows written before F9) fall back to the face value; that's exactly
   // right for the common case of INR-only users where every row IS in
   // base currency.
+  const [foregroundTick, setForegroundTick] = useState(0);
   const summary = useMemo(() => {
-    const totalAssets      = assets.reduce(
+    const valuedAssets = assets.map((asset) => {
+      if (asset.valuationMethod !== 'real_estate_growth') return asset;
+      const currentBaseValue = realEstateValueAt(asset, new Date());
+      return { ...asset, valueInBase: currentBaseValue };
+    });
+    const syncedSymbolKeys = new Set(
+      valuedAssets
+        .filter((asset) => asset.linkedPortfolioSync && asset.portfolioSymbol)
+        .map((asset) => portfolioSymbolKey(asset.portfolioSymbol)),
+    );
+    const countedAssets = valuedAssets.filter((asset) => {
+      if (asset.linkedPortfolioSync) return true;
+      const manualKey = portfolioSymbolKey(asset.instrumentSymbol || asset.portfolioSymbol);
+      return !(manualKey && syncedSymbolKeys.has(manualKey));
+    });
+    const totalAssets      = countedAssets.reduce(
       (s, a) => s + baseValueOf(a, 'value'),
       0,
     );
@@ -323,7 +392,7 @@ export function NetWorthProvider({ children }) {
     // Per-category rollup — used by the summary breakdown UI. Passes the
     // base-currency accessor so a mix of USD/EUR/INR assets in one
     // category doesn't distort the pie slices.
-    const assetsByCategory = groupByCategory(assets, DEFAULT_ASSET_CATEGORIES, 'value', 'valueInBase');
+    const assetsByCategory = groupByCategory(countedAssets, DEFAULT_ASSET_CATEGORIES, 'value', 'valueInBase');
     const liabilitiesByCategory = groupByCategory(liabilities, DEFAULT_LIABILITY_CATEGORIES, 'outstanding', 'outstandingInBase');
 
     return {
@@ -333,7 +402,7 @@ export function NetWorthProvider({ children }) {
       assetsByCategory,
       liabilitiesByCategory,
     };
-  }, [assets, liabilities]);
+  }, [assets, liabilities, foregroundTick]);
 
   const findAssetCategory = useCallback(
     (id) => DEFAULT_ASSET_CATEGORIES.find((c) => c.id === id) ?? null,
@@ -367,7 +436,6 @@ export function NetWorthProvider({ children }) {
   // user is looking at the chart, and it re-runs the effect below which
   // uses `shouldSnapshot` (day-key aware) to lay down a fresh point when
   // the local calendar day has ticked over.
-  const [foregroundTick, setForegroundTick] = useState(0);
   useEffect(() => {
     // Also bump once on mount so the first render after a load pass
     // gets a snapshot check without waiting for a foreground event.
@@ -416,6 +484,10 @@ export function NetWorthProvider({ children }) {
       findAssetCategory,
       findLiabilityCategory,
       restoreState,
+      portfolioSyncHiddenSymbols,
+      isPortfolioSymbolHidden,
+      hidePortfolioSymbol,
+      unhidePortfolioSymbol,
     }),
     [
       ready,
@@ -434,6 +506,10 @@ export function NetWorthProvider({ children }) {
       findAssetCategory,
       findLiabilityCategory,
       restoreState,
+      portfolioSyncHiddenSymbols,
+      isPortfolioSymbolHidden,
+      hidePortfolioSymbol,
+      unhidePortfolioSymbol,
     ],
   );
 

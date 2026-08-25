@@ -28,6 +28,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TransactionForm from './TransactionForm';
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
@@ -48,14 +49,16 @@ export default function AddTransactionModal({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const insets = useSafeAreaInsets();
+  const headerOffset = insets.top + 56;
 
-  const handleSubmit = (values) => {
+  const handleSubmit = (values, { keepOpen = false } = {}) => {
     // Parent (TransactionsList) does the actual insert into the
     // TransactionsContext, including the "outside current filter"
     // snackbar and broker-default persistence. We just forward the
     // form values and close the modal.
     onAdd(values);
-    onClose();
+    if (!keepOpen) onClose();
   };
 
   return (
@@ -69,6 +72,7 @@ export default function AddTransactionModal({
       <KeyboardAvoidingView
         style={styles.root}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerOffset : 0}
       >
         <View style={styles.header}>
           <TouchableOpacity
@@ -94,6 +98,7 @@ export default function AddTransactionModal({
           contentContainerStyle={styles.body}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets
         >
           <TransactionForm
             key={
@@ -110,6 +115,7 @@ export default function AddTransactionModal({
             type={type}
             initialValues={initialValues || undefined}
             onSubmit={handleSubmit}
+            allowSaveAndAddAnother={!initialValues}
           />
         </ScrollView>
       </KeyboardAvoidingView>

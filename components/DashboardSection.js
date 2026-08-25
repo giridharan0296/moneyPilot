@@ -38,6 +38,7 @@ export default function DashboardSection({
   persistKey = null,
   accent = '#2563eb',
   badge = null,
+  hidden = false,
   children,
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -79,7 +80,11 @@ export default function DashboardSection({
     : (collapsedHint ?? expandedSubtitle);
 
   return (
-    <View style={[styles.wrap, { borderLeftColor: withAlpha(accent, open ? 0.55 : 0.35) }]}>
+    <View style={[
+      styles.wrap,
+      { borderLeftColor: withAlpha(accent, open ? 0.55 : 0.35) },
+      hidden && styles.hidden,
+    ]}>
       <TouchableOpacity
         onPress={toggle}
         activeOpacity={0.72}
@@ -135,6 +140,7 @@ const makeStyles = (c) => ({
     overflow: 'hidden',
     ...elevation.card,
   },
+  hidden: { display: 'none' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -5,6 +5,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -18,17 +19,27 @@ import TagInput from './TagInput';
 import AppIcon from './AppIcon';
 import AmountCalculatorButton from './AmountCalculatorButton';
 import AppButton from './AppButton';
+import QuickAddPickerItem from './QuickAddPickerItem';
 import PayslipReviewDialog from './PayslipReviewDialog';
+import { StatusBadge } from './UiPrimitives';
+import { InfoCallout } from './UiPrimitives';
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { transcribeAudio } from '../lib/transcribe';
 import { formatFieldTimestamp } from '../lib/formatTimestamp';
 import parseVoiceTransaction from '../lib/parseVoiceTransaction';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
+import { usePortfolio } from '../contexts/PortfolioContext';
+import { useNetWorth } from '../contexts/NetWorthContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { useToast } from '../contexts/ToastContext';
 import { searchSymbols } from '../lib/fundamentals';
+import {
+  buildKnownInstruments,
+  mergeInstrumentSuggestions,
+  searchKnownInstruments,
+} from '../lib/instrumentMemory';
 import {
   computeChitWeightGrams,
   formatChitGrams,
@@ -38,7 +49,7 @@ import {
   referenceChitRatePerGram,
   slugChitSchemeId,
 } from '../lib/goldChit';
-import { fetchIndicativeMetalRates, formatMetalRateHint, METAL_PURITY } from '../lib/metalRates';
+import { fetchIndicativeMetalRatesAsOf, formatChitMetalRateHint, METAL_PURITY } from '../lib/metalRates';
 import {
   buildIncomeDraftFromPayslip,
   computePayslipGross,
@@ -54,13 +65,61 @@ import {
   currencyMeta,
   lookupRateOrOne,
 } from '../lib/currency';
+import { formatSubCategoryLabel } from '../lib/categoryDisplay';
+import { isNewMarketInstrument } from '../lib/portfolioHoldings';
+import { FREQUENCIES } from '../lib/recurring';
+import {
+  aggregateOpeningLots,
+  openingLotsFromSaved,
+  parseOpeningLotsFromForm,
+  validateOpeningLotPrices,
+  buildOpeningPositionPayload,
+} from '../lib/openingPositions';
+
+function newOpeningLotKey() {
+  return `lot_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+// Stop Android/iOS from treating repeated decimal fields as one autofill
+// group — otherwise a clipboard tap can overwrite every "Units" input.
+const ISOLATED_NUMERIC_INPUT = Platform.select({
+  ios: {
+    // "none" still lets iOS offer clipboard phone numbers on numeric keys;
+    // "oneTimeCode" avoids phone/contact autofill heuristics.
+    textContentType: 'oneTimeCode',
+    autoComplete: 'off',
+    autoCorrect: false,
+    spellCheck: false,
+    smartInsertDelete: false,
+  },
+  android: {
+    autoComplete: 'off',
+    importantForAutofill: 'no',
+    autoCorrect: false,
+  },
+  default: {
+    autoComplete: 'off',
+    autoCorrect: false,
+  },
+});
+
+/** Keep only a plain decimal — strips phone formatting (+91, spaces, dashes). */
+function sanitizeDecimalInput(raw) {
+  let value = String(raw ?? '').replace(/,/g, '').trim();
+  value = value.replace(/[^\d.]/g, '');
+  const dot = value.indexOf('.');
+  if (dot >= 0) {
+    value = `${value.slice(0, dot + 1)}${value.slice(dot + 1).replace(/\./g, '')}`;
+  }
+  return value;
+}
 
 function marketCountryFor(categoryId, subCategory) {
   const key = `${subCategory?.id || ''} ${subCategory?.label || ''}`.toLowerCase();
   if (/international|global|world|intl/.test(key)) return 'GLOBAL';
   if (/(^|[_\s-])us($|[_\s-])|united states|america/.test(key)) return 'US';
   if (/india|indian/.test(key)) return 'IN';
-  if (categoryId === 'mutual_funds' || subCategory?.id === 'gold_etf') return 'IN';
+  if (categoryId === 'mutual_funds' || categoryId === 'etfs' || subCategory?.id === 'gold_etf') return 'IN';
   return null;
 }
 
@@ -87,6 +146,49 @@ const INCOME_ENTRY_MODES = [
   { id: 'manual', icon: 'edit-3', label: 'Manual entry', short: 'Manual' },
   { id: 'payslip', icon: 'file-text', label: 'From payslip PDF', short: 'Source doc' },
 ];
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// Turn a remembered recurring note into a note for the selected transaction
+// month. Only replace a month that matches the source transaction's own date,
+// so unrelated text such as "March conference deposit" is not rewritten when
+// copied from a transaction recorded in a different month.
+function noteForTransactionDate(template, sourceDate, targetDate) {
+  const source = new Date(sourceDate);
+  const target = new Date(targetDate);
+  if (!template || !isFinite(source.getTime()) || !isFinite(target.getTime())) {
+    return template;
+  }
+  const sourceFull = MONTH_NAMES[source.getMonth()];
+  const sourceShort = sourceFull.slice(0, 3);
+  const targetFull = MONTH_NAMES[target.getMonth()];
+  const targetShort = targetFull.slice(0, 3);
+  let replacedMonth = false;
+  let next = String(template).replace(
+    new RegExp(`\\b${sourceFull}\\b`, 'gi'),
+    () => {
+      replacedMonth = true;
+      return targetFull;
+    },
+  );
+  next = next.replace(
+    new RegExp(`\\b${sourceShort}\\b`, 'gi'),
+    () => {
+      replacedMonth = true;
+      return targetShort;
+    },
+  );
+  if (replacedMonth && source.getFullYear() !== target.getFullYear()) {
+    next = next.replace(
+      new RegExp(`\\b${source.getFullYear()}\\b`, 'g'),
+      String(target.getFullYear()),
+    );
+  }
+  return next;
+}
 
 // ----------------------------------------------------------------------------
 // TransactionForm — the shared amount+category+account+timestamp+note form.
@@ -120,6 +222,7 @@ export default function TransactionForm({
   notePlaceholder = 'e.g. lunch with team',
   type = null,
   onSubmit,
+  allowSaveAndAddAnother = false,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -152,6 +255,7 @@ export default function TransactionForm({
   );
   const [date, setDate] = useState(initialValues?.date ?? new Date());
   const [note, setNote] = useState(initialValues?.note ?? '');
+  const autoNoteRef = useRef(null);
   const [tags, setTags] = useState(
     Array.isArray(initialValues?.tags) ? initialValues.tags : [],
   );
@@ -178,6 +282,39 @@ export default function TransactionForm({
   );
   const [instrumentSuggestions, setInstrumentSuggestions] = useState([]);
   const [instrumentSearching, setInstrumentSearching] = useState(false);
+  const savedOpeningPosition = initialValues?.openingPosition ?? null;
+  const [historicalOnly, setHistoricalOnly] = useState(Boolean(initialValues?.historicalOnly));
+  const [makeRecurring, setMakeRecurring] = useState(false);
+  const [recurringFrequency, setRecurringFrequency] = useState('monthly');
+  const [recurringEndEnabled, setRecurringEndEnabled] = useState(false);
+  const [recurringEndDate, setRecurringEndDate] = useState(null);
+  const [includeOpeningPosition, setIncludeOpeningPosition] = useState(
+    Boolean(savedOpeningPosition) || Boolean(initialValues?.historicalOnly),
+  );
+  const [openingTrackingDate, setOpeningTrackingDate] = useState(() => {
+    const savedDate = savedOpeningPosition?.openingDate
+      ? new Date(savedOpeningPosition.openingDate)
+      : new Date();
+    return Number.isNaN(savedDate.getTime()) ? new Date() : savedDate;
+  });
+  const createEmptyOpeningLot = () => ({
+    clientKey: newOpeningLotKey(),
+    id: null,
+    quantity: '',
+    avgCost: '',
+    openingDate: openingTrackingDate,
+  });
+  const [openingLots, setOpeningLots] = useState(() => {
+    const savedLots = openingLotsFromSaved(savedOpeningPosition);
+    if (savedLots.length === 0) return [createEmptyOpeningLot()];
+    return savedLots.map((lot) => ({
+      clientKey: lot.id ? `lot-${lot.id}` : newOpeningLotKey(),
+      id: lot.id ?? null,
+      quantity: lot.quantity != null ? String(lot.quantity) : '',
+      avgCost: lot.avgCost != null ? String(lot.avgCost) : '',
+      openingDate: lot.openingDate ? new Date(lot.openingDate) : openingTrackingDate,
+    }));
+  });
 
   // Voice-note lifecycle bookkeeping.
   //
@@ -234,7 +371,120 @@ export default function TransactionForm({
     brokerDefaultsBySubCategory,
     brokers,
   } = useSettings();
-  const { allTags, investments } = useTransactions();
+  const { allTags, expenses, income, investments } = useTransactions();
+  const { holdings } = usePortfolio();
+  const { isPortfolioSymbolHidden } = useNetWorth();
+  const typeTransactions = useMemo(() => {
+    if (type === 'income') return income;
+    if (type === 'investment') return investments;
+    return expenses;
+  }, [expenses, income, investments, type]);
+  const accountTouchedRef = useRef(!!initialValues?.accountId);
+  const initialSuggestionsAppliedRef = useRef(false);
+
+  // Keep an automatically remembered note aligned when the user changes the
+  // transaction date after choosing its category. Manual edits break this
+  // link immediately and are never overwritten.
+  useEffect(() => {
+    const remembered = autoNoteRef.current;
+    if (!remembered) return;
+    if (note !== remembered.lastApplied) {
+      autoNoteRef.current = null;
+      return;
+    }
+    const next = noteForTransactionDate(remembered.template, remembered.sourceDate, date);
+    remembered.lastApplied = next;
+    if (next !== note) setNote(next);
+  }, [date, note]);
+
+  // In add mode, use the most recently used valid account for this
+  // transaction type. The transaction ledger is the memory, so this works
+  // across restarts without introducing another preference to back up.
+  useEffect(() => {
+    if (initialValues || accountTouchedRef.current) return;
+    const recentAccountId = typeTransactions.find((tx) =>
+      accounts.some((account) => account.id === tx.accountId)
+    )?.accountId;
+    if (recentAccountId) {
+      accountTouchedRef.current = true;
+      setAccountId(recentAccountId);
+    }
+  }, [accounts, initialValues, typeTransactions]);
+
+  const matchingHistory = useMemo(() => {
+    const query = note.trim().toLocaleLowerCase();
+    if (query.length < 2) return [];
+    return typeTransactions
+      .filter((tx) => {
+        const candidate = String(tx.note ?? '').trim().toLocaleLowerCase();
+        return candidate && candidate.includes(query);
+      })
+      .sort((a, b) => {
+        const aScope = a.categoryId === categoryId
+          ? (a.subCategoryId === subCategoryId ? 2 : 1)
+          : 0;
+        const bScope = b.categoryId === categoryId
+          ? (b.subCategoryId === subCategoryId ? 2 : 1)
+          : 0;
+        const aNote = String(a.note).trim().toLocaleLowerCase();
+        const bNote = String(b.note).trim().toLocaleLowerCase();
+        const aPrefix = aNote.startsWith(query) ? 1 : 0;
+        const bPrefix = bNote.startsWith(query) ? 1 : 0;
+        return bScope - aScope
+          || bPrefix - aPrefix
+          || new Date(b.createdAt) - new Date(a.createdAt);
+      });
+  }, [categoryId, note, subCategoryId, typeTransactions]);
+
+  const noteSuggestions = useMemo(() => {
+    const seen = new Set();
+    const suggestions = [];
+    for (const tx of matchingHistory) {
+      const template = String(tx.note ?? '').trim();
+      const sourceDate = tx.createdAt ?? tx.date;
+      const label = noteForTransactionDate(template, sourceDate, date);
+      const key = label.toLocaleLowerCase();
+      if (!template || seen.has(key) || key === note.trim().toLocaleLowerCase()) continue;
+      seen.add(key);
+      suggestions.push({ label, template, transaction: tx });
+      if (suggestions.length === 4) break;
+    }
+    return suggestions;
+  }, [date, matchingHistory, note]);
+
+  const tagSuggestions = useMemo(() => {
+    const scopedCounts = new Map();
+    for (const tx of typeTransactions) {
+      if (tx.categoryId !== categoryId) continue;
+      if (subCategoryId && tx.subCategoryId !== subCategoryId) continue;
+      for (const rawTag of Array.isArray(tx.tags) ? tx.tags : []) {
+        const tag = String(rawTag ?? '').trim();
+        if (tag) scopedCounts.set(tag, (scopedCounts.get(tag) ?? 0) + 1);
+      }
+    }
+    const scoped = [...scopedCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag]) => tag);
+    const seen = new Set(scoped.map((tag) => tag.toLocaleLowerCase()));
+    return [
+      ...scoped,
+      ...allTags.filter((tag) => !seen.has(String(tag).toLocaleLowerCase())),
+    ];
+  }, [allTags, categoryId, subCategoryId, typeTransactions]);
+
+  const suggestedCategory = useMemo(() => {
+    if (!note.trim() || matchingHistory.length === 0) return null;
+    const scores = new Map();
+    for (const tx of matchingHistory) {
+      if (!tx.categoryId) continue;
+      const current = scores.get(tx.categoryId) ?? { count: 0, tx };
+      scores.set(tx.categoryId, { count: current.count + 1, tx: current.tx });
+    }
+    const winner = [...scores.values()].sort((a, b) => b.count - a.count)[0]?.tx;
+    if (!winner || winner.categoryId === categoryId) return null;
+    const category = categories.find((item) => item.id === winner.categoryId);
+    return category ? { category, transaction: winner } : null;
+  }, [categories, categoryId, matchingHistory, note]);
 
   // Brokers surfaced in this transaction form. We drop the CSV-only
   // 'generic' entry (whose "auto-detect" hint is meaningless outside of
@@ -305,10 +555,102 @@ export default function TransactionForm({
   const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
   const subCategories = selectedCategory?.subCategories ?? [];
   const selectedSubCategory = subCategories.find((s) => s.id === subCategoryId) ?? null;
+  const selectedAccount = accounts.find((account) => account.id === accountId) ?? null;
   const marketCountry = marketCountryFor(categoryId, selectedSubCategory);
   const tracksMarketInstrument = type === 'investment' && (
-    categoryId === 'stocks' || categoryId === 'mutual_funds' || subCategoryId === 'gold_etf'
+    categoryId === 'stocks' || categoryId === 'mutual_funds' || categoryId === 'etfs' || subCategoryId === 'gold_etf'
   );
+  const instrumentIsNewInSystem = useMemo(() => isNewMarketInstrument(investments, holdings, {
+    symbol: instrument?.symbol,
+    broker: brokerId,
+    excludeTxId: initialValues?.id,
+    isSymbolHidden: isPortfolioSymbolHidden,
+  }), [
+    investments,
+    holdings,
+    brokerId,
+    instrument?.symbol,
+    initialValues?.id,
+    isPortfolioSymbolHidden,
+  ]);
+  const canShowOpeningPosition = tracksMarketInstrument
+    && Boolean(instrument?.symbol)
+    && (instrumentIsNewInSystem || Boolean(savedOpeningPosition));
+
+  const recurringFrequencyOptions = useMemo(
+    () => FREQUENCIES.filter((f) => ['weekly', 'monthly', 'yearly'].includes(f.id)),
+    [],
+  );
+
+  useEffect(() => {
+    if (!canShowOpeningPosition) setIncludeOpeningPosition(false);
+  }, [canShowOpeningPosition]);
+
+  useEffect(() => {
+    if (historicalOnly && tracksMarketInstrument) {
+      setIncludeOpeningPosition(true);
+    }
+  }, [historicalOnly, tracksMarketInstrument]);
+
+  const openingLotsSummary = useMemo(() => {
+    const parsed = parseOpeningLotsFromForm(openingLots);
+    if (!parsed.ok) return null;
+    return aggregateOpeningLots(parsed.lots);
+  }, [openingLots]);
+
+  const updateOpeningLot = (clientKey, patch) => {
+    setOpeningLots((rows) => rows.map((row) => (
+      row.clientKey === clientKey ? { ...row, ...patch } : row
+    )));
+  };
+
+  const addOpeningLotRow = () => {
+    setOpeningLots((rows) => [...rows, {
+      clientKey: newOpeningLotKey(),
+      id: null,
+      quantity: '',
+      avgCost: '',
+      openingDate: openingTrackingDate,
+    }]);
+  };
+
+  const removeOpeningLotRow = (clientKey) => {
+    setOpeningLots((rows) => (
+      rows.length <= 1 ? rows : rows.filter((row) => row.clientKey !== clientKey)
+    ));
+  };
+
+  useEffect(() => {
+    if (!includeOpeningPosition) return;
+    const hasLotData = openingLots.some(
+      (lot) => String(lot.quantity ?? '').trim() || String(lot.avgCost ?? '').trim(),
+    );
+    if (hasLotData) return;
+    const account = accounts.find((item) => item.id === accountId);
+    if (account?.openingBalanceDate) {
+      const dateValue = new Date(account.openingBalanceDate);
+      if (!Number.isNaN(dateValue.getTime())) setOpeningTrackingDate(dateValue);
+    }
+  }, [includeOpeningPosition, openingLots, accounts, accountId]);
+
+  // Settings hydrates asynchronously. Keep the picker selection aligned
+  // with the latest category tree so a stale parent/sub id cannot make the
+  // sub-category row disappear after stored settings finish loading.
+  useEffect(() => {
+    if (categories.length === 0) return;
+    const liveParent = categories.find((category) => category.id === categoryId);
+    if (!liveParent) {
+      setCategoryId(categories[0].id);
+      setSubCategoryId(null);
+      return;
+    }
+    if (
+      subCategoryId
+      && !liveParent.subCategories?.some((subCategory) => subCategory.id === subCategoryId)
+    ) {
+      setSubCategoryId(null);
+    }
+  }, [categories, categoryId, subCategoryId]);
   const tracksGoldChit = type === 'investment' && subCategoryId === GOLD_CHIT_SUB_ID;
   const openChitSchemes = useMemo(
     () => (tracksGoldChit ? listOpenChitSchemeOptions(investments) : []),
@@ -347,13 +689,34 @@ export default function TransactionForm({
   const [pdfPhase, setPdfPhase] = useState('idle');
   const [pdfParseResult, setPdfParseResult] = useState(null);
   const [pdfFileName, setPdfFileName] = useState('');
+
+  const canShowRecurring = !initialValues
+    && !historicalOnly
+    && !tracksGoldChit
+    && splitRows.length === 0
+    && !(type === 'income' && incomeEntryMode === 'payslip');
+
+  useEffect(() => {
+    if (!canShowRecurring && makeRecurring) setMakeRecurring(false);
+  }, [canShowRecurring, makeRecurring]);
+
   const expectedInstrumentTypes = useMemo(
-    () => marketCountry === 'IN'
-      ? ['EQUITY', 'ETF', 'MUTUALFUND']
-      : categoryId === 'mutual_funds'
-        ? ['MUTUALFUND']
-        : ['EQUITY', 'ETF'],
+    () => {
+      if (categoryId === 'mutual_funds') return ['MUTUALFUND'];
+      if (marketCountry === 'IN') return ['EQUITY', 'ETF', 'MUTUALFUND'];
+      return ['EQUITY', 'ETF'];
+    },
     [categoryId, marketCountry],
+  );
+
+  const knownInstruments = useMemo(
+    () => buildKnownInstruments(investments, holdings),
+    [investments, holdings],
+  );
+
+  const filterInstrumentHits = (hits) => hits.filter((hit) =>
+    expectedInstrumentTypes.includes(String(hit.quoteType || hit.type).toUpperCase().replace(/\s+/g, ''))
+    && belongsToMarket(hit, marketCountry),
   );
 
   useEffect(() => {
@@ -366,37 +729,43 @@ export default function TransactionForm({
       setInstrumentSuggestions([]);
       return undefined;
     }
+
+    const localHits = filterInstrumentHits(searchKnownInstruments(knownInstruments, query));
+    setInstrumentSuggestions(localHits);
+
     let cancelled = false;
     const timer = setTimeout(async () => {
       setInstrumentSearching(true);
       try {
         const region = marketCountry === 'IN' || marketCountry === 'US' ? marketCountry : undefined;
-        const hits = await searchSymbols(query, { region });
+        const apiHits = filterInstrumentHits(await searchSymbols(query, { region }));
         if (!cancelled) {
-          setInstrumentSuggestions(hits.filter((hit) =>
-            expectedInstrumentTypes.includes(String(hit.quoteType || hit.type).toUpperCase().replace(/\s+/g, ''))
-            && belongsToMarket(hit, marketCountry)
-          ));
+          setInstrumentSuggestions(mergeInstrumentSuggestions(localHits, apiHits));
         }
       } catch {
-        if (!cancelled) setInstrumentSuggestions([]);
+        if (!cancelled) setInstrumentSuggestions(localHits);
       } finally {
         if (!cancelled) setInstrumentSearching(false);
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [instrumentQuery, instrument?.symbol, tracksMarketInstrument, expectedInstrumentTypes, marketCountry]);
+  }, [instrumentQuery, instrument?.symbol, tracksMarketInstrument, expectedInstrumentTypes, marketCountry, knownInstruments]);
 
   useEffect(() => {
     if (!tracksGoldChit) return undefined;
     let cancelled = false;
-    setChitRatesLoading(true);
-    fetchIndicativeMetalRates()
-      .then((rates) => { if (!cancelled) setChitMetalRates(rates); })
-      .catch(() => { if (!cancelled) setChitMetalRates(null); })
-      .finally(() => { if (!cancelled) setChitRatesLoading(false); });
-    return () => { cancelled = true; };
-  }, [tracksGoldChit]);
+    const timer = setTimeout(() => {
+      setChitRatesLoading(true);
+      fetchIndicativeMetalRatesAsOf(date)
+        .then((rates) => { if (!cancelled) setChitMetalRates(rates); })
+        .catch(() => { if (!cancelled) setChitMetalRates(null); })
+        .finally(() => { if (!cancelled) setChitRatesLoading(false); });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [tracksGoldChit, date]);
 
   const chitWeightPreview = useMemo(() => {
     if (!tracksGoldChit) return null;
@@ -417,9 +786,65 @@ export default function TransactionForm({
       : null
   ), [chitMetalRates, chitPurity]);
 
+  const chitRateHint = useMemo(() => formatChitMetalRateHint({
+    rates: chitMetalRates,
+    purity: chitPurity,
+    loading: chitRatesLoading,
+    asOfDate: date,
+  }), [chitMetalRates, chitPurity, chitRatesLoading, date]);
+
   const chitWeightDisplay = chitWeightPreview?.grams != null
     ? Number(chitWeightPreview.grams).toFixed(4).replace(/\.?0+$/, '')
     : '';
+
+  const autoFillFrequentDetails = (parentId, childId = null) => {
+    if (initialValues) return;
+    const matching = typeTransactions.filter((tx) => (
+      tx.categoryId === parentId
+      && (childId ? tx.subCategoryId === childId : !tx.subCategoryId)
+    ));
+    if (matching.length === 0) return;
+
+    const noteCounts = new Map();
+    const tagCounts = new Map();
+    for (const tx of matching) {
+      const savedNote = String(tx.note ?? '').trim();
+      if (savedNote) {
+        const current = noteCounts.get(savedNote) ?? { count: 0, transaction: tx };
+        noteCounts.set(savedNote, { count: current.count + 1, transaction: current.transaction });
+      }
+      for (const tag of Array.isArray(tx.tags) ? tx.tags : []) {
+        const savedTag = String(tag ?? '').trim();
+        if (savedTag) tagCounts.set(savedTag, (tagCounts.get(savedTag) ?? 0) + 1);
+      }
+    }
+    const frequentNote = [...noteCounts.entries()]
+      .sort((a, b) => b[1].count - a[1].count)[0];
+    const frequentTags = [...tagCounts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 5)
+      .map(([tag]) => tag);
+    if (frequentNote) {
+      const [template, detail] = frequentNote;
+      const sourceDate = detail.transaction?.createdAt ?? detail.transaction?.date;
+      const applied = noteForTransactionDate(template, sourceDate, date);
+      autoNoteRef.current = { template, sourceDate, lastApplied: applied };
+      setNote(applied);
+    }
+    if (frequentTags.length > 0) setTags(frequentTags);
+  };
+
+  // Apply remembered details for the initially selected category as soon as
+  // history is available. Previously this only ran after a category chip was
+  // tapped, making the default category behave differently from every other.
+  useEffect(() => {
+    if (initialValues || initialSuggestionsAppliedRef.current) return;
+    if (typeTransactions.length === 0) return;
+    initialSuggestionsAppliedRef.current = true;
+    autoFillFrequentDetails(categoryId, subCategoryId);
+    // Category changes have their own explicit auto-fill handlers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues, typeTransactions.length]);
 
   // Change the parent → drop the sub selection unless it belongs to the new
   // parent. Wrapped so voice-fill can also set a sub-category atomically.
@@ -431,6 +856,7 @@ export default function TransactionForm({
     setCategoryId(newParentId);
     if (keepSubId) {
       setSubCategoryId(keepSubId);
+      autoFillFrequentDetails(newParentId, keepSubId);
       // Voice-fill path also lands here — apply broker default too,
       // otherwise a purely-voice-driven investment entry never
       // benefits from remembered brokers.
@@ -441,7 +867,9 @@ export default function TransactionForm({
     const stillValid = newParent?.subCategories?.some(
       (s) => s.id === subCategoryId,
     );
+    const nextSubId = stillValid ? subCategoryId : null;
     if (!stillValid) setSubCategoryId(null);
+    autoFillFrequentDetails(newParentId, nextSubId);
   };
 
   // Apply the remembered "last-used broker for this sub-category" if
@@ -476,6 +904,7 @@ export default function TransactionForm({
       }
       if (next && next !== prev) {
         maybeAutoFillBrokerForSub(next);
+        autoFillFrequentDetails(categoryId, next);
       }
       return next;
     });
@@ -580,7 +1009,7 @@ export default function TransactionForm({
     if (formError) setFormError(null);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = (keepOpen = false) => {
     setFormError(null);
     const failValidation = (message) => {
       setFormError(message);
@@ -591,18 +1020,12 @@ export default function TransactionForm({
     // clean decimal input, then clamp to a realistic ceiling so a
     // pasted-typo like "9999999999999999" doesn't blow up formatMoney or
     // the pie-chart scale.
-    const raw = String(amount ?? '').trim();
     const MAX_AMOUNT = 1e12; // ₹1 trillion — arbitrary but very safe upper bound.
-    const isCleanDecimal = /^\d+(\.\d+)?$/.test(raw);
-    const parsed = parseFloat(raw);
-    if (!isCleanDecimal || !isFinite(parsed) || parsed <= 0) {
-      failValidation('Enter a positive number without letters or symbols (e.g. 250 or 1499.50).');
-      return;
-    }
-    if (parsed > MAX_AMOUNT) {
-      failValidation(`Enter an amount below ₹${MAX_AMOUNT.toLocaleString('en-IN')}. Split very large entries if needed.`);
-      return;
-    }
+    const isHistoricalEntry = historicalOnly && tracksMarketInstrument;
+    let parsed = 0;
+    let units = null;
+    let parsedOpeningLots = null;
+
     if (!categoryId) {
       failValidation('Add a category in Settings first.');
       return;
@@ -611,7 +1034,63 @@ export default function TransactionForm({
       failValidation('Add an account in Settings first.');
       return;
     }
-    const units = Number(investmentUnits);
+
+    if (isHistoricalEntry) {
+      if (!brokerId) {
+        failValidation('Select a broker for this historical holding.');
+        return;
+      }
+      if (!instrument?.symbol) {
+        failValidation('Search and select the stock, ETF, or mutual fund you already own.');
+        return;
+      }
+      const parsedLots = parseOpeningLotsFromForm(openingLots);
+      if (!parsedLots.ok) {
+        if (parsedLots.reason === 'invalid_quantity') {
+          failValidation(`Enter units greater than zero for lot ${(parsedLots.index ?? 0) + 1}.`);
+        } else if (parsedLots.reason === 'invalid_price') {
+          failValidation(`Enter the average buy price per unit for lot ${(parsedLots.index ?? 0) + 1}.`);
+        } else {
+          failValidation('Add at least one lot with units and price per unit.');
+        }
+        return;
+      }
+      parsedOpeningLots = parsedLots.lots;
+      const priceCheck = validateOpeningLotPrices(parsedOpeningLots);
+      if (!priceCheck.ok) {
+        if (priceCheck.reason === 'total_not_per_unit') {
+          failValidation(
+            `Lot ${(priceCheck.index ?? 0) + 1}: ₹${priceCheck.impliedTotal?.toLocaleString('en-IN')} looks like the total for ${priceCheck.quantity} units, not the price per unit. Try ₹${priceCheck.suggestedPerUnit?.toLocaleString('en-IN')} per unit instead.`,
+          );
+        } else {
+          failValidation(`Check the price per unit for lot ${(priceCheck.index ?? 0) + 1}.`);
+        }
+        return;
+      }
+      const aggregated = aggregateOpeningLots(parsedOpeningLots);
+      if (aggregated.quantity <= 0 || aggregated.investedValue <= 0) {
+        failValidation('Enter units and price per unit for your historical holding.');
+        return;
+      }
+      parsed = aggregated.investedValue;
+      units = aggregated.quantity;
+      if (parsed > MAX_AMOUNT) {
+        failValidation(`Historical cost looks too large. Check price per unit (not total cost).`);
+        return;
+      }
+    } else {
+    const raw = String(amount ?? '').trim();
+    const isCleanDecimal = /^\d+(\.\d+)?$/.test(raw);
+    parsed = parseFloat(raw);
+    if (!isCleanDecimal || !isFinite(parsed) || parsed <= 0) {
+      failValidation('Enter a positive number without letters or symbols (e.g. 250 or 1499.50).');
+      return;
+    }
+    if (parsed > MAX_AMOUNT) {
+      failValidation(`Enter an amount below ₹${MAX_AMOUNT.toLocaleString('en-IN')}. Split very large entries if needed.`);
+      return;
+    }
+    units = Number(investmentUnits);
     if (tracksMarketInstrument && !instrument?.symbol) {
       failValidation('Search and select the stock, ETF, or mutual fund you purchased.');
       return;
@@ -619,6 +1098,36 @@ export default function TransactionForm({
     if (tracksMarketInstrument && (!isFinite(units) || units <= 0)) {
       failValidation('Enter the number of shares or mutual-fund units purchased.');
       return;
+    }
+    if (includeOpeningPosition && !brokerId) {
+      failValidation('Select a broker to save the opening position.');
+      return;
+    }
+    if (includeOpeningPosition) {
+      const parsedLots = parseOpeningLotsFromForm(openingLots);
+      if (!parsedLots.ok) {
+        if (parsedLots.reason === 'invalid_quantity') {
+          failValidation(`Enter opening units greater than zero for lot ${(parsedLots.index ?? 0) + 1}.`);
+        } else if (parsedLots.reason === 'invalid_price') {
+          failValidation(`Enter the purchase price for lot ${(parsedLots.index ?? 0) + 1}.`);
+        } else {
+          failValidation('Add at least one opening lot with units and price.');
+        }
+        return;
+      }
+      parsedOpeningLots = parsedLots.lots;
+      const priceCheck = validateOpeningLotPrices(parsedOpeningLots);
+      if (!priceCheck.ok) {
+        if (priceCheck.reason === 'total_not_per_unit') {
+          failValidation(
+            `Lot ${(priceCheck.index ?? 0) + 1}: ₹${priceCheck.impliedTotal?.toLocaleString('en-IN')} looks like the total for ${priceCheck.quantity} units, not the price per unit. Try ₹${priceCheck.suggestedPerUnit?.toLocaleString('en-IN')} per unit instead.`,
+          );
+        } else {
+          failValidation(`Check the price per unit for lot ${(priceCheck.index ?? 0) + 1}.`);
+        }
+        return;
+      }
+    }
     }
     const splitTotal = splitRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
     if (splitRows.length > 0) {
@@ -659,8 +1168,8 @@ export default function TransactionForm({
       });
       if (!weightResult?.grams) {
         failValidation(chitRatesLoading
-          ? 'Loading gold reference rate — try again in a moment, or enter shop ₹/g.'
-          : 'Enter shop ₹/g for your jeweller, or wait for the reference rate to load.');
+          ? 'Loading gold reference for the selected date — try again in a moment, or enter shop ₹/g.'
+          : 'Enter shop ₹/g for your jeweller, or wait for the reference rate for this date.');
         return;
       }
       chitPayload = {
@@ -674,13 +1183,26 @@ export default function TransactionForm({
       };
     }
 
+    if (makeRecurring && canShowRecurring) {
+      if (type === 'investment' && tracksMarketInstrument && !instrument?.symbol) {
+        failValidation('Select an instrument before saving a recurring investment.');
+        return;
+      }
+      if (type === 'investment' && tracksMarketInstrument && (!isFinite(units) || units <= 0)) {
+        failValidation('Enter shares/units for a recurring investment rule.');
+        return;
+      }
+    }
+
     onSubmit({
       amount: parsed,
       categoryId,
       subCategoryId: subCategoryId ?? null,
       accountId,
       date,
-      note: note.trim(),
+      note: (isHistoricalEntry && !note.trim())
+        ? `Opening position · ${instrument?.symbol ?? 'holding'}`
+        : note.trim(),
       tags: tagInputRef.current?.getValue?.() ?? tags,
       voiceNote,
       // F9 (multi-currency). Frozen at add time.
@@ -694,7 +1216,17 @@ export default function TransactionForm({
       instrumentSymbol: tracksMarketInstrument ? instrument.symbol : null,
       instrumentName: tracksMarketInstrument ? instrument.name : null,
       instrumentType: tracksMarketInstrument ? (instrument.quoteType || instrument.type) : null,
-      investmentUnits: tracksMarketInstrument ? units : null,
+      investmentUnits: tracksMarketInstrument && !isHistoricalEntry ? units : null,
+      historicalOnly: isHistoricalEntry,
+      openingPosition: (isHistoricalEntry || includeOpeningPosition) && parsedOpeningLots
+        ? buildOpeningPositionPayload({
+          broker: brokerId,
+          symbol: instrument.symbol,
+          name: instrument.name || instrument.symbol,
+          lots: parsedOpeningLots,
+          trackingDate: openingTrackingDate,
+        })
+        : null,
       splits: splitRows.length > 0
         ? splitRows.map((row) => ({ categoryId: row.categoryId, amount: Number(row.amount) }))
         : null,
@@ -702,7 +1234,10 @@ export default function TransactionForm({
       ...(type === 'income' && incomeEntryMode === 'payslip'
         ? payslipStringsToPayload(payslipForm, payslipForm?.amountMode)
         : {}),
-    });
+      makeRecurring: canShowRecurring && makeRecurring,
+      recurringFrequency: makeRecurring ? recurringFrequency : null,
+      recurringEndDate: makeRecurring && recurringEndEnabled ? recurringEndDate : null,
+    }, { keepOpen });
 
     // Commit-time voice-note sweep. The saved row now points at
     // voiceNote.file (or null). Every other file that was current at
@@ -737,6 +1272,19 @@ export default function TransactionForm({
       setLastVoiceFill(null);
       setPayslipForm(null);
       setIncomeEntryMode('manual');
+      setIncludeOpeningPosition(false);
+      setHistoricalOnly(false);
+      setMakeRecurring(false);
+      setRecurringFrequency('monthly');
+      setRecurringEndEnabled(false);
+      setRecurringEndDate(null);
+      setOpeningLots([{
+        clientKey: newOpeningLotKey(),
+        id: null,
+        quantity: '',
+        avgCost: '',
+        openingDate: openingTrackingDate,
+      }]);
     }
   };
 
@@ -912,15 +1460,19 @@ export default function TransactionForm({
               );
             })}
           </View>
-          <Text style={styles.incomeModeHelper}>
-            {incomeEntryMode === 'manual'
+          <InfoCallout
+            icon={incomeEntryMode === 'manual' ? 'info' : 'upload'}
+            title={incomeEntryMode === 'manual' ? 'Manual entry' : 'Payslip-assisted entry'}
+            body={incomeEntryMode === 'manual'
               ? 'Enter the amount and details yourself.'
               : 'Upload a payslip PDF to auto-fill salary, TDS, and PF.'}
-          </Text>
+            compact
+          />
         </>
       )}
 
-      {(!tracksIncomePayslip || incomeEntryMode === 'manual') && (
+      {(!tracksIncomePayslip || incomeEntryMode === 'manual')
+        && !(historicalOnly && tracksMarketInstrument) && (
         <>
           <Text style={styles.label}>Amount</Text>
           <AmountCalculatorButton value={amount} onChangeText={setAmount}>
@@ -1050,17 +1602,28 @@ export default function TransactionForm({
         onSelect={(id) => changeCategory(id)}
         accentColor={accentColor}
         emptyText="No categories — add one in Settings"
+        trailingItem={<QuickAddPickerItem kind="category" type={type} accent={accentColor} onCreated={(item) => changeCategory(item.id)} />}
       />
 
-      {subCategories.length > 0 && (
+      {selectedCategory && (
         <>
           <Text style={styles.label}>Sub-category (optional)</Text>
-          <SubCategoryChipRow
-            items={subCategories}
-            selectedId={subCategoryId}
-            onSelect={handleSubCategoryPick}
-            accentColor={accentColor}
-          />
+          {subCategories.length > 0 ? (
+            <SubCategoryChipRow
+              items={subCategories}
+              selectedId={subCategoryId}
+              onSelect={handleSubCategoryPick}
+              accentColor={accentColor}
+              trailingItem={<QuickAddPickerItem kind="subcategory" type={type} parentId={categoryId} accent={accentColor} onCreated={(item) => setSubCategoryId(item.id)} />}
+            />
+          ) : null}
+          {subCategories.length === 0 ? <QuickAddPickerItem
+            kind="subcategory"
+            type={type}
+            parentId={categoryId}
+            accent={accentColor}
+            onCreated={(item) => setSubCategoryId(item.id)}
+          /> : null}
         </>
       )}
 
@@ -1118,11 +1681,14 @@ export default function TransactionForm({
       <Text style={styles.label}>
         {type === 'investment' ? 'From account (source)' : 'Account'}
       </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+      <View style={{ flex: 1 }}>
       <GroupedAccountPicker
         accounts={accounts}
         accountGroups={accountGroups}
         selectedId={accountId}
         onSelect={(id) => {
+          accountTouchedRef.current = true;
           setAccountId(id);
           // Inherit the new account's currency unless the user has
           // explicitly picked a currency for this row (e.g. INR card
@@ -1136,6 +1702,21 @@ export default function TransactionForm({
         }}
         accentColor={accentColor}
       />
+      </View>
+      <QuickAddPickerItem
+        kind="account"
+        accent={accentColor}
+        onCreated={(item) => {
+          accountTouchedRef.current = true;
+          setAccountId(item.id);
+          if (!currencyTouchedRef.current) {
+            const nextCur = item.currency ?? baseCurrency;
+            setCurrency(nextCur);
+            setFxRate(String(nextCur === baseCurrency ? 1 : lookupRateOrOne(fxRates, nextCur, baseCurrency)));
+          }
+        }}
+      />
+      </View>
 
       {/* Broker / destination picker — investment mode only.
           Rationale: an investment transaction is really a transfer
@@ -1215,7 +1796,7 @@ export default function TransactionForm({
             onChangeText={setChitShopRate}
             keyboardType="decimal-pad"
             placeholder={chitReferenceRate
-              ? `${purityLabel(chitPurity)} reference ≈ ₹${Math.round(chitReferenceRate).toLocaleString('en-IN')}/g (COMEX spot)`
+              ? chitRateHint
               : 'e.g. 7050'}
             placeholderTextColor={themeColors.text.muted}
           />
@@ -1244,15 +1825,11 @@ export default function TransactionForm({
               ≈ {formatChitGrams(chitWeightPreview.grams, 3)}
               {' · '}
               ₹{Math.round(chitWeightPreview.ratePerGram).toLocaleString('en-IN')}/g
-              {chitWeightPreview.usedShopRate ? ' (shop)' : ' (reference)'}
+              {chitWeightPreview.usedShopRate ? ' (shop)' : (chitMetalRates?.historical ? ' (historical ref)' : ' (reference)')}
             </Text>
           ) : (
             <Text style={styles.helperSmallDim}>
-              {chitRatesLoading
-                ? 'Loading reference gold rate…'
-                : chitReferenceRate
-                  ? `Enter amount above — ${purityLabel(chitPurity)} reference ≈ ₹${Math.round(chitReferenceRate).toLocaleString('en-IN')}/g (COMEX spot), or set shop ₹/g.`
-                  : 'Enter amount above and set shop ₹/g, or wait for reference rate.'}
+              {chitRateHint}
             </Text>
           )}
         </View>
@@ -1261,26 +1838,224 @@ export default function TransactionForm({
       {/* Currency (only shown when the app has ≥1 non-base currency
           configured, otherwise this is dead weight for INR-only users). */}
       {tracksMarketInstrument && (
-        <InstrumentPicker
-          categoryId={categoryId}
-          marketCountry={marketCountry}
-          query={instrumentQuery}
-          onQueryChange={(value) => {
-            setInstrumentQuery(value);
-            if (value !== instrument?.name && value !== instrument?.symbol) setInstrument(null);
-          }}
-          selected={instrument}
-          onSelect={(item) => {
-            setInstrument(item);
-            setInstrumentQuery(item.name);
-            setInstrumentSuggestions([]);
-          }}
-          suggestions={instrumentSuggestions}
-          searching={instrumentSearching}
-          units={investmentUnits}
-          onUnitsChange={setInvestmentUnits}
-          accentColor={accentColor}
-        />
+        <>
+          <Text style={styles.label}>Entry type</Text>
+          <View style={styles.chipRow}>
+            <TouchableOpacity
+              onPress={() => setHistoricalOnly(false)}
+              style={[
+                styles.chip,
+                !historicalOnly && { backgroundColor: accentColor, borderColor: accentColor },
+              ]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.chipText, !historicalOnly && styles.chipTextSelected]}>
+                New purchase
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setHistoricalOnly(true);
+                setIncludeOpeningPosition(true);
+              }}
+              style={[
+                styles.chip,
+                historicalOnly && { backgroundColor: accentColor, borderColor: accentColor },
+              ]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.chipText, historicalOnly && styles.chipTextSelected]}>
+                Historical only
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {historicalOnly ? (
+            <InfoCallout
+              icon="rotate-ccw"
+              title="Historical holding"
+              body="Record units you already owned before tracking. Portfolio and Net Worth update; your bank balance does not change."
+              compact
+            />
+          ) : null}
+          <InstrumentPicker
+            categoryId={categoryId}
+            marketCountry={marketCountry}
+            query={instrumentQuery}
+            onQueryChange={(value) => {
+              setInstrumentQuery(value);
+              if (value !== instrument?.name && value !== instrument?.symbol) setInstrument(null);
+            }}
+            selected={instrument}
+            onSelect={(item) => {
+              setInstrument(item);
+              setInstrumentQuery(item.name);
+              setInstrumentSuggestions([]);
+            }}
+            suggestions={instrumentSuggestions}
+            searching={instrumentSearching}
+            units={investmentUnits}
+            onUnitsChange={setInvestmentUnits}
+            hideUnits={historicalOnly}
+            accentColor={accentColor}
+          />
+          {(canShowOpeningPosition || historicalOnly) ? (
+            <View style={styles.openingPositionCard}>
+              {!brokerId ? (
+                <View style={styles.openingPositionToggle}>
+                  <View style={[styles.openingPositionIcon, { backgroundColor: accentColor + '18' }]}>
+                    <AppIcon name="rotate-ccw" size={17} color={accentColor} strokeWidth={2.2} />
+                  </View>
+                  <View style={styles.openingPositionCopy}>
+                    <Text style={styles.openingPositionTitle}>
+                      {historicalOnly ? 'Historical units' : 'Already owned before tracking?'}
+                    </Text>
+                    <Text style={styles.openingPositionHint}>
+                      Select a broker above, then enter units and average buy price per unit.
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+              <>
+              {!historicalOnly ? (
+              <TouchableOpacity
+                style={styles.openingPositionToggle}
+                onPress={() => setIncludeOpeningPosition((value) => !value)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: includeOpeningPosition }}
+              >
+                <View style={[styles.openingPositionIcon, { backgroundColor: accentColor + '18' }]}>
+                  <AppIcon name="rotate-ccw" size={17} color={accentColor} strokeWidth={2.2} />
+                </View>
+                <View style={styles.openingPositionCopy}>
+                  <Text style={styles.openingPositionTitle}>Already owned before tracking?</Text>
+                  <Text style={styles.openingPositionHint}>Add opening units without changing your bank balance.</Text>
+                </View>
+                <AppIcon name={includeOpeningPosition ? 'chevron-up' : 'chevron-down'} size={18} color={themeColors.text.secondary} />
+              </TouchableOpacity>
+              ) : null}
+              {(historicalOnly || includeOpeningPosition) ? (
+                <View
+                  style={styles.openingPositionFields}
+                  {...(Platform.OS === 'android'
+                    ? { importantForAutofill: 'noExcludeDescendants' }
+                    : {})}
+                >
+                  <Text style={styles.openingLotsIntro}>
+                    Add each historical purchase separately — we combine units and average cost for you.
+                  </Text>
+                  <Text style={styles.openingLotsClipboardHint}>
+                    Numbers above the keyboard are your phone's clipboard or autofill suggestions — not from Worth. Type units manually if those are phone numbers.
+                  </Text>
+                  {openingLots.map((lot, index) => (
+                    <View key={lot.clientKey} style={styles.openingLotBlock}>
+                      <View style={styles.openingLotHeader}>
+                        <Text style={styles.openingLotTitle}>Lot {index + 1}</Text>
+                        {openingLots.length > 1 ? (
+                          <TouchableOpacity
+                            onPress={() => removeOpeningLotRow(lot.clientKey)}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove lot ${index + 1}`}
+                          >
+                            <AppIcon name="x" size={16} color={themeColors.text.secondary} strokeWidth={2.2} />
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                      <View style={styles.openingPositionFieldRow}>
+                        <View style={styles.openingPositionField}>
+                          <Text style={styles.label}>Units</Text>
+                          <TextInput
+                            {...ISOLATED_NUMERIC_INPUT}
+                            nativeID={`opening-lot-${lot.clientKey}-units`}
+                            style={styles.input}
+                            value={lot.quantity}
+                            onChangeText={(value) => updateOpeningLot(
+                              lot.clientKey,
+                              { quantity: sanitizeDecimalInput(value) },
+                            )}
+                            keyboardType="decimal-pad"
+                            placeholder="e.g. 25"
+                            placeholderTextColor={themeColors.text.muted}
+                          />
+                        </View>
+                        <View style={styles.openingPositionField}>
+                          <Text style={styles.label}>Price per unit (₹)</Text>
+                          <Text style={styles.openingLotFieldHint}>Not the total — enter one unit's cost.</Text>
+                          <TextInput
+                            {...ISOLATED_NUMERIC_INPUT}
+                            nativeID={`opening-lot-${lot.clientKey}-price`}
+                            style={styles.input}
+                            value={lot.avgCost}
+                            onChangeText={(value) => updateOpeningLot(
+                              lot.clientKey,
+                              { avgCost: sanitizeDecimalInput(value) },
+                            )}
+                            keyboardType="decimal-pad"
+                            placeholder="e.g. 1400"
+                            placeholderTextColor={themeColors.text.muted}
+                          />
+                        </View>
+                      </View>
+                      {(() => {
+                        const qty = Number(lot.quantity);
+                        const price = Number(lot.avgCost);
+                        if (!isFinite(qty) || !isFinite(price) || qty <= 0 || price <= 0) return null;
+                        const lotTotal = qty * price;
+                        const perUnitIfTotal = price / qty;
+                        const looksLikeTotal = qty >= 2 && price >= 500 && price >= perUnitIfTotal * qty * 0.9;
+                        return (
+                          <Text style={[styles.openingLotLineTotal, looksLikeTotal && styles.openingLotLineTotalWarn]}>
+                            {looksLikeTotal
+                              ? `This reads as ₹${Math.round(lotTotal).toLocaleString('en-IN')} total — did you mean ₹${Math.round(perUnitIfTotal).toLocaleString('en-IN')} per unit?`
+                              : `Lot total: ₹${Math.round(lotTotal).toLocaleString('en-IN')} (${qty} × ₹${price.toLocaleString('en-IN')})`}
+                          </Text>
+                        );
+                      })()}
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    onPress={addOpeningLotRow}
+                    style={styles.openingLotAddBtn}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add another opening lot"
+                  >
+                    <AppIcon name="plus" size={16} color={accentColor} strokeWidth={2.4} />
+                    <Text style={[styles.openingLotAddText, { color: accentColor }]}>Add another lot</Text>
+                  </TouchableOpacity>
+                  {openingLotsSummary ? (
+                    <View style={styles.openingLotsSummary}>
+                      <Text style={styles.openingLotsSummaryLabel}>Combined opening position</Text>
+                      <Text style={styles.openingLotsSummaryValue}>
+                        {openingLotsSummary.quantity.toLocaleString('en-IN')} units
+                        {' · '}avg ₹{openingLotsSummary.avgCost.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        {' · '}₹{Math.round(openingLotsSummary.investedValue).toLocaleString('en-IN')} invested
+                      </Text>
+                    </View>
+                  ) : null}
+                  <DateTimeField
+                    label="Tracking starts on"
+                    value={openingTrackingDate}
+                    onChange={setOpeningTrackingDate}
+                    mode="date"
+                    maximumDate={new Date()}
+                    hint="Defaults to the selected account's opening date"
+                  />
+                  <InfoCallout
+                    icon="info"
+                    title="Historical holding"
+                    body={historicalOnly
+                      ? 'Saved as a historical record only — portfolio and Net Worth update; your bank balance stays unchanged.'
+                      : 'These opening lots affect portfolio and Net Worth only. The purchase being entered above remains the only account transaction.'}
+                    compact
+                  />
+                </View>
+              ) : null}
+              </>
+              )}
+            </View>
+          ) : null}
+        </>
       )}
 
       {(CURRENCIES.some((c) => c.code !== baseCurrency && ((accounts.some((a) => a.currency === c.code)) || (fxRates && fxRates[c.code])))
@@ -1321,6 +2096,9 @@ export default function TransactionForm({
                 placeholder="e.g. 88.40"
                 placeholderTextColor="#9ca3af"
               />
+              {(!isFinite(parseFloat(fxRate)) || parseFloat(fxRate) <= 0) ? (
+                <StatusBadge status="missing_fx_rate" />
+              ) : null}
               {/* Live preview of the base equivalent so the user knows
                   exactly what will be persisted. */}
               {(() => {
@@ -1356,18 +2134,75 @@ export default function TransactionForm({
       <TextInput
         style={styles.input}
         value={note}
-        onChangeText={setNote}
+        onChangeText={(value) => {
+          autoNoteRef.current = null;
+          setNote(value);
+        }}
         placeholder={notePlaceholder}
         placeholderTextColor="#9aa0a6"
         multiline
       />
 
-      <Text style={styles.label}>Tags (optional)</Text>
+      {noteSuggestions.length > 0 ? (
+        <View style={styles.suggestionBlock}>
+          <Text style={styles.suggestionLabel}>Previous notes</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionRow}>
+            {noteSuggestions.map(({ label, template, transaction }) => (
+              <TouchableOpacity
+                key={label.toLocaleLowerCase()}
+                onPress={() => {
+                  const sourceDate = transaction.createdAt ?? transaction.date;
+                  const applied = noteForTransactionDate(template, sourceDate, date);
+                  autoNoteRef.current = { template, sourceDate, lastApplied: applied };
+                  setNote(applied);
+                  const priorCategory = categories.find((item) => item.id === transaction.categoryId);
+                  if (priorCategory) {
+                    setCategoryId(priorCategory.id);
+                    const validSub = priorCategory.subCategories?.some(
+                      (item) => item.id === transaction.subCategoryId,
+                    );
+                    setSubCategoryId(validSub ? transaction.subCategoryId : null);
+                  }
+                }}
+                style={styles.suggestionChip}
+                activeOpacity={0.7}
+              >
+                <AppIcon name="repeat" size={12} color={accentColor} strokeWidth={2.1} />
+                <Text style={[styles.suggestionChipText, { color: accentColor }]} numberOfLines={1}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {suggestedCategory ? (
+        <TouchableOpacity
+          onPress={() => {
+            setCategoryId(suggestedCategory.transaction.categoryId);
+            setSubCategoryId(suggestedCategory.transaction.subCategoryId ?? null);
+          }}
+          style={styles.categorySuggestion}
+          activeOpacity={0.72}
+          accessibilityRole="button"
+          accessibilityLabel={`Use suggested category ${suggestedCategory.category.label}`}
+        >
+          <AppIcon name="sparkles" size={15} color={accentColor} strokeWidth={2.1} />
+          <Text style={styles.categorySuggestionText}>Suggested</Text>
+          <Text style={[styles.categorySuggestionValue, { color: accentColor }]}>
+            {suggestedCategory.category.emoji} {suggestedCategory.category.label}
+          </Text>
+          <AppIcon name="chevron-right" size={14} color={accentColor} strokeWidth={2} />
+        </TouchableOpacity>
+      ) : null}
+
+      <Text style={styles.label}>Tags</Text>
       <TagInput
         ref={tagInputRef}
         value={tags}
         onChange={setTags}
-        suggestions={allTags}
+        suggestions={tagSuggestions}
         placeholder="e.g. vacation, work, reimbursable"
       />
 
@@ -1384,10 +2219,6 @@ export default function TransactionForm({
           ) : (
             <VoiceRecorder onRecorded={handleRecorded} accentColor={accentColor} />
           )}
-          <Text style={styles.voiceHint}>
-            Attach an audio memo. Different from "Speak to fill" — this one just
-            keeps the recording with the transaction for later playback.
-          </Text>
         </>
       )}
 
@@ -1409,12 +2240,115 @@ export default function TransactionForm({
         onApply={handleApplyPayslipReview}
       />
 
-      <AppButton
-        label={submitLabel}
-        onPress={handleSubmit}
-        color={accentColor}
-        style={styles.submitBtnWrap}
-      />
+      {Number(amount) > 0 && selectedCategory && selectedAccount ? (
+        <View style={styles.savePreview}>
+          <View style={[styles.savePreviewIcon, { backgroundColor: accentColor + '18' }]}>
+            <AppIcon name="check" size={16} color={accentColor} strokeWidth={2.3} />
+          </View>
+          <View style={styles.savePreviewCopy}>
+            <Text style={styles.savePreviewLabel}>Ready to save</Text>
+            <Text style={styles.savePreviewValue} numberOfLines={2}>
+              {currencyMeta(currency).symbol}{Number(amount).toLocaleString('en-IN')}
+              {' · '}{selectedCategory.emoji} {selectedCategory.label}
+              {' · '}{selectedAccount.emoji} {selectedAccount.label}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {canShowRecurring ? (
+        <View style={styles.recurringCard}>
+          <View style={styles.recurringToggleRow}>
+            <View style={styles.recurringToggleCopy}>
+              <Text style={styles.recurringToggleTitle}>Make this recurring</Text>
+              <Text style={styles.recurringToggleHint}>
+                Also create a rule — future entries auto-add when you open the app.
+              </Text>
+            </View>
+            <Switch
+              value={makeRecurring}
+              onValueChange={setMakeRecurring}
+              trackColor={{ false: themeColors.bg.surfaceAlt, true: accentColor + '88' }}
+              thumbColor={makeRecurring ? accentColor : themeColors.bg.surface}
+            />
+          </View>
+          {makeRecurring ? (
+            <View style={styles.recurringFields}>
+              <Text style={styles.label}>Repeat</Text>
+              <View style={styles.chipRow}>
+                {recurringFrequencyOptions.map((freq) => {
+                  const selected = recurringFrequency === freq.id;
+                  return (
+                    <TouchableOpacity
+                      key={freq.id}
+                      onPress={() => setRecurringFrequency(freq.id)}
+                      style={[styles.chip, selected && { backgroundColor: accentColor, borderColor: accentColor }]}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        {freq.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={styles.recurringEndRow}>
+                <Text style={styles.recurringEndLabel}>End date (optional)</Text>
+                <Switch
+                  value={recurringEndEnabled}
+                  onValueChange={(on) => {
+                    setRecurringEndEnabled(on);
+                    if (!on) setRecurringEndDate(null);
+                    else if (!recurringEndDate) setRecurringEndDate(date);
+                  }}
+                  trackColor={{ false: themeColors.bg.surfaceAlt, true: accentColor + '88' }}
+                  thumbColor={recurringEndEnabled ? accentColor : themeColors.bg.surface}
+                />
+              </View>
+              {recurringEndEnabled ? (
+                <DateTimeField
+                  label="Ends on"
+                  value={recurringEndDate ?? date}
+                  onChange={setRecurringEndDate}
+                  maximumDate={null}
+                />
+              ) : null}
+              {type === 'investment' && tracksMarketInstrument && instrument?.symbol ? (
+                <Text style={styles.recurringInvestHint}>
+                  SIP rule includes {instrument.name || instrument.symbol}
+                  {investmentUnits.trim() ? ` · ${investmentUnits.trim()} units` : ''}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {allowSaveAndAddAnother ? (
+        <View style={styles.submitActions}>
+          <AppButton
+            label="Save + another"
+            variant="secondary"
+            onPress={() => handleSubmit(true)}
+            fullWidth={false}
+            style={styles.submitSecondary}
+          />
+          <AppButton
+            label={submitLabel}
+            onPress={() => handleSubmit(false)}
+            color={accentColor}
+            fullWidth={false}
+            style={styles.submitPrimary}
+          />
+        </View>
+      ) : (
+        <AppButton
+          label={submitLabel}
+          onPress={() => handleSubmit(false)}
+          color={accentColor}
+          style={styles.submitBtnWrap}
+        />
+      )}
     </View>
   );
 }
@@ -1551,14 +2485,10 @@ function ManualTranscriptModal({
 
 // Same shape as ChipRow but styled a bit smaller & with a "None" pill so
 // the user can clear their selection without changing the parent category.
-function SubCategoryChipRow({ items, selectedId, onSelect, accentColor }) {
+function SubCategoryChipRow({ items, selectedId, onSelect, accentColor, trailingItem = null }) {
   const styles = useThemedStyles(makeStyles);
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.chipRow}
-    >
+    <View style={styles.chipRow}>
       <TouchableOpacity
         onPress={() => onSelect(null)}
         style={[
@@ -1600,26 +2530,21 @@ function SubCategoryChipRow({ items, selectedId, onSelect, accentColor }) {
                 selected && styles.chipTextSelected,
               ]}
             >
-              {s.emoji} {s.label}
+              {s.emoji} {formatSubCategoryLabel(s.label)}
             </Text>
           </TouchableOpacity>
         );
       })}
-    </ScrollView>
+      {trailingItem}
+    </View>
   );
 }
 
-function ChipRow({ items, selectedId, onSelect, accentColor, emptyText }) {
+function ChipRow({ items, selectedId, onSelect, accentColor, emptyText, trailingItem = null }) {
   const styles = useThemedStyles(makeStyles);
-  if (items.length === 0) {
-    return <Text style={styles.chipEmpty}>{emptyText}</Text>;
-  }
+  if (items.length === 0) return trailingItem ?? (emptyText ? <InfoCallout icon="info" title="Nothing to select" body={emptyText} compact /> : null);
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.chipRow}
-    >
+    <View style={styles.chipRow}>
       {items.map((c) => {
         const selected = c.id === selectedId;
         return (
@@ -1641,13 +2566,27 @@ function ChipRow({ items, selectedId, onSelect, accentColor, emptyText }) {
           </TouchableOpacity>
         );
       })}
-    </ScrollView>
+      {trailingItem}
+    </View>
   );
 }
 
 function InstrumentPicker(props) {
   const styles = useThemedStyles(makeStyles);
-  const { categoryId, marketCountry, query, onQueryChange, selected, suggestions, searching, onSelect, units, onUnitsChange, accentColor } = props;
+  const {
+    categoryId,
+    marketCountry,
+    query,
+    onQueryChange,
+    selected,
+    suggestions,
+    searching,
+    onSelect,
+    units,
+    onUnitsChange,
+    hideUnits = false,
+    accentColor,
+  } = props;
   const countryLabel = marketCountry === 'IN' ? 'Indian ' : marketCountry === 'US' ? 'US ' : marketCountry === 'GLOBAL' ? 'international ' : '';
   const kind = marketCountry === 'IN'
     ? 'Indian stock, ETF, or mutual fund'
@@ -1665,25 +2604,33 @@ function InstrumentPicker(props) {
           onChangeText={onQueryChange}
           placeholder={`Search ${kind} by name or symbol`}
           placeholderTextColor={'#8b94a3'}
-          autoCapitalize={'characters'}
+          autoCapitalize={'words'}
           autoCorrect={false}
         />
       </View>
       {selected ? (
-        <Text style={[styles.instrumentSelected, { color: accentColor }]}>Selected: {selected.symbol} · {selected.type}</Text>
+        <Text style={[styles.instrumentSelected, { color: accentColor }]}>
+          Selected: {selected.name || selected.symbol}
+          {selected.name && selected.symbol && selected.name.toUpperCase() !== selected.symbol.toUpperCase()
+            ? ` (${selected.symbol})`
+            : ''}
+        </Text>
       ) : null}
       {suggestions.length > 0 ? (
         <View style={styles.instrumentResults}>
           {suggestions.map((item, index) => (
             <TouchableOpacity
-              key={`${item.symbol}-${item.exchange}`}
+              key={`${item.symbol}-${item.exchange}-${item.source || 'api'}`}
               style={[styles.instrumentResult, index > 0 && styles.instrumentResultBorder]}
               onPress={() => onSelect(item)}
               activeOpacity={0.7}
             >
               <View style={styles.instrumentResultText}>
-                <Text style={styles.instrumentName} numberOfLines={1}>{item.name}</Text>
-                <Text style={styles.instrumentMeta}>{item.symbol} · {item.exchange || 'Global'} · {item.type}</Text>
+                <Text style={styles.instrumentName} numberOfLines={1}>{item.name || item.symbol}</Text>
+                <Text style={styles.instrumentMeta}>
+                  {item.source === 'local' ? 'Previously used · ' : ''}
+                  {item.symbol} · {item.exchange || 'Global'} · {item.type || item.quoteType || '—'}
+                </Text>
               </View>
               <AppIcon name={'chevron-right'} size={16} color={'#8b94a3'} />
             </TouchableOpacity>
@@ -1693,8 +2640,21 @@ function InstrumentPicker(props) {
       {!selected && query.trim().length >= 2 && !searching && suggestions.length === 0 ? (
         <Text style={styles.instrumentEmpty}>No matching {kind}s found. Try the trading symbol.</Text>
       ) : null}
-      <Text style={styles.label}>Shares / units purchased</Text>
-      <TextInput style={styles.input} value={units} onChangeText={onUnitsChange} keyboardType={'decimal-pad'} placeholder={'e.g. 10 or 2.5'} placeholderTextColor={'#8b94a3'} />
+      {!hideUnits ? (
+        <>
+          <Text style={styles.label}>Shares / units purchased</Text>
+          <TextInput
+            {...ISOLATED_NUMERIC_INPUT}
+            nativeID="investment-units-purchased"
+            style={styles.input}
+            value={units}
+            onChangeText={(value) => onUnitsChange(sanitizeDecimalInput(value))}
+            keyboardType="decimal-pad"
+            placeholder="e.g. 10 or 2.5"
+            placeholderTextColor="#8b94a3"
+          />
+        </>
+      ) : null}
     </View>
   );
 }
@@ -1773,7 +2733,13 @@ function GroupedAccountPicker({
   const styles = useThemedStyles(makeStyles);
   if (accounts.length === 0) {
     return (
-      <Text style={styles.chipEmpty}>No accounts — add one in Settings</Text>
+      <InfoCallout
+        icon="wallet"
+        title="No financial accounts"
+        body="Add an account in Settings → Accounts & data."
+        tone="warning"
+        compact
+      />
     );
   }
 
@@ -1893,6 +2859,100 @@ const makeStyles = (c) => ({
   instrumentName: { color: c.text.primary, fontSize: 14, fontWeight: '700' },
   instrumentMeta: { color: c.text.secondary, fontSize: 11, marginTop: 3 },
   instrumentEmpty: { color: c.text.secondary, fontSize: 12, marginTop: 7 },
+  openingPositionCard: { marginTop: 12, borderRadius: 12, borderWidth: 1, borderColor: c.border.subtle, backgroundColor: c.bg.surface, overflow: 'hidden' },
+  openingPositionToggle: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  openingPositionIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  openingPositionCopy: { flex: 1, minWidth: 0 },
+  openingPositionTitle: { color: c.text.primary, fontSize: 13, fontWeight: '800' },
+  openingPositionHint: { color: c.text.secondary, fontSize: 11, lineHeight: 16, marginTop: 2 },
+  openingPositionFields: { padding: 12, paddingTop: 0, borderTopWidth: 1, borderTopColor: c.border.subtle },
+  openingPositionFieldRow: { flexDirection: 'row', gap: 8 },
+  openingPositionField: { flex: 1 },
+  openingLotsIntro: {
+    color: c.text.secondary,
+    fontSize: 11,
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  openingLotsClipboardHint: {
+    color: c.text.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontStyle: 'italic',
+    marginBottom: 10,
+  },
+  openingLotBlock: {
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  openingLotHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  openingLotTitle: {
+    color: c.text.primary,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  openingLotFieldHint: {
+    color: c.text.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginBottom: 4,
+  },
+  openingLotLineTotal: {
+    color: c.text.secondary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 6,
+  },
+  openingLotLineTotalWarn: {
+    color: c.accent.expense,
+    fontWeight: '700',
+  },
+  openingLotAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+    marginBottom: 10,
+  },
+  openingLotAddText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  openingLotsSummary: {
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: c.accent.primary + '10',
+    borderWidth: 1,
+    borderColor: c.accent.primary + '25',
+  },
+  openingLotsSummaryLabel: {
+    color: c.text.secondary,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  openingLotsSummaryValue: {
+    color: c.text.primary,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
   groupList: { gap: 6 },
   groupBlock: { gap: 2 },
   groupHeader: {
@@ -1962,12 +3022,6 @@ const makeStyles = (c) => ({
     fontWeight: '700',
     color: c.text.secondary,
     textAlign: 'center',
-  },
-  incomeModeHelper: {
-    fontSize: 12,
-    color: c.text.secondary,
-    marginBottom: 12,
-    lineHeight: 17,
   },
   payslipUploadHint: {
     fontSize: 12,
@@ -2053,14 +3107,10 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surfaceAlt,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
-  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
-  chipEmpty: {
-    fontSize: 12,
-    color: c.text.muted,
-    fontStyle: 'italic',
-    paddingVertical: 8,
-  },
+  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary, flexShrink: 0 },
   splitSection: { marginTop: 14, padding: 12, borderRadius: 10, backgroundColor: c.bg.surfaceAlt },
   splitToggle: { alignSelf: 'flex-start' },
   splitToggleText: { color: c.accent.primary, fontSize: 13, fontWeight: '700' },
@@ -2120,12 +3170,44 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     fontStyle: 'italic',
   },
-  voiceHint: {
-    fontSize: 11,
-    color: c.text.secondary,
-    marginTop: 6,
-    lineHeight: 15,
+  suggestionBlock: { marginTop: 8, gap: 5 },
+  suggestionLabel: { color: c.text.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.45 },
+  suggestionRow: { gap: 7, paddingRight: 8 },
+  suggestionChip: { maxWidth: 210, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 16, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle },
+  suggestionChipText: { maxWidth: 170, fontSize: 12, fontWeight: '700' },
+  categorySuggestion: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 8, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 10, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle },
+  categorySuggestionText: { color: c.text.secondary, fontSize: 11, fontWeight: '700' },
+  categorySuggestionValue: { flex: 1, fontSize: 12, fontWeight: '800' },
+  moreDetailsToggle: { marginTop: 16, minHeight: 46, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 10, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle },
+  moreDetailsTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  moreDetailsTitle: { color: c.text.primary, fontSize: 13, fontWeight: '800' },
+  moreDetailsCount: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+  moreDetailsBody: { paddingHorizontal: 4, paddingBottom: 4 },
+  savePreview: { marginTop: 18, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 11, borderRadius: 11, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle },
+  savePreviewIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  savePreviewCopy: { flex: 1, minWidth: 0 },
+  savePreviewLabel: { color: c.text.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
+  savePreviewValue: { color: c.text.primary, fontSize: 12, fontWeight: '700', lineHeight: 17, marginTop: 2 },
+  recurringCard: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    gap: 10,
   },
+  recurringToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  recurringToggleCopy: { flex: 1, minWidth: 0 },
+  recurringToggleTitle: { color: c.text.primary, fontSize: 14, fontWeight: '800' },
+  recurringToggleHint: { color: c.text.secondary, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  recurringFields: { gap: 8, paddingTop: 4 },
+  recurringEndRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  recurringEndLabel: { color: c.text.secondary, fontSize: 12, fontWeight: '600' },
+  recurringInvestHint: { color: c.text.muted, fontSize: 11, lineHeight: 16, marginTop: 4 },
+  submitActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  submitSecondary: { flex: 1 },
+  submitPrimary: { flex: 1 },
   submitBtnWrap: {
     marginTop: 20,
   },

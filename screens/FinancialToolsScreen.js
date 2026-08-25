@@ -9,6 +9,7 @@ import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { withAlpha } from '../lib/colorAlpha';
+import { spacing } from '../lib/theme';
 
 const TOOL_GROUPS = [
   {
@@ -69,6 +70,13 @@ const TOOL_GROUPS = [
         name: 'Tax Calculator',
         description: 'Compare Indian old and new tax regimes.',
         accent: 'investment',
+      },
+      {
+        route: 'GratuityCalculator',
+        icon: 'receipt',
+        name: 'Gratuity Calculator',
+        description: 'Estimate gratuity from wages and years of service.',
+        accent: 'income',
       },
     ],
   },
@@ -145,7 +153,7 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.canvas,
   },
   container: {
-    padding: 20,
+    padding: spacing.lg,
     paddingBottom: 48,
   },
   intro: {

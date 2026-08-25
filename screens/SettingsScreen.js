@@ -23,6 +23,7 @@ import { useRecurring } from '../contexts/RecurringContext';
 import { useBudgets } from '../contexts/BudgetContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { useGoals } from '../contexts/GoalsContext';
+import { useInsurancePolicies } from '../contexts/InsurancePoliciesContext';
 import { useLoans } from '../contexts/LoansContext';
 import {
   useTheme,
@@ -33,6 +34,8 @@ import {
 } from '../contexts/ThemeContext';
 import buildCsv from '../lib/exportCsv';
 import { CURRENCIES, currencyMeta } from '../lib/currency';
+import { spacing } from '../lib/theme';
+import { InfoCallout, StatusBadge } from '../components/UiPrimitives';
 import {
   computeVoiceNotesUsage,
   deleteOldVoiceNotes,
@@ -70,7 +73,8 @@ import { useDemoRestore } from '../hooks/useDemoRestore';
 //     backups restore fine — theme defaults to 'system' and
 //     settingsMigrations is unioned with the current app's expected
 //     keys on restore.
-const BACKUP_SCHEMA_VERSION = 7;
+// v8: adds `insurancePolicies` list. Older backups restore fine with [].
+const BACKUP_SCHEMA_VERSION = 8;
 const BACKUP_APP_ID = 'expense-tracker';
 
 // YYYY-MM-DD-HHmm used as filename suffix — always sortable, avoids
@@ -121,6 +125,7 @@ function validateBackupSections(d) {
     ['budgets',                isArrayOrMissing(d.budgets)],
     ['transfers',              isArrayOrMissing(d.transfers)],
     ['goals',                  isArrayOrMissing(d.goals)],
+    ['insurancePolicies',      isArrayOrMissing(d.insurancePolicies)],
     ['loans',                  isArrayOrMissing(d.loans)],
     ['customLoanKinds',        isArrayOrMissing(d.customLoanKinds)],
     ['currency',               isObjOrMissing(d.currency)],
@@ -237,6 +242,10 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
     goals,
   } = useGoals();
 
+  const {
+    policies: insurancePolicies,
+  } = useInsurancePolicies();
+
   const { applyRestore, loadDemoData } = useDemoRestore();
 
   const { mode: themeMode, setThemeMode, fontId, setFontId } = useTheme();
@@ -326,6 +335,7 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
           budgets,
           transfers,
           goals,
+          insurancePolicies,
           loans,
           customLoanKinds,
           // F9 Tier-2 (multi-currency). The base currency + FX rate
@@ -484,6 +494,7 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
         `${(d.budgets ?? []).length} budgets`,
         `${(d.transfers ?? []).length} transfers`,
         `${(d.goals ?? []).length} goals`,
+        `${(d.insurancePolicies ?? []).length} insurance policies`,
         `${(d.loans ?? []).length} loans`,
         `${(d.netWorth?.history ?? []).length} NW snapshots`,
         d.currency?.baseCurrency
@@ -533,7 +544,7 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
     STORAGE_KEYS.portfolio_holdings, STORAGE_KEYS.portfolio_prices_updated_at,
     STORAGE_KEYS.assets, STORAGE_KEYS.liabilities, STORAGE_KEYS.networth_history,
     STORAGE_KEYS.recurring_rules, STORAGE_KEYS.budgets, STORAGE_KEYS.transfers,
-    STORAGE_KEYS.goals, STORAGE_KEYS.loans, STORAGE_KEYS.ai_insights_cache,
+    STORAGE_KEYS.goals, STORAGE_KEYS.insurance_policies, STORAGE_KEYS.loans, STORAGE_KEYS.ai_insights_cache,
   ].filter(Boolean);
 
   const handleResetAll = () => {
@@ -1921,7 +1932,7 @@ export function CurrencySection({
                 if (selected) return;
                 Alert.alert(
                   'Change base currency?',
-                  `Totals will start reporting in ${c.code} (${c.label}) from now on. Historical row conversions are frozen at add time and won't be retroactively rewritten — so your past ₹ totals stay in ₹.`,
+                  `New totals and entries will use ${c.code}. Existing saved conversions stay unchanged.`,
                   [
                     { text: 'Cancel', style: 'cancel' },
                     { text: `Use ${c.code}`, onPress: () => onChangeBase?.(c.code) },
@@ -1935,6 +1946,7 @@ export function CurrencySection({
                 {c.code}
               </Text>
               <Text style={styles.currencyChipSymbol}>{c.symbol}</Text>
+              {selected ? <StatusBadge label="Base" tone="info" icon="check" /> : null}
             </TouchableOpacity>
           );
         })}
@@ -1950,9 +1962,12 @@ export function CurrencySection({
       </Text>
 
       {sortedRateRows.length === 0 && (
-        <Text style={styles.emptyRow}>
-          No FX rates yet — add one below to start recording foreign-currency rows.
-        </Text>
+        <InfoCallout
+          icon="repeat"
+          title="No foreign rates"
+          body="Add only the currencies you use."
+          compact
+        />
       )}
 
       {sortedRateRows.map(([code, row]) => {
@@ -1982,7 +1997,7 @@ export function CurrencySection({
               onPress={() =>
                 Alert.alert(
                   `Delete ${code} rate?`,
-                  `Rows already recorded with ${code} keep their frozen base values. You'll need to re-enter a rate to add NEW ${code} rows.`,
+                  `Existing ${code} entries stay unchanged. New entries will need a rate.`,
                   [
                     { text: 'Cancel', style: 'cancel' },
                     { text: 'Delete', style: 'destructive', onPress: () => onDeleteRate?.(code) },
@@ -2002,18 +2017,19 @@ export function CurrencySection({
           <Text style={styles.fxAddTitle}>
             {addingCode} → {baseCurrency}
           </Text>
-          <Text style={styles.currencyHelp}>
-            How many {baseCurrency} does 1 {addingCode} buy today?
-          </Text>
-          <TextInput
-            style={styles.addInput}
-            keyboardType="decimal-pad"
-            value={addingRate}
-            onChangeText={setAddingRate}
-            placeholder="e.g. 88.40"
-            placeholderTextColor="#9aa0a6"
-            autoFocus
-          />
+          <View style={styles.fxEquationRow}>
+            <Text style={styles.fxEquationText}>1 {addingCode} =</Text>
+            <TextInput
+              style={[styles.addInput, styles.fxEquationInput]}
+              keyboardType="decimal-pad"
+              value={addingRate}
+              onChangeText={setAddingRate}
+              placeholder="88.40"
+              placeholderTextColor="#9aa0a6"
+              autoFocus
+            />
+            <Text style={styles.fxEquationText}>{baseCurrency}</Text>
+          </View>
           <View style={styles.formButtonsRow}>
             <TouchableOpacity
               onPress={() => { setAddingCode(null); setAddingRate(''); }}
@@ -2084,7 +2100,7 @@ export function CurrencySection({
 
 const makeStyles = (c) => ({
   root: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: 20, paddingBottom: 60 },
+  container: { padding: spacing.lg, paddingBottom: 60 },
   pageHint: {
     fontSize: 12,
     color: c.text.secondary,
@@ -2386,13 +2402,9 @@ const makeStyles = (c) => ({
     color: '#3730a3',
     letterSpacing: 0.4,
   },
-  currencyHelp: {
-    fontSize: 11,
-    color: c.text.secondary,
-    lineHeight: 15,
-    marginBottom: 6,
-    marginTop: -4,
-  },
+  fxEquationRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  fxEquationInput: { flex: 1, marginBottom: 0, textAlign: 'center' },
+  fxEquationText: { color: c.text.primary, fontSize: 13, fontWeight: '800' },
   currencyRow: {
     gap: 6,
     paddingVertical: 4,

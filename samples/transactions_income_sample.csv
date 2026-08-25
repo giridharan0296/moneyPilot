@@ -1,9 +1,9 @@
 Date,Amount,Category,Sub Category,Account,Note,Tags
-2026-07-01,138078,Salary,Base Pay,Cash,June 2026 salary (net),monthly;salary
-2026-07-05,25000,Freelance,Client Work,Cash,Website redesign - Client X,side-project
+2026-07-01,138078,Employment Income,Base Pay,Cash,June 2026 salary (net),monthly;salary
+2026-07-05,25000,Business Income,Client Work,Cash,Website redesign - Client X,side-project
 2026-07-08,3200,Refund,Purchase,Cash,Amazon return - jacket,refund
 2026-07-10,1500,Other,Cashback,Cash,HDFC card cashback - Q2,rewards
-2026-07-12,7500,Investments,Dividend,Cash,ITC quarterly dividend,dividend;stocks
+2026-07-12,7500,Investment Income,Dividend,Cash,ITC quarterly dividend,dividend;stocks
 2026-07-15,5000,Gift,Family,Cash,Birthday gift from parents,gift
-2026-07-18,12000,Freelance,Consulting,Cash,Advisory call - Startup Y,consulting
+2026-07-18,12000,Business Income,Consulting,Cash,Advisory call - Startup Y,consulting
 2026-07-22,850,Other,Rewards Points,Cash,Zomato Gold refund,rewards

@@ -24,6 +24,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { baseAmountOf, formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { buildDisplayHoldings } from '../lib/portfolioHoldings';
 import {
   ALLOCATION_PRESETS,
   computeAllocationDrift,
@@ -91,7 +92,7 @@ export default function PortfolioBalanceScreen() {
   const { categories, baseCurrency, fxRates } = useSettings();
   const { investments } = useTransactions();
   const { holdings } = usePortfolio();
-  const { assets } = useNetWorth();
+  const { assets, isPortfolioSymbolHidden } = useNetWorth();
   const {
     targets,
     upsertTarget,
@@ -102,37 +103,10 @@ export default function PortfolioBalanceScreen() {
   const [draftPercents, setDraftPercents] = useState({});
   const [activePresetId, setActivePresetId] = useState(null);
 
-  const displayHoldings = useMemo(() => {
-    const grouped = new Map();
-    for (const tx of investments) {
-      if (!tx.instrumentSymbol || !(Number(tx.investmentUnits) > 0)) continue;
-      const broker = tx.brokerId || 'logged';
-      const key = `${broker}:${tx.instrumentSymbol}`;
-      const row = grouped.get(key) || {
-        broker,
-        symbol: tx.instrumentSymbol,
-        quantity: 0,
-        totalCost: 0,
-      };
-      row.quantity += Number(tx.investmentUnits);
-      row.totalCost += Number(tx.amount) || 0;
-      grouped.set(key, row);
-    }
-    const fromTx = [...grouped.values()].map((row) => {
-      const avgCost = row.totalCost / row.quantity;
-      return {
-        ...row,
-        avgCost,
-        currentPrice: avgCost,
-        currentValue: row.totalCost,
-      };
-    });
-    const imported = new Set(holdings.map((h) => `${h.broker || 'logged'}:${h.symbol}`));
-    return [
-      ...holdings,
-      ...fromTx.filter((h) => !imported.has(`${h.broker}:${h.symbol}`)),
-    ];
-  }, [holdings, investments]);
+  const displayHoldings = useMemo(
+    () => buildDisplayHoldings(holdings, investments, {}, { isSymbolHidden: isPortfolioSymbolHidden }),
+    [holdings, investments, isPortfolioSymbolHidden],
+  );
 
   const { rows: currentRows, totalValue, source } = useMemo(
     () => computeCurrentAllocation({
@@ -402,7 +376,7 @@ export default function PortfolioBalanceScreen() {
 
 const makeStyles = (c) => ({
   root: { flex: 1, backgroundColor: c.bg.canvas },
-  content: { padding: spacing.xl, paddingBottom: spacing['4xl'], gap: spacing.xl },
+  content: { padding: spacing.lg, paddingBottom: spacing['4xl'], gap: spacing.xl },
 
   hero: {
     backgroundColor: c.bg.hero,

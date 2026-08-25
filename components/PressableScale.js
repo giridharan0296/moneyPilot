@@ -1,7 +1,6 @@
 import { useRef } from 'react';
 import { Animated, Pressable, StyleSheet } from 'react-native';
 
-import { hapticLight } from '../lib/haptics';
 import { motion } from '../lib/motion';
 
 // Flex sizing props go on the outer Pressable so row layouts work.
@@ -34,7 +33,6 @@ export default function PressableScale({
   style,
   contentStyle,
   scaleTo = 0.975,
-  haptic = false,
   disabled = false,
   onPress,
   onPressIn,
@@ -58,7 +56,6 @@ export default function PressableScale({
 
   const handlePress = (event) => {
     if (disabled) return;
-    if (haptic) hapticLight();
     onPress?.(event);
   };
 

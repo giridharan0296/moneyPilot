@@ -18,7 +18,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors as staticColors, radii, spacing, type, elevation } from '../lib/theme';
-import { hapticLight, hapticSuccess } from '../lib/haptics';
 import { useThemeColors } from './ThemeContext';
 import AppIcon from '../components/AppIcon';
 
@@ -285,8 +284,6 @@ function ToastView({ payload, anim, visible, onDismiss, variants }) {
         {payload.actionLabel && payload.onAction && (
           <TouchableOpacity
             onPress={() => {
-              if (payload.actionLabel === 'Undo') hapticSuccess();
-              else hapticLight();
               payload.onAction();
             }}
             hitSlop={8}

@@ -10,8 +10,14 @@ import {
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
 import AmountCalculatorButton from './AmountCalculatorButton';
+import QuickAddPickerItem from './QuickAddPickerItem';
 
-import { KIND_META, KINDS, assetPickerTag } from '../lib/goals';
+import {
+  KIND_META,
+  KINDS,
+  assetIdForLinkedAccount,
+  assetPickerTag,
+} from '../lib/goals';
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
@@ -30,11 +36,15 @@ const EMOJI_SUGGESTIONS = [
 export default function GoalForm({
   initialValues = null,
   assets = [],
+  allAssets = null,
+  accounts = [],
   totalAssetCount = null,
+  totalAccountCount = null,
   expenseCategories = [],
   submitLabel = 'Save goal',
   onSubmit,
   onCancel,
+  lockKind = !!initialValues,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -50,6 +60,7 @@ export default function GoalForm({
   const [linkedAssetIds, setLinkedAssetIds] = useState(
     initialValues?.linkedAssetIds ?? [],
   );
+  const [pendingAccountIds, setPendingAccountIds] = useState([]);
   const [linkedCategoryIds, setLinkedCategoryIds] = useState(
     initialValues?.linkedCategoryIds ?? [],
   );
@@ -86,16 +97,69 @@ export default function GoalForm({
 
   const meta = KIND_META[kind];
 
+  // `assets` is the picker list (non-account assets). `allAssets` holds every
+  // Net Worth row so account chips can resolve linkedAccountId → asset id.
+  const assetsForLookup = allAssets ?? assets;
+
+  const otherAssets = useMemo(
+    () => assets.filter((asset) => !asset.linkedAccountId),
+    [assets],
+  );
+
+  // AccountNetWorthSync creates a mirrored asset shortly after a new account
+  // is saved — resolve pending picks once that asset lands.
+  useEffect(() => {
+    if (pendingAccountIds.length === 0) return;
+    const resolvedAssetIds = [];
+    const stillPending = [];
+    for (const accountId of pendingAccountIds) {
+      const assetId = assetIdForLinkedAccount(assetsForLookup, accountId);
+      if (assetId) resolvedAssetIds.push(assetId);
+      else stillPending.push(accountId);
+    }
+    if (resolvedAssetIds.length > 0) {
+      setLinkedAssetIds((ids) => [...new Set([...ids, ...resolvedAssetIds])]);
+    }
+    if (stillPending.length !== pendingAccountIds.length) {
+      setPendingAccountIds(stillPending);
+    }
+  }, [assetsForLookup, pendingAccountIds]);
+
   const toggle = (list, setList, id) =>
     setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+
+  const toggleAccount = (accountId) => {
+    const assetId = assetIdForLinkedAccount(assetsForLookup, accountId);
+    if (assetId) {
+      toggle(linkedAssetIds, setLinkedAssetIds, assetId);
+      return;
+    }
+    setPendingAccountIds((ids) => (
+      ids.includes(accountId) ? ids.filter((id) => id !== accountId) : [...ids, accountId]
+    ));
+  };
+
+  const isAccountSelected = (accountId) => {
+    const assetId = assetIdForLinkedAccount(assetsForLookup, accountId);
+    return pendingAccountIds.includes(accountId)
+      || (assetId != null && linkedAssetIds.includes(assetId));
+  };
 
   const handleSubmit = () => {
     const target = Number(amount);
     if (!name.trim()) return setError('Give your goal a name.');
     if (!isFinite(target) || target <= 0) return setError('Enter a positive target.');
 
-    if (kind === 'save' && linkedAssetIds.length === 0) {
-      return setError('Pick at least one Net Worth asset to track progress.');
+    const resolvedAssetIds = pendingAccountIds
+      .map((accountId) => assetIdForLinkedAccount(assetsForLookup, accountId))
+      .filter(Boolean);
+    const allLinkedAssetIds = [...new Set([...linkedAssetIds, ...resolvedAssetIds])];
+
+    if (kind === 'save' && allLinkedAssetIds.length === 0) {
+      if (pendingAccountIds.length > 0) {
+        return setError('This account is still syncing to Net Worth. Wait a moment and try again.');
+      }
+      return setError('Pick at least one account or Net Worth asset to track progress.');
     }
     if (kind === 'spend_cap' && linkedCategoryIds.length === 0) {
       return setError('Pick at least one expense category to cap.');
@@ -112,7 +176,7 @@ export default function GoalForm({
       targetAmount: target,
       deadline: deadline ? deadline.toISOString() : null,
       startDate: startDate ? startDate.toISOString() : null,
-      linkedAssetIds,
+      linkedAssetIds: allLinkedAssetIds,
       linkedCategoryIds,
       active: initialValues?.active !== false,
     });
@@ -121,7 +185,7 @@ export default function GoalForm({
   return (
     <View style={styles.card}>
       {/* Kind selector — locked in edit mode */}
-      {isEdit ? (
+      {lockKind ? (
         <>
           <Text style={styles.label}>Kind (locked)</Text>
           <View style={styles.kindLocked}>
@@ -222,41 +286,81 @@ export default function GoalForm({
       </AmountCalculatorButton>
       {kind === 'save' && (
         <>
-          <Text style={styles.label}>Assets that count toward this goal</Text>
-          {assets.length === 0 ? (
+          <Text style={styles.label}>Bank accounts</Text>
+          {accounts.length === 0 ? (
             <Text style={styles.emptyHint}>
-              {(totalAssetCount ?? 0) > 0
-                ? 'Every Net Worth asset is already linked to another goal. Edit or archive that goal to free an asset.'
-                : 'Add an asset in Net Worth first (e.g. a savings account or synced stock).'}
+              {(totalAccountCount ?? 0) > 0
+                ? 'Every account is already linked to another goal. Edit or archive that goal to free one.'
+                : 'Create an account below — it syncs to Net Worth and tracks this goal automatically.'}
             </Text>
           ) : (
             <View style={styles.chipWrap}>
-              {assets.map((a) => {
-                const active = linkedAssetIds.includes(a.id);
-                const tag = assetPickerTag(a);
+              {accounts.map((account) => {
+                const active = isAccountSelected(account.id);
                 return (
                   <TouchableOpacity
-                    key={a.id}
-                    onPress={() => toggle(linkedAssetIds, setLinkedAssetIds, a.id)}
+                    key={account.id}
+                    onPress={() => toggleAccount(account.id)}
                     style={[styles.chip, active && styles.chipActive]}
                   >
-                    <View style={styles.chipInner}>
-                      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                        {a.name}
-                      </Text>
-                      {tag ? (
-                        <View style={[styles.assetTag, active && styles.assetTagActive]}>
-                          <Text style={[styles.assetTagText, active && styles.assetTagTextActive]}>
-                            {tag}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                      {account.emoji ? `${account.emoji} ` : ''}{account.label}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
+              <QuickAddPickerItem
+                kind="account"
+                onCreated={(account) => setPendingAccountIds((ids) => [...new Set([...ids, account.id])])}
+              />
             </View>
           )}
+          {accounts.length === 0 ? (
+            <View style={[styles.chipWrap, { marginTop: spacing.sm }]}>
+              <QuickAddPickerItem
+                kind="account"
+                onCreated={(account) => setPendingAccountIds((ids) => [...new Set([...ids, account.id])])}
+              />
+            </View>
+          ) : null}
+
+          {otherAssets.length > 0 ? (
+            <>
+              <Text style={styles.label}>Other Net Worth assets</Text>
+              <View style={styles.chipWrap}>
+                {otherAssets.map((a) => {
+                  const active = linkedAssetIds.includes(a.id);
+                  const tag = assetPickerTag(a);
+                  return (
+                    <TouchableOpacity
+                      key={a.id}
+                      onPress={() => toggle(linkedAssetIds, setLinkedAssetIds, a.id)}
+                      style={[styles.chip, active && styles.chipActive]}
+                    >
+                      <View style={styles.chipInner}>
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {a.name}
+                        </Text>
+                        {tag ? (
+                          <View style={[styles.assetTag, active && styles.assetTagActive]}>
+                            <Text style={[styles.assetTagText, active && styles.assetTagTextActive]}>
+                              {tag}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          ) : null}
+
+          {accounts.length === 0 && otherAssets.length === 0 && (totalAssetCount ?? 0) > 0 ? (
+            <Text style={[styles.emptyHint, { marginTop: spacing.sm }]}>
+              Every Net Worth asset is already linked to another goal. Edit or archive that goal to free one.
+            </Text>
+          ) : null}
         </>
       )}
 
@@ -278,6 +382,11 @@ export default function GoalForm({
                 </TouchableOpacity>
               );
             })}
+            <QuickAddPickerItem
+              kind="category"
+              type="expense"
+              onCreated={(item) => setLinkedCategoryIds((ids) => [...new Set([...ids, item.id])])}
+            />
           </View>
 
           <Text style={styles.label}>Start date (window begins)</Text>

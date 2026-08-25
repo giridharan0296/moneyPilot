@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react';
 import {
-  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AmountCalculatorButton from './AmountCalculatorButton';
+import QuickAddPickerItem from './QuickAddPickerItem';
 
 // ----------------------------------------------------------------------------
 // BudgetForm — add / edit a budget rule.
@@ -93,11 +94,7 @@ export default function BudgetForm({
   return (
     <View style={styles.card}>
       <Text style={styles.label}>Category</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipRow}
-      >
+      <View style={styles.chipRow}>
         {/* Overall (all expenses) chip — kept as the first option so the
             most restrictive-but-useful pattern (a total-spend cap) is
             immediately reachable without scrolling. */}
@@ -151,65 +148,80 @@ export default function BudgetForm({
             </TouchableOpacity>
           );
         })}
-      </ScrollView>
+        <QuickAddPickerItem
+          kind="category"
+          type="expense"
+          accent={accentColor}
+          onCreated={(item) => {
+            setCategoryId(item.id);
+            setSubCategoryId(null);
+          }}
+        />
+      </View>
 
-      {subCategories.length > 0 && (
+      {selectedCategory && (
         <>
           <Text style={styles.label}>Sub-category (optional)</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-          >
-            <TouchableOpacity
-              onPress={() => setSubCategoryId(null)}
-              activeOpacity={0.7}
-              style={[
-                styles.subChip,
-                !subCategoryId && {
-                  backgroundColor: accentColor,
-                  borderColor: accentColor,
-                },
-              ]}
-            >
-              <Text
+          {subCategories.length > 0 ? (
+            <View style={styles.chipRow}>
+              <TouchableOpacity
+                onPress={() => setSubCategoryId(null)}
+                activeOpacity={0.7}
                 style={[
-                  styles.subChipText,
-                  !subCategoryId && styles.chipTextSelected,
+                  styles.subChip,
+                  !subCategoryId && {
+                    backgroundColor: accentColor,
+                    borderColor: accentColor,
+                  },
                 ]}
               >
-                All {selectedCategory?.label ?? 'category'}
-              </Text>
-            </TouchableOpacity>
-            {subCategories.map((s) => {
-              const selected = s.id === subCategoryId;
-              return (
-                <TouchableOpacity
-                  key={s.id}
-                  onPress={() =>
-                    setSubCategoryId((prev) => (prev === s.id ? null : s.id))
-                  }
-                  activeOpacity={0.7}
+                <Text
                   style={[
-                    styles.subChip,
-                    selected && {
-                      backgroundColor: accentColor,
-                      borderColor: accentColor,
-                    },
+                    styles.subChipText,
+                    !subCategoryId && styles.chipTextSelected,
                   ]}
                 >
-                  <Text
+                  All {selectedCategory?.label ?? 'category'}
+                </Text>
+              </TouchableOpacity>
+              {subCategories.map((s) => {
+                const selected = s.id === subCategoryId;
+                return (
+                  <TouchableOpacity
+                    key={s.id}
+                    onPress={() =>
+                      setSubCategoryId((prev) => (prev === s.id ? null : s.id))
+                    }
+                    activeOpacity={0.7}
                     style={[
-                      styles.subChipText,
-                      selected && styles.chipTextSelected,
+                      styles.subChip,
+                      selected && {
+                        backgroundColor: accentColor,
+                        borderColor: accentColor,
+                      },
                     ]}
                   >
-                    {s.emoji} {s.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      style={[
+                        styles.subChipText,
+                        selected && styles.chipTextSelected,
+                      ]}
+                    >
+                      {s.emoji} {formatSubCategoryLabel(s.label)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <QuickAddPickerItem kind="subcategory" type="expense" parentId={categoryId} accent={accentColor} onCreated={(item) => setSubCategoryId(item.id)} />
+            </View>
+          ) : null}
+          {subCategories.length === 0 ? <QuickAddPickerItem
+            kind="subcategory"
+            type="expense"
+            parentId={categoryId}
+            accent={accentColor}
+            onCreated={(item) => setSubCategoryId(item.id)}
+          /> : null}
         </>
       )}
 
@@ -296,7 +308,7 @@ const makeStyles = (c) => ({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  chipRow: { paddingVertical: spacing.xs, gap: spacing.sm },
+  chipRow: { paddingVertical: spacing.xs, gap: spacing.sm, flexDirection: 'row', flexWrap: 'wrap' },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -314,8 +326,10 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surfaceAlt,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
-  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
+  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary, flexShrink: 0 },
   input: {
     backgroundColor: c.bg.surfaceAlt,
     borderRadius: radii.md,

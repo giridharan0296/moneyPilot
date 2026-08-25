@@ -9,6 +9,7 @@ import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { withAlpha } from '../lib/colorAlpha';
+import { spacing } from '../lib/theme';
 
 const MARKET_TOOLS = [
   {
@@ -126,7 +127,7 @@ function ToolRow({ tool, isLast, onPress }) {
 
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: 20, paddingBottom: 48 },
+  container: { padding: spacing.lg, paddingBottom: 48 },
   intro: { marginBottom: 24 },
   headingRow: { flexDirection: 'row', alignItems: 'center' },
   heading: {

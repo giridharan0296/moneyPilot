@@ -9,6 +9,7 @@ import {
 import { Platform } from 'react-native';
 
 import DateTimePicker from '../components/DatePicker';
+import { useThemeColors } from '../contexts/ThemeContext';
 import { capAtNow } from '../lib/formatTimestamp';
 
 const AndroidDateTimePickerContext = createContext(null);
@@ -18,6 +19,7 @@ const AndroidDateTimePickerContext = createContext(null);
  * blocked by React Native Modals (transaction form, transfer edit, etc.).
  */
 export function AndroidDateTimePickerProvider({ children }) {
+  const themeColors = useThemeColors();
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(null);
   const stepRef = useRef('date');
@@ -111,6 +113,7 @@ export function AndroidDateTimePickerProvider({ children }) {
           value={draftRef.current}
           mode={pickerMode}
           display="default"
+          accentColor={themeColors.accent.primary}
           maximumDate={optionsRef.current.maximumDate ?? new Date()}
           minimumDate={optionsRef.current.minimumDate}
           onChange={handleChange}

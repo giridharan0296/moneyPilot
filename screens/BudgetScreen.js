@@ -22,7 +22,8 @@
 //                but aren't counted in the summary hero)
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useRoute } from '@react-navigation/native';
 import {
   ScrollView,
   Switch,
@@ -54,7 +55,15 @@ import {
   formatMoney as formatMoneyCurrency,
 } from '../lib/currency';
 
-export default function BudgetScreen({ navigation }) {
+export function BudgetPane({
+  embedded = false,
+  navigation,
+  route: routeProp,
+  createSignal = null,
+  onCreateSignalHandled,
+  onEditingChange,
+}) {
+  const route = routeProp ?? useRoute();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const {
@@ -74,16 +83,39 @@ export default function BudgetScreen({ navigation }) {
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [budgetTemplate, setBudgetTemplate] = useState(null);
 
-  // Header "+" — same affordance as Accounts / Categories. Hidden while
-  // the create form is open so it doesn't compete with itself.
+  useEffect(() => {
+    if (!embedded && route.params?.create) {
+      setEditingId(null);
+      setBudgetTemplate(route.params.template ?? null);
+      setCreating(true);
+      navigation?.setParams?.({ create: undefined, template: undefined });
+    }
+  }, [embedded, route.params?.create, route.params?.template, navigation]);
+
+  useEffect(() => {
+    if (!createSignal || createSignal.type !== 'budget') return;
+    setEditingId(null);
+    setBudgetTemplate(createSignal.template ?? null);
+    setCreating(true);
+    onCreateSignalHandled?.();
+  }, [createSignal, onCreateSignalHandled]);
+
+  useEffect(() => {
+    onEditingChange?.(creating || editingId != null);
+  }, [creating, editingId, onEditingChange]);
+
+  // Header "+" — hidden when embedded (Plans screen owns the add flow).
   useLayoutEffect(() => {
+    if (embedded || !navigation?.setOptions) return;
     navigation.setOptions({
       headerRight: () =>
         !creating ? (
           <TouchableOpacity
             onPress={() => {
               setEditingId(null);
+              setBudgetTemplate(null);
               setCreating(true);
             }}
             hitSlop={12}
@@ -100,7 +132,7 @@ export default function BudgetScreen({ navigation }) {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, creating, themeColors.text.primary]);
+  }, [embedded, navigation, creating, themeColors.text.primary]);
 
   // Progress info per budget — memoized so we don't recompute on every render.
   // Depends on `expenses` and `budgets`; both change less frequently than
@@ -125,6 +157,62 @@ export default function BudgetScreen({ navigation }) {
     }
     return out;
   }, [budgets, expensesInBase]);
+
+  const suggestedBudgets = useMemo(() => {
+    const now = Date.now();
+    const cutoff = now - (90 * 24 * 60 * 60 * 1000);
+    const recent = expensesInBase.filter((expense) => {
+      const time = new Date(expense.createdAt).getTime();
+      return Number.isFinite(time) && time >= cutoff && time <= now;
+    });
+    const oldest = recent.length
+      ? Math.min(...recent.map((expense) => new Date(expense.createdAt).getTime()))
+      : now;
+    const observedMonths = Math.max(1, Math.min(3, (now - oldest) / (30 * 24 * 60 * 60 * 1000)));
+    const byCategory = new Map();
+    let total = 0;
+    for (const expense of recent) {
+      const amount = Math.max(0, Number(expense.amount) || 0);
+      total += amount;
+      if (expense.categoryId) byCategory.set(expense.categoryId, (byCategory.get(expense.categoryId) || 0) + amount);
+    }
+    const roundLimit = (amount) => Math.max(100, Math.ceil(amount / 100) * 100);
+    const hasMonthlyBudget = (categoryId) => budgets.some(
+      (budget) => budget.categoryId === categoryId && !budget.subCategoryId && budget.period === 'monthly',
+    );
+    const suggestions = [];
+    if (total > 0 && !hasMonthlyBudget(null)) {
+      suggestions.push({
+        id: 'overall', categoryId: null, subCategoryId: null, period: 'monthly',
+        amount: roundLimit((total / observedMonths) * 1.05), emoji: '🎯', label: 'Overall spending',
+        note: 'Recent monthly average + 5% buffer',
+      });
+    }
+    const ranked = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [categoryId, spent] of ranked) {
+      if (suggestions.length >= 6 || hasMonthlyBudget(categoryId)) continue;
+      const category = expenseCategories.find((item) => item.id === categoryId);
+      if (!category) continue;
+      suggestions.push({
+        id: `category_${categoryId}`, categoryId, subCategoryId: null, period: 'monthly',
+        amount: roundLimit((spent / observedMonths) * 1.1), emoji: category.emoji, label: category.label,
+        note: 'Recent monthly average + 10% buffer',
+      });
+    }
+    if (suggestions.length === 0) {
+      const defaults = { food: 10000, bills: 15000, transport: 5000, shopping: 5000, fun: 3000 };
+      for (const category of expenseCategories) {
+        const amount = defaults[category.id];
+        if (!amount || hasMonthlyBudget(category.id)) continue;
+        suggestions.push({
+          id: `default_${category.id}`, categoryId: category.id, subCategoryId: null,
+          period: 'monthly', amount, emoji: category.emoji, label: category.label,
+          note: 'Starter amount — adjust before saving',
+        });
+      }
+    }
+    return suggestions.slice(0, 6);
+  }, [expensesInBase, expenseCategories, budgets]);
 
   // Summary — counts active budgets and their status distribution.
   const summary = useMemo(() => {
@@ -159,6 +247,7 @@ export default function BudgetScreen({ navigation }) {
       return;
     }
     setCreating(false);
+    setBudgetTemplate(null);
     if (dupId) {
       showToast('Existing budget updated with new amount', { variant: 'info' });
     } else {
@@ -202,20 +291,51 @@ export default function BudgetScreen({ navigation }) {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
-      <ScreenHelpIntro
-        title="Spending limits"
-        subtitle="Repeating caps that reset each week, month, or year."
-        help={HELP_BUDGETS}
-      />
+      {!embedded ? (
+        <ScreenHelpIntro
+          title="Spending limits"
+          subtitle="Repeating caps that reset each week, month, or year."
+          help={HELP_BUDGETS}
+        />
+      ) : null}
       <SummaryHero summary={summary} />
+
+      {!creating && editingId == null && suggestedBudgets.length > 0 ? (
+        <View style={styles.templates}>
+          <Text style={styles.templateTitle}>SUGGESTED MONTHLY BUDGETS</Text>
+          <Text style={styles.templateHint}>Suggestions use recent spending where available. Select one to review and edit it.</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.templateRow}>
+            {suggestedBudgets.map((template) => (
+              <TouchableOpacity
+                key={template.id}
+                style={styles.templateCard}
+                onPress={() => { setBudgetTemplate(template); setEditingId(null); setCreating(true); }}
+              >
+                <Text style={styles.templateEmoji}>{template.emoji}</Text>
+                <Text style={styles.templateName}>{template.label}</Text>
+                <Text style={styles.templateAmount}>{formatMoneyCurrency(template.amount, baseCurrency, { decimals: 0 })}/month</Text>
+                <Text style={styles.templateNote}>{template.note}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
 
       {creating && (
         <View style={styles.formWrap}>
+          {budgetTemplate ? (
+            <View style={styles.estimateBanner}>
+              <Text style={styles.estimateBannerTitle}>{budgetTemplate.label} suggestion</Text>
+              <Text style={styles.estimateBannerText}>{budgetTemplate.note}. You can change the category, amount, or period.</Text>
+            </View>
+          ) : null}
           <BudgetForm
+            key={budgetTemplate?.id ?? 'blank-budget'}
             categories={expenseCategories}
+            initialValues={budgetTemplate}
             submitLabel="Add budget"
             onSubmit={handleAdd}
-            onCancel={() => setCreating(false)}
+            onCancel={() => { setCreating(false); setBudgetTemplate(null); }}
           />
         </View>
       )}
@@ -259,6 +379,7 @@ export default function BudgetScreen({ navigation }) {
             activeOpacity={0.7}
             onPress={() => {
               setCreating(false);
+              setBudgetTemplate(null);
               setEditingId(b.id);
             }}
           >
@@ -300,6 +421,10 @@ export default function BudgetScreen({ navigation }) {
       </Text>
     </ScrollView>
   );
+}
+
+export default function BudgetScreen(props) {
+  return <BudgetPane embedded={false} {...props} />;
 }
 
 // ----------------------------------------------------------------------------
@@ -395,7 +520,7 @@ function statusStyle(status, themeColors) {
 // ----------------------------------------------------------------------------
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: spacing.xl, paddingBottom: 60, gap: spacing.md },
+  container: { padding: spacing.lg, paddingBottom: 60, gap: spacing.md },
 
   // Hero
   hero: {
@@ -447,6 +572,18 @@ const makeStyles = (c) => ({
   },
 
   // Row
+  templates: { marginBottom: spacing.xs },
+  templateTitle: { fontSize: 11, fontWeight: '800', color: c.text.secondary, letterSpacing: 0.8 },
+  templateHint: { fontSize: 12, lineHeight: 17, color: c.text.muted, marginTop: 3 },
+  templateRow: { gap: spacing.sm, paddingTop: spacing.sm, paddingRight: spacing.lg },
+  templateCard: { width: 160, backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle, borderRadius: radii.lg, padding: spacing.md },
+  templateEmoji: { fontSize: 22 },
+  templateName: { fontSize: 13, fontWeight: '800', color: c.text.primary, marginTop: 7 },
+  templateAmount: { fontSize: 11, color: c.text.secondary, marginTop: 3 },
+  templateNote: { fontSize: 10, lineHeight: 14, color: c.accent.income, marginTop: 5 },
+  estimateBanner: { backgroundColor: c.bg.surfaceAlt, borderWidth: 1, borderColor: c.border.subtle, borderRadius: radii.lg, padding: spacing.md },
+  estimateBannerTitle: { fontSize: 13, fontWeight: '800', color: c.text.primary },
+  estimateBannerText: { fontSize: 11, lineHeight: 16, color: c.text.secondary, marginTop: 3 },
   row: {
     backgroundColor: c.bg.surface,
     borderRadius: radii.xl,

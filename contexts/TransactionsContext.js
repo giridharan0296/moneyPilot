@@ -93,6 +93,11 @@ function normalizeTx(t) {
     || t?.payslipSource != null;
   const normalized = {
     ...t,
+    // Persisted backups/imports may contain numeric strings. Keep the
+    // in-memory ledger numeric so reducers cannot concatenate values.
+    // Invalid/non-finite amounts are neutralized instead of poisoning every
+    // downstream total with NaN/Infinity.
+    amount: isFinite(amount) ? amount : 0,
     tags: Array.isArray(t?.tags) ? sanitizeTags(t.tags) : [],
     subCategoryId: t?.subCategoryId ?? null,
     currency,
@@ -105,6 +110,7 @@ function normalizeTx(t) {
       instrumentType: t.instrumentType ?? null,
       investmentUnits,
     } : {}),
+    ...(t?.historicalOnly === true ? { historicalOnly: true } : {}),
   };
   if (isGoldChit) {
     normalized.chitSchemeId = typeof t?.chitSchemeId === 'string' ? t.chitSchemeId : null;

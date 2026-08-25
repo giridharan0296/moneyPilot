@@ -1,9 +1,9 @@
 Date,Amount,Category,Sub Category,Account,Note,Tags
-2026-07-01,10000,Mutual Funds,SIP,Cash,Nippon Small Cap SIP,sip;monthly
-2026-07-01,5000,Mutual Funds,SIP,Cash,Parag Parikh Flexi Cap SIP,sip;monthly
-2026-07-02,25000,Stocks,Indian,Cash,Bought 15 shares of Reliance,long-term
-2026-07-05,50000,Fixed Deposit,Bank FD,Cash,HDFC 1yr FD @ 7.1%,fd;lowrisk
+2026-07-01,10000,Mutual Funds,Small Cap,Cash,Nippon Small Cap SIP,sip;monthly
+2026-07-01,5000,Mutual Funds,Flexi Cap,Cash,Parag Parikh Flexi Cap SIP,sip;monthly
+2026-07-02,25000,Stocks,Domestic Stocks,Cash,Bought 15 shares of Reliance,long-term
+2026-07-05,50000,Bank Deposits,Bank FD,Cash,HDFC 1yr FD @ 7.1%,fd;lowrisk
 2026-07-08,15000,Mutual Funds,ELSS (Tax-saver),Cash,Axis Long Term Equity - 80C,tax-saving;80c
-2026-07-12,7500,Gold,SGB,Cash,SGB 2026-27 Series I,gold;longterm
+2026-07-12,7500,Bonds & Fixed Income,Sovereign Gold Bond,Cash,SGB 2026-27 Series I,gold;longterm
 2026-07-15,3000,Crypto,Bitcoin,Cash,DCA BTC on WazirX,crypto;dca
-2026-07-20,12000,Stocks,IPO,Cash,ABC IPO allotment,ipo
+2026-07-20,12000,Stocks,Domestic Stocks,Cash,ABC IPO allotment,ipo

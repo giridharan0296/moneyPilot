@@ -7,94 +7,67 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import AppButton from './AppButton';
 import AppIcon from './AppIcon';
-import PressableScale from './PressableScale';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { motion } from '../lib/motion';
-import { elevation, radii, spacing } from '../lib/theme';
+import { elevation, radii } from '../lib/theme';
 
+// The Dashboard add button sits in the top-right header. These offsets fan
+// actions left and down around that anchor, keeping every target on-screen.
 const OPTIONS = [
-  {
-    id: 'income',
-    label: 'Income',
-    description: 'Salary, refunds, interest, and other money in',
-    icon: 'wallet',
-    tintKey: 'income',
-  },
-  {
-    id: 'expense',
-    label: 'Expense',
-    description: 'Daily spends, bills, and purchases',
-    icon: 'credit-card',
-    tintKey: 'expense',
-  },
-  {
-    id: 'investment',
-    label: 'Investment',
-    description: 'Mutual funds, stocks, gold, and other investments',
-    icon: 'pie-chart',
-    tintKey: 'investment',
-  },
+  { id: 'income', label: 'Income', icon: 'wallet', tintKey: 'income', x: -126, y: 4 },
+  { id: 'expense', label: 'Expense', icon: 'credit-card', tintKey: 'expense', x: -122, y: 62 },
+  { id: 'investment', label: 'Investment', icon: 'pie-chart', tintKey: 'investment', x: -88, y: 120 },
+  { id: 'transfer', label: 'Transfer', icon: 'arrow-right-left', tint: '#0ea5e9', x: -28, y: 178 },
 ];
 
 export default function QuickAddSheet({ visible, onClose, onSelect }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
+  const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
-  const backdrop = useRef(new Animated.Value(0)).current;
-  const sheetY = useRef(new Animated.Value(48)).current;
+  const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
       setMounted(true);
-      backdrop.setValue(0);
-      sheetY.setValue(48);
-      Animated.parallel([
-        Animated.timing(backdrop, {
-          toValue: 1,
-          duration: motion.duration.normal,
-          easing: motion.easing.out,
-          useNativeDriver: true,
-        }),
-        Animated.spring(sheetY, {
-          toValue: 0,
-          useNativeDriver: true,
-          ...motion.spring.sheet,
-        }),
-      ]).start();
+      progress.setValue(0);
+      Animated.spring(progress, {
+        toValue: 1,
+        useNativeDriver: true,
+        ...motion.spring.sheet,
+      }).start();
       return undefined;
     }
-
     if (!mounted) return undefined;
-
-    Animated.parallel([
-      Animated.timing(backdrop, {
-        toValue: 0,
-        duration: motion.duration.fast,
-        easing: motion.easing.in,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetY, {
-        toValue: 48,
-        duration: motion.duration.fast,
-        easing: motion.easing.in,
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
+    Animated.timing(progress, {
+      toValue: 0,
+      duration: motion.duration.fast,
+      easing: motion.easing.in,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
       if (finished) setMounted(false);
     });
     return undefined;
-  }, [visible, mounted, backdrop, sheetY]);
+  }, [visible, mounted, progress]);
 
   if (!mounted) return null;
 
-  const handlePick = (type) => {
+  const pick = (type) => {
     onClose?.();
     onSelect?.(type);
   };
+
+  const backdropOpacity = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.34],
+  });
+  const closeRotation = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '45deg'],
+  });
 
   return (
     <Modal
@@ -105,136 +78,119 @@ export default function QuickAddSheet({ visible, onClose, onSelect }) {
       statusBarTranslucent
     >
       <View style={styles.root}>
-        <Animated.View style={[styles.backdropFill, { opacity: backdrop }]}>
+        <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]} />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close add menu"
+        />
+
+        <View style={[styles.anchor, { top: insets.top + 6 }]} pointerEvents="box-none">
+          {OPTIONS.map((option, index) => {
+            const tint = option.tint ?? colors.accent[option.tintKey];
+            const delayedProgress = progress.interpolate({
+              inputRange: [index * 0.08, Math.min(1, 0.68 + index * 0.08)],
+              outputRange: [0, 1],
+              extrapolate: 'clamp',
+            });
+            return (
+              <Animated.View
+                key={option.id}
+                style={[
+                  styles.actionPosition,
+                  {
+                    opacity: delayedProgress,
+                    transform: [
+                      { translateX: Animated.multiply(delayedProgress, option.x) },
+                      { translateY: Animated.multiply(delayedProgress, option.y) },
+                      { scale: delayedProgress },
+                    ],
+                  },
+                ]}
+              >
+                <Pressable
+                  onPress={() => pick(option.id)}
+                  style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add ${option.label.toLowerCase()}`}
+                >
+                  <Text style={styles.label}>{option.label}</Text>
+                  <View style={[styles.iconCircle, { backgroundColor: tint }]}>
+                    <AppIcon name={option.icon} size={20} color="#fff" strokeWidth={2.2} />
+                  </View>
+                </Pressable>
+              </Animated.View>
+            );
+          })}
+
           <Pressable
-            style={StyleSheet.absoluteFill}
             onPress={onClose}
+            style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
             accessibilityRole="button"
             accessibilityLabel="Close add menu"
-          />
-        </Animated.View>
-
-        <Animated.View style={{ transform: [{ translateY: sheetY }] }}>
-          <SafeAreaView edges={['bottom']} style={styles.sheet}>
-            <View style={styles.handle} />
-            <Text style={styles.title}>Add transaction</Text>
-            <Text style={styles.subtitle}>Choose what you want to record</Text>
-
-            <View style={styles.options}>
-              {OPTIONS.map((opt) => {
-                const tint = colors.accent[opt.tintKey];
-                return (
-                  <PressableScale
-                    key={opt.id}
-                    scaleTo={0.985}
-                    onPress={() => handlePick(opt.id)}
-                    contentStyle={styles.optionRow}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Add ${opt.label.toLowerCase()}`}
-                  >
-                    <View style={[styles.optionIcon, { backgroundColor: tint + '18' }]}>
-                      <AppIcon name={opt.icon} size={22} color={tint} strokeWidth={2.2} />
-                    </View>
-                    <View style={styles.optionBody}>
-                      <Text style={styles.optionLabel}>{opt.label}</Text>
-                      <Text style={styles.optionDesc}>{opt.description}</Text>
-                    </View>
-                    <AppIcon name="chevron-right" size={18} color={colors.text.muted} strokeWidth={2} />
-                  </PressableScale>
-                );
-              })}
-            </View>
-
-            <AppButton
-              label="Cancel"
-              variant="ghost"
-              onPress={onClose}
-              style={styles.cancelBtn}
-            />
-          </SafeAreaView>
-        </Animated.View>
+            accessibilityState={{ expanded: true }}
+          >
+            <Animated.View style={{ transform: [{ rotate: closeRotation }] }}>
+              <AppIcon name="plus" size={23} color="#fff" strokeWidth={2.5} />
+            </Animated.View>
+          </Pressable>
+        </View>
       </View>
     </Modal>
   );
 }
 
 const makeStyles = (c) => ({
-  root: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdropFill: {
+  root: { flex: 1 },
+  backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.52)',
+    backgroundColor: '#000',
   },
-  sheet: {
-    backgroundColor: c.bg.surface,
-    borderTopLeftRadius: radii['2xl'],
-    borderTopRightRadius: radii['2xl'],
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    ...elevation.floating,
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: c.border.strong,
-    alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: 16,
-    opacity: 0.7,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: c.text.primary,
-    letterSpacing: -0.3,
-  },
-  subtitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: c.text.secondary,
-    marginTop: 4,
-    marginBottom: spacing.lg,
-  },
-  options: {
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  optionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: radii.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-  },
-  optionIcon: {
+  anchor: {
+    position: 'absolute',
+    right: 8,
     width: 44,
     height: 44,
-    borderRadius: radii.lg,
+  },
+  actionPosition: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+  },
+  action: {
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  label: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.md,
+    overflow: 'hidden',
+    backgroundColor: c.bg.surface,
+    color: c.text.primary,
+    fontSize: 12,
+    fontWeight: '800',
+    ...elevation.card,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    ...elevation.floating,
   },
-  optionBody: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
+  closeButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accent.primary,
+    ...elevation.floating,
   },
-  optionLabel: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: c.text.primary,
-  },
-  optionDesc: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: c.text.secondary,
-  },
-  cancelBtn: {
-    marginTop: spacing.xs,
-  },
+  pressed: { opacity: 0.72 },
 });

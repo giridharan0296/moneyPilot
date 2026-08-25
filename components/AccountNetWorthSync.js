@@ -38,6 +38,7 @@ export default function AccountNetWorthSync() {
       expenses,
       investments,
       transfers,
+      asOf: new Date().toISOString(),
     });
 
     const linkedByAccount = new Map();

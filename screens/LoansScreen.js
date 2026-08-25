@@ -39,6 +39,7 @@ import { useToast } from '../contexts/ToastContext';
 import AppButton from '../components/AppButton';
 import AppIcon from '../components/AppIcon';
 import PressableScale from '../components/PressableScale';
+import { EmptyState as VisualEmptyState, MetricTile, StatusBadge } from '../components/UiPrimitives';
 import {
   computePayoffPercent,
   computePayoffProjection,
@@ -128,25 +129,24 @@ export default function LoansScreen({ navigation }) {
             <Text style={styles.heroTitle}>Loans</Text>
           </View>
           <View style={styles.heroRow}>
-            <View style={[styles.heroPill, { borderColor: '#dc2626' }]}>
-              <Text style={styles.heroPillLabel}>You owe</Text>
-              <Text style={[styles.heroPillValue, { color: '#7f1d1d' }]}>
-                {formatMoney(summary.owedByMe)}
-              </Text>
-            </View>
-            <View style={[styles.heroPill, { borderColor: '#059669' }]}>
-              <Text style={styles.heroPillLabel}>Owed to you</Text>
-              <Text style={[styles.heroPillValue, { color: '#065f46' }]}>
-                {formatMoney(summary.owedToMe)}
-              </Text>
-            </View>
+            <MetricTile label="You owe" value={formatMoney(summary.owedByMe)} icon="upload" tint="#dc2626" />
+            <MetricTile label="Owed to you" value={formatMoney(summary.owedToMe)} icon="download" tint="#059669" />
           </View>
           <Text style={styles.heroFootnote}>
             {summary.active} active · {summary.closed} closed. Each loan mirrors into Net Worth automatically.
           </Text>
         </View>
 
-        {loans.length === 0 && <EmptyState />}
+        {loans.length === 0 && (
+          <VisualEmptyState
+            icon="landmark"
+            title="No loans tracked yet"
+            body="Track a loan to calculate EMIs, split principal and interest, and keep Net Worth current."
+            actionLabel="Add first loan"
+            onAction={() => navigation.navigate('LoanDetail', { mode: 'new' })}
+            tint="#dc2626"
+          />
+        )}
 
         {GROUPS.map((group) => {
           const items = grouped[group.direction] ?? [];
@@ -221,7 +221,7 @@ function LoanRow({ loan, onPress, onDelete }) {
         <View style={styles.rowTopLine}>
           <Text style={styles.rowName} numberOfLines={1}>{loan.name}</Text>
           {loan.status === 'closed' && (
-            <Text style={styles.rowClosedTag}>CLOSED</Text>
+            <StatusBadge status="closed" />
           )}
         </View>
         <Text style={styles.rowSubtitle} numberOfLines={1}>
@@ -263,26 +263,9 @@ function LoanRow({ loan, onPress, onDelete }) {
   );
 }
 
-function EmptyState() {
-  const styles = useThemedStyles(makeStyles);
-  const themeColors = useThemeColors();
-  return (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyIconWrap}>
-        <AppIcon name="landmark" size={44} color={themeColors.text.muted} strokeWidth={1.7} />
-      </View>
-      <Text style={styles.emptyTitle}>No loans tracked yet.</Text>
-      <Text style={styles.emptySub}>
-        Add a home / car / personal loan and log EMIs as they get paid.
-        Prepayments and closures are supported too. Tap + in the header to start.
-      </Text>
-    </View>
-  );
-}
-
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: spacing.xl, paddingBottom: 40 },
+  container: { padding: spacing.lg, paddingBottom: 40 },
 
   hero: {
     backgroundColor: c.bg.surface,
@@ -298,16 +281,6 @@ const makeStyles = (c) => ({
   },
   heroTitle: { fontSize: 20, fontWeight: '700', color: c.text.primary },
   heroRow: { flexDirection: 'row', gap: 10, marginBottom: spacing.sm },
-  heroPill: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    alignItems: 'center',
-  },
-  heroPillLabel: { fontSize: 11, color: c.text.muted, fontWeight: '700', letterSpacing: 0.5 },
-  heroPillValue: { fontSize: 20, fontWeight: '700', marginTop: 4 },
   heroFootnote: { fontSize: 12, color: c.text.secondary, textAlign: 'center', marginTop: spacing.sm },
 
   group: { marginBottom: spacing.xl },
@@ -381,16 +354,4 @@ const makeStyles = (c) => ({
     lineHeight: 16,
   },
 
-  emptyState: {
-    backgroundColor: c.bg.surface,
-    borderRadius: radii.xl,
-    padding: spacing['2xl'],
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    marginBottom: spacing.xl,
-  },
-  emptyIconWrap: { marginBottom: spacing.sm, opacity: 0.85 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: c.text.primary, marginTop: spacing.md },
-  emptySub: { fontSize: 13, color: c.text.secondary, textAlign: 'center', marginTop: 4 },
 });

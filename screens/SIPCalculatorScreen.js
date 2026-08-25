@@ -26,13 +26,19 @@ import {
 } from 'react-native';
 
 import CalculatorField from '../components/CalculatorField';
+import CalculatorScenarioManager from '../components/CalculatorScenarioManager';
+import { STORAGE_KEYS } from '../constants';
 import { useThemedStyles } from '../contexts/ThemeContext';
-import { fvMonthlyAnnuity } from '../lib/fire';
+import { fvLumpSum, fvMonthlyAnnuityWithStepUp } from '../lib/fire';
 
-function computeSIP(monthlyStr, returnStr, yearsStr) {
+function computeSIP(monthlyStr, returnStr, yearsStr, stepUpStr, lumpSumStr, inflationStr, goalStr) {
   const P = parseFloat(monthlyStr);
   const annualReturn = parseFloat(returnStr);
   const years = parseFloat(yearsStr);
+  const stepUp = parseFloat(stepUpStr) || 0;
+  const lumpSum = parseFloat(lumpSumStr) || 0;
+  const inflation = parseFloat(inflationStr) || 0;
+  const goal = parseFloat(goalStr) || 0;
 
   if (!isFinite(P) || P <= 0) return { ok: false };
   if (!isFinite(annualReturn) || annualReturn < 0) return { ok: false };
@@ -40,16 +46,26 @@ function computeSIP(monthlyStr, returnStr, yearsStr) {
 
   const n = Math.round(years * 12);
 
-  const futureValue = fvMonthlyAnnuity(P, annualReturn, years);
-
-  const invested = P * n;
+  if (stepUp < 0 || inflation < 0 || lumpSum < 0 || goal < 0) return { ok: false };
+  const lumpSumFuture = fvLumpSum(lumpSum, annualReturn, years);
+  const futureValue = fvMonthlyAnnuityWithStepUp(P, annualReturn, years, stepUp) + lumpSumFuture;
+  let invested = lumpSum;
+  for (let month = 0; month < n; month++) {
+    invested += P * Math.pow(1 + stepUp / 100, Math.floor(month / 12));
+  }
   const returns = futureValue - invested;
+  const todayValue = futureValue / Math.pow(1 + inflation / 100, years);
+  const unitSipFuture = fvMonthlyAnnuityWithStepUp(1, annualReturn, years, stepUp);
+  const requiredMonthly = goal > 0 ? Math.max(0, (goal - lumpSumFuture) / unitSipFuture) : null;
 
   return {
     ok: true,
     invested,
     returns,
     futureValue,
+    todayValue,
+    requiredMonthly,
+    goalShortfall: goal > 0 ? Math.max(0, goal - futureValue) : null,
     months: n,
   };
 }
@@ -64,15 +80,29 @@ export default function SIPCalculatorScreen() {
   const [monthly,  setMonthly]  = useState('10000');
   const [expected, setExpected] = useState('12');
   const [years,    setYears]    = useState('10');
+  const [stepUp, setStepUp] = useState('10');
+  const [lumpSum, setLumpSum] = useState('0');
+  const [inflation, setInflation] = useState('6');
+  const [goal, setGoal] = useState('');
 
   const result = useMemo(
-    () => computeSIP(monthly, expected, years),
-    [monthly, expected, years],
+    () => computeSIP(monthly, expected, years, stepUp, lumpSum, inflation, goal),
+    [monthly, expected, years, stepUp, lumpSum, inflation, goal],
   );
 
   const investedPct = result.ok
     ? (result.invested / result.futureValue) * 100
     : 50;
+
+  const loadScenario = (saved) => {
+    setMonthly(saved.monthly ?? '');
+    setExpected(saved.expected ?? '');
+    setYears(saved.years ?? '');
+    setStepUp(saved.stepUp ?? '0');
+    setLumpSum(saved.lumpSum ?? '0');
+    setInflation(saved.inflation ?? '0');
+    setGoal(saved.goal ?? '');
+  };
 
   return (
     <KeyboardAvoidingView
@@ -85,6 +115,13 @@ export default function SIPCalculatorScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <CalculatorField
+          label="Existing lump sum"
+          value={lumpSum}
+          onChangeText={setLumpSum}
+          prefix="₹"
+          placeholder="0"
+        />
+        <CalculatorField
           label="Monthly Investment"
           value={monthly}
           onChangeText={setMonthly}
@@ -92,11 +129,32 @@ export default function SIPCalculatorScreen() {
           placeholder="10000"
         />
         <CalculatorField
+          label="Annual SIP step-up"
+          value={stepUp}
+          onChangeText={setStepUp}
+          suffix="%"
+          placeholder="10"
+        />
+        <CalculatorField
           label="Expected Return (per year)"
           value={expected}
           onChangeText={setExpected}
           suffix="%"
           placeholder="12"
+        />
+        <CalculatorField
+          label="Expected inflation"
+          value={inflation}
+          onChangeText={setInflation}
+          suffix="%"
+          placeholder="6"
+        />
+        <CalculatorField
+          label="Target corpus (optional)"
+          value={goal}
+          onChangeText={setGoal}
+          prefix="₹"
+          placeholder="5000000"
         />
         <CalculatorField
           label="Duration"
@@ -136,6 +194,27 @@ export default function SIPCalculatorScreen() {
           />
           <View style={styles.divider} />
           <DetailRow
+            label="Value in today's money"
+            value={result.ok ? formatMoney(result.todayValue) : '—'}
+          />
+          {result.ok && result.requiredMonthly != null ? (
+            <>
+              <View style={styles.divider} />
+              <DetailRow
+                label="Monthly SIP needed for target"
+                value={formatMoney(result.requiredMonthly)}
+                color="#f59e0b"
+              />
+              <View style={styles.divider} />
+              <DetailRow
+                label="Target status"
+                value={result.goalShortfall > 0 ? `${formatMoney(result.goalShortfall)} short` : 'On track'}
+                color={result.goalShortfall > 0 ? '#ef4444' : '#10b981'}
+              />
+            </>
+          ) : null}
+          <View style={styles.divider} />
+          <DetailRow
             label="Future Value"
             value={result.ok ? formatMoney(result.futureValue) : '—'}
             emphasize
@@ -165,6 +244,21 @@ export default function SIPCalculatorScreen() {
             </View>
           </>
         )}
+        <Text style={styles.disclaimer}>
+          Projections assume a constant return and annual step-up. Today's value adjusts for inflation; taxes and market volatility are not included.
+        </Text>
+        {result.ok ? (
+          <CalculatorScenarioManager
+            storageKey={STORAGE_KEYS.sip_scenarios}
+            inputs={{ monthly, expected, years, stepUp, lumpSum, inflation, goal }}
+            metrics={[
+              { label: 'Monthly SIP', value: formatMoney(Number(monthly)) },
+              { label: 'Future value', value: formatMoney(result.futureValue) },
+              { label: "Today's value", value: formatMoney(result.todayValue) },
+            ]}
+            onLoad={loadScenario}
+          />
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -252,4 +346,5 @@ const makeStyles = (c) => ({
   },
   legendItem: { flexDirection: 'row', alignItems: 'center' },
   legendText: { fontSize: 12, color: c.text.secondary, fontWeight: '500' },
+  disclaimer: { marginTop: 18, fontSize: 11, lineHeight: 16, color: c.text.muted, textAlign: 'center' },
 });

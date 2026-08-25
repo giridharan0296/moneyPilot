@@ -30,7 +30,9 @@ export const STORAGE_KEYS = {
   last_backup_at:                 '@financeApp/backup/lastAt/v1',
   setup_checklist_dismissed:      '@financeApp/onboarding/setupDismissed/v1',
   setup_currency_confirmed:       '@financeApp/onboarding/currencyConfirmed/v1',
+  guided_onboarding_step:         '@financeApp/onboarding/guidedStep/v1',
   ui_collapsible_sections:        '@financeApp/ui/collapsibleSections/v1',
+  dashboard_layout:               '@financeApp/ui/dashboardLayout/v1',
 
   // Net worth: what you own (assets) and what you owe (liabilities)
   assets:                         '@financeApp/networth/assets/v1',
@@ -38,6 +40,8 @@ export const STORAGE_KEYS = {
   // Rolling per-day net-worth snapshots — feeds NetWorthChart. Managed
   // via lib/netWorthHistory.js. Capped and dedup'd by day.
   networth_history:               '@financeApp/networth/history/v1',
+  // Portfolio holdings the user removed from the balance sheet (still in Portfolio).
+  portfolio_sync_hidden_symbols:  '@financeApp/networth/portfolioHidden/v1',
 
   // API key for OpenAI Whisper (voice-note transcription). Stored locally.
   // Consider expo-secure-store for production use.
@@ -102,6 +106,11 @@ export const STORAGE_KEYS = {
   // Savings / spending goals (target amount + optional deadline + linked
   // NetWorth items so progress is auto-computed).
   goals:                          '@financeApp/goals/v1',
+
+  // Insurance policies — premium, renewal, optional recurring link.
+  insurance_policies:             '@financeApp/insurance/policies/v1',
+  sip_scenarios:                  '@financeApp/calculators/sipScenarios/v1',
+  swp_scenarios:                  '@financeApp/calculators/swpScenarios/v1',
 
   // Target allocation % per investment category (portfolio balancing).
   allocation_targets:             '@financeApp/investments/allocationTargets/v1',
@@ -262,7 +271,7 @@ export const DEFAULT_LIABILITY_CATEGORIES = [
 export const BROKERS = [
   {
     id: 'zerodha', label: 'Zerodha', emoji: '🟠', color: '#f97316',
-    hint: 'Console → Portfolio → Holdings → Download (CSV or XLSX).',
+    hint: 'Console → Portfolio → Holdings → Download XLSX.',
   },
   {
     id: 'groww', label: 'Groww', emoji: '🟢', color: '#10b981',
@@ -306,7 +315,7 @@ export const BROKERS = [
   },
   {
     id: 'generic', label: 'Other (auto-detect)', emoji: '📄', color: '#6b7280',
-    hint: 'Any CSV with columns for symbol, quantity, average price, and current price.',
+    hint: 'Any CSV or Excel file with symbol, quantity, average price, and current price columns.',
   },
 ];
 
@@ -344,9 +353,8 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
       { id: 'transport_bike',        label: 'Bike / 2-Wheeler', emoji: '🏍️', color: '#0ea5e9' },
       { id: 'transport_fuel',        label: 'Fuel',             emoji: '⛽', color: '#0ea5e9' },
       { id: 'transport_ev',          label: 'EV Charging',      emoji: '🔌', color: '#10b981' },
-      { id: 'transport_public',      label: 'Bus',              emoji: '🚌', color: '#0284c7' },
-      { id: 'transport_metro',       label: 'Metro / Train',    emoji: '🚆', color: '#4f46e5' },
-      { id: 'transport_travel',      label: 'Flight / Travel',  emoji: '✈️', color: '#6366f1' },
+      { id: 'transport_public',      label: 'Local Bus',        emoji: '🚌', color: '#0284c7' },
+      { id: 'transport_metro',       label: 'Metro / Local Train', emoji: '🚆', color: '#4f46e5' },
       { id: 'transport_parking',     label: 'Parking',          emoji: '🅿️', color: '#64748b' },
       { id: 'transport_toll',        label: 'Toll / FASTag',    emoji: '🛣️', color: '#78716c' },
       { id: 'transport_maintenance', label: 'Service / Repair', emoji: '🛠️', color: '#7c2d12' },
@@ -354,34 +362,10 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
     ],
   },
   {
-    id: 'shopping', label: 'Shopping', emoji: '🛍️', color: '#ec4899',
-    subCategories: [
-      { id: 'shopping_clothes',      label: 'Clothes',       emoji: '👕', color: '#ec4899' },
-      { id: 'shopping_footwear',     label: 'Footwear',      emoji: '👟', color: '#be185d' },
-      { id: 'shopping_accessories',  label: 'Accessories',   emoji: '👜', color: '#db2777' },
-      { id: 'shopping_electronics',  label: 'Electronics',   emoji: '💻', color: '#8b5cf6' },
-      { id: 'shopping_household',    label: 'Household',     emoji: '🏠', color: '#f43f5e' },
-      { id: 'shopping_furniture',    label: 'Furniture',     emoji: '🛋️', color: '#a16207' },
-      { id: 'shopping_appliances',   label: 'Appliances',    emoji: '🔌', color: '#6366f1' },
-      { id: 'shopping_beauty',       label: 'Beauty / Care', emoji: '💄', color: '#f472b6' },
-      { id: 'shopping_books',        label: 'Books',         emoji: '📚', color: '#7c3aed' },
-      { id: 'shopping_kids',         label: 'Kids / Toys',   emoji: '🧸', color: '#fb7185' },
-      { id: 'shopping_sports',       label: 'Sports Gear',   emoji: '⚽', color: '#10b981' },
-      { id: 'shopping_jewelry',      label: 'Jewelry',       emoji: '💍', color: '#eab308' },
-      { id: 'shopping_gifts',        label: 'Gifts Given',   emoji: '🎁', color: '#a855f7' },
-    ],
-  },
-  {
     id: 'bills', label: 'Bills', emoji: '🧾', color: '#10b981',
     subCategories: [
       { id: 'bills_rent',           label: 'Rent',              emoji: '🏠', color: '#10b981' },
       { id: 'bills_maintenance',    label: 'Maintenance / Society', emoji: '🧹', color: '#059669' },
-      { id: 'bills_electricity',    label: 'Electricity',       emoji: '💡', color: '#f59e0b' },
-      { id: 'bills_water',          label: 'Water',             emoji: '🚰', color: '#0ea5e9' },
-      { id: 'bills_gas',            label: 'Gas / LPG',         emoji: '🔥', color: '#ea580c' },
-      { id: 'bills_internet',       label: 'Internet',          emoji: '🌐', color: '#0ea5e9' },
-      { id: 'bills_phone',          label: 'Phone / Mobile',    emoji: '📱', color: '#6366f1' },
-      { id: 'bills_dth',            label: 'DTH / Cable',       emoji: '📺', color: '#7c3aed' },
       { id: 'bills_insurance',      label: 'Insurance',         emoji: '🛡️', color: '#0d9488' },
       { id: 'bills_tax',            label: 'Property / Municipal Tax', emoji: '🏛️', color: '#78716c' },
       { id: 'bills_subscription',   label: 'Subscription',      emoji: '🔁', color: '#a855f7' },
@@ -389,6 +373,17 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
       // Auto-selected when a Transfer of kind 'loan_repayment' has a
       // non-zero interest split. See TransfersContext for the linkage.
       { id: 'bills_loan_interest',  label: 'Loan Interest',     emoji: '💳', color: '#dc2626' },
+    ],
+  },
+  {
+    id: 'utilities', label: 'Utilities', emoji: '💡', color: '#eab308',
+    subCategories: [
+      { id: 'utilities_electricity', label: 'Electricity',    emoji: '💡', color: '#f59e0b' },
+      { id: 'utilities_water',       label: 'Water',          emoji: '🚰', color: '#0ea5e9' },
+      { id: 'utilities_gas',         label: 'Gas / LPG',      emoji: '🔥', color: '#ea580c' },
+      { id: 'utilities_internet',    label: 'Internet',       emoji: '🌐', color: '#0284c7' },
+      { id: 'utilities_phone',       label: 'Phone / Mobile', emoji: '📱', color: '#6366f1' },
+      { id: 'utilities_dth',         label: 'DTH / Cable',    emoji: '📺', color: '#7c3aed' },
     ],
   },
   {
@@ -409,17 +404,159 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
     ],
   },
   {
+    id: 'education', label: 'Education', emoji: '🎓', color: '#4f46e5',
+    subCategories: [
+      { id: 'education_school',       label: 'School Fees',          emoji: '🏫', color: '#4f46e5' },
+      { id: 'education_college',      label: 'College Fees',         emoji: '🎓', color: '#4338ca' },
+      { id: 'education_tuition',      label: 'Tuition / Coaching',   emoji: '👩‍🏫', color: '#6366f1' },
+      { id: 'education_courses',      label: 'Online Courses',       emoji: '💻', color: '#0ea5e9' },
+      { id: 'education_books',        label: 'Textbooks / Study Material', emoji: '📚', color: '#7c3aed' },
+      { id: 'education_exam',         label: 'Exam Fees',            emoji: '📝', color: '#f59e0b' },
+      { id: 'education_certification',label: 'Certification',        emoji: '📜', color: '#0d9488' },
+      { id: 'education_stationery',   label: 'Stationery',           emoji: '✏️', color: '#ec4899' },
+      { id: 'education_supplies',     label: 'School Supplies',      emoji: '🎒', color: '#f97316' },
+      { id: 'education_uniform',      label: 'Uniform',              emoji: '👔', color: '#64748b' },
+      { id: 'education_software',     label: 'Educational Software', emoji: '🖥️', color: '#0891b2' },
+      { id: 'education_loan',         label: 'Student Loan Payment', emoji: '🏦', color: '#dc2626' },
+    ],
+  },
+  {
+    id: 'household', label: 'Household', emoji: '🏠', color: '#84cc16',
+    subCategories: [
+      { id: 'household_help',       label: 'Domestic Help',       emoji: '🧹', color: '#65a30d' },
+      { id: 'household_cleaning',   label: 'Cleaning Supplies',   emoji: '🧽', color: '#84cc16' },
+      { id: 'household_toiletries', label: 'Toiletries',          emoji: '🧻', color: '#22c55e' },
+      { id: 'household_laundry',    label: 'Laundry',             emoji: '🧺', color: '#0ea5e9' },
+      { id: 'household_pest',       label: 'Pest Control',        emoji: '🐜', color: '#a16207' },
+      { id: 'household_decor',      label: 'Home Décor',          emoji: '🖼️', color: '#ec4899' },
+      { id: 'household_kitchenware',label: 'Kitchenware',         emoji: '🍳', color: '#f97316' },
+      { id: 'household_furniture',  label: 'Furniture',           emoji: '🛋️', color: '#a16207' },
+      { id: 'household_appliances', label: 'Appliances',          emoji: '🔌', color: '#6366f1' },
+      { id: 'household_repairs',    label: 'Repairs',             emoji: '🔧', color: '#78716c' },
+      { id: 'household_gardening',  label: 'Gardening',           emoji: '🪴', color: '#10b981' },
+      { id: 'household_security',   label: 'Home Security',       emoji: '🔒', color: '#0d9488' },
+      { id: 'household_moving',     label: 'Moving / Relocation', emoji: '📦', color: '#3b82f6' },
+    ],
+  },
+  {
+    id: 'shopping', label: 'Shopping', emoji: '🛍️', color: '#ec4899',
+    subCategories: [
+      { id: 'shopping_clothes',      label: 'Clothing',              emoji: '👕', color: '#ec4899' },
+      { id: 'shopping_footwear',     label: 'Footwear',              emoji: '👟', color: '#be185d' },
+      { id: 'shopping_accessories',  label: 'Fashion Accessories',   emoji: '👜', color: '#db2777' },
+      { id: 'shopping_electronics',  label: 'Consumer Electronics',  emoji: '💻', color: '#8b5cf6' },
+      { id: 'shopping_books',        label: 'Books & Magazines',     emoji: '📚', color: '#7c3aed' },
+      { id: 'shopping_kids',         label: 'Toys',                  emoji: '🧸', color: '#fb7185' },
+      { id: 'shopping_sports',       label: 'Sports Equipment',      emoji: '⚽', color: '#10b981' },
+      { id: 'shopping_jewelry',      label: 'Jewelry & Watches',     emoji: '💍', color: '#eab308' },
+      { id: 'shopping_bags_luggage', label: 'Bags & Wallets',        emoji: '🎒', color: '#c026d3' },
+    ],
+  },
+  {
+    id: 'personal_care', label: 'Personal Care', emoji: '🧴', color: '#f472b6',
+    subCategories: [
+      { id: 'personal_care_haircut',     label: 'Haircut',              emoji: '✂️', color: '#db2777' },
+      { id: 'personal_care_salon',       label: 'Salon',                emoji: '💇', color: '#ec4899' },
+      { id: 'personal_care_grooming',    label: 'Grooming',             emoji: '🪒', color: '#8b5cf6' },
+      { id: 'personal_care_skincare',    label: 'Skincare',             emoji: '🧴', color: '#f472b6' },
+      { id: 'personal_care_cosmetics',   label: 'Cosmetics',            emoji: '💄', color: '#e11d48' },
+      { id: 'personal_care_spa',         label: 'Spa',                  emoji: '💆', color: '#a855f7' },
+      { id: 'personal_care_hygiene',     label: 'Personal Hygiene',     emoji: '🧼', color: '#0ea5e9' },
+      { id: 'personal_care_alterations', label: 'Clothing Alterations', emoji: '🧵', color: '#7c3aed' },
+    ],
+  },
+  {
     id: 'fun', label: 'Fun', emoji: '🎉', color: '#8b5cf6',
     subCategories: [
-      { id: 'fun_movies',        label: 'Movies',        emoji: '🎬', color: '#8b5cf6' },
-      { id: 'fun_subscriptions', label: 'Streaming',     emoji: '📺', color: '#a855f7' },
-      { id: 'fun_games',         label: 'Games',         emoji: '🎮', color: '#6366f1' },
-      { id: 'fun_concerts',      label: 'Concerts / Events', emoji: '🎤', color: '#ec4899' },
-      { id: 'fun_sports',        label: 'Sports',        emoji: '⚽', color: '#10b981' },
-      { id: 'fun_hobbies',       label: 'Hobbies',       emoji: '🎨', color: '#f97316' },
-      { id: 'fun_books',         label: 'Books',         emoji: '📖', color: '#7c3aed' },
-      { id: 'fun_party',         label: 'Party',         emoji: '🥳', color: '#f43f5e' },
-      { id: 'fun_travel',        label: 'Weekend Trip',  emoji: '🏖️', color: '#0ea5e9' },
+      { id: 'fun_movies',        label: 'Cinema',                emoji: '🎬', color: '#8b5cf6' },
+      { id: 'fun_subscriptions', label: 'Streaming Entertainment',emoji: '📺', color: '#a855f7' },
+      { id: 'fun_games',         label: 'Gaming',                emoji: '🎮', color: '#6366f1' },
+      { id: 'fun_concerts',      label: 'Concerts & Live Events',emoji: '🎤', color: '#ec4899' },
+      { id: 'fun_sports',        label: 'Recreational Sports',   emoji: '⚽', color: '#10b981' },
+      { id: 'fun_hobbies',       label: 'Creative Hobbies',      emoji: '🎨', color: '#f97316' },
+      { id: 'fun_party',         label: 'Nightlife & Parties',   emoji: '🥳', color: '#f43f5e' },
+      { id: 'fun_amusement',     label: 'Amusement Parks',       emoji: '🎢', color: '#0ea5e9' },
+      { id: 'fun_museums',       label: 'Museums & Attractions', emoji: '🏛️', color: '#14b8a6' },
+    ],
+  },
+  {
+    id: 'travel', label: 'Travel', emoji: '✈️', color: '#06b6d4',
+    subCategories: [
+      { id: 'travel_flights',          label: 'Flights',              emoji: '✈️', color: '#6366f1' },
+      { id: 'travel_trains',           label: 'Intercity Train',      emoji: '🚆', color: '#4f46e5' },
+      { id: 'travel_bus',              label: 'Intercity Bus',        emoji: '🚌', color: '#0284c7' },
+      { id: 'travel_hotel',            label: 'Hotel / Accommodation',emoji: '🏨', color: '#0891b2' },
+      { id: 'travel_visa',             label: 'Visa',                 emoji: '🛂', color: '#64748b' },
+      { id: 'travel_insurance',        label: 'Travel Insurance',     emoji: '🛡️', color: '#0d9488' },
+      { id: 'travel_local_transport',  label: 'Local Transport',      emoji: '🚕', color: '#3b82f6' },
+      { id: 'travel_food',             label: 'Food during Travel',   emoji: '🍽️', color: '#f97316' },
+      { id: 'travel_sightseeing',      label: 'Sightseeing',          emoji: '📸', color: '#ec4899' },
+      { id: 'travel_tour_package',     label: 'Tour Package',         emoji: '🧳', color: '#06b6d4' },
+      { id: 'travel_forex',            label: 'Foreign Exchange',     emoji: '💱', color: '#14b8a6' },
+      { id: 'travel_luggage',          label: 'Luggage',              emoji: '🧳', color: '#a16207' },
+      { id: 'travel_roaming',          label: 'Roaming / Travel SIM', emoji: '📱', color: '#7c3aed' },
+    ],
+  },
+  {
+    id: 'gifts', label: 'Gifts', emoji: '🎁', color: '#a855f7',
+    subCategories: [
+      { id: 'gifts_birthday',         label: 'Birthday',           emoji: '🎂', color: '#f43f5e' },
+      { id: 'gifts_wedding',          label: 'Wedding Gift',       emoji: '💒', color: '#ec4899' },
+      { id: 'gifts_anniversary',      label: 'Anniversary',        emoji: '💞', color: '#e11d48' },
+      { id: 'gifts_festival',         label: 'Festival',           emoji: '🎊', color: '#f59e0b' },
+      { id: 'gifts_housewarming',     label: 'Housewarming',       emoji: '🏠', color: '#0ea5e9' },
+      { id: 'gifts_baby',             label: 'Baby / Newborn',     emoji: '👶', color: '#fb7185' },
+      { id: 'gifts_thank_you',        label: 'Thank-you / Host',   emoji: '🙏', color: '#14b8a6' },
+      { id: 'gifts_just_because',     label: 'Just Because',       emoji: '💝', color: '#f472b6' },
+      { id: 'gifts_other',            label: 'Other Gift',         emoji: '🎁', color: '#8b5cf6' },
+    ],
+  },
+  {
+    id: 'family_support', label: 'Family Support', emoji: '👨‍👩‍👧', color: '#ec4899',
+    subCategories: [
+      { id: 'family_support_father',  label: 'Father',       emoji: '👨', color: '#6366f1' },
+      { id: 'family_support_mother',  label: 'Mother',       emoji: '👩', color: '#f472b6' },
+      { id: 'family_support_parents', label: 'Both Parents', emoji: '👴', color: '#ec4899' },
+      { id: 'family_support_sibling', label: 'Sibling',      emoji: '👫', color: '#8b5cf6' },
+      { id: 'family_support_other',   label: 'Other Family', emoji: '🏠', color: '#a855f7' },
+    ],
+  },
+  {
+    id: 'events', label: 'Events & Functions', emoji: '💒', color: '#e11d48',
+    // Sub-categories = spend department (venue, catering, …). Tag the
+    // function — e.g. wedding-2026, reception, sangeet, housewarming,
+    // bride-viewing (porutham / first visit).
+    subCategories: [
+      { id: 'events_venue',         label: 'Venue / Hall',           emoji: '🏛️', color: '#6366f1' },
+      { id: 'events_catering',      label: 'Catering & Food',        emoji: '🍽️', color: '#f97316' },
+      { id: 'events_sweets_snacks', label: 'Sweets & Snacks',        emoji: '🍬', color: '#ec4899' },
+      { id: 'events_decor',         label: 'Decor & Flowers',        emoji: '💐', color: '#ec4899' },
+      { id: 'events_photography',   label: 'Photography / Video',    emoji: '📸', color: '#8b5cf6' },
+      { id: 'events_clothing',      label: 'Clothing',               emoji: '👗', color: '#db2777' },
+      { id: 'events_jewellery',     label: 'Jewellery & Ornaments',  emoji: '💍', color: '#c026d3' },
+      { id: 'events_accessories',   label: 'Accessories',            emoji: '👜', color: '#be185d' },
+      { id: 'events_cosmetics',     label: 'Cosmetics & Makeup',     emoji: '💄', color: '#e11d48' },
+      { id: 'events_entertainment', label: 'Music / DJ / Entertainment', emoji: '🎤', color: '#7c3aed' },
+      { id: 'events_invitations',   label: 'Invitations & Printing', emoji: '💌', color: '#14b8a6' },
+      { id: 'events_priest',        label: 'Priest / Rituals',       emoji: '🪔', color: '#f97316' },
+      { id: 'events_gifts_favors',  label: 'Guest Gifts & Favors',   emoji: '🎁', color: '#a855f7' },
+      { id: 'events_planning',      label: 'Planner / Coordinator',  emoji: '📋', color: '#0ea5e9' },
+      { id: 'events_travel',        label: 'Travel',               emoji: '✈️', color: '#06b6d4' },
+      { id: 'events_guest_travel',  label: 'Guest Travel & Stay',    emoji: '🏨', color: '#0891b2' },
+      { id: 'events_other',         label: 'Miscellaneous',          emoji: '🎊', color: '#6b7280' },
+    ],
+  },
+  {
+    id: 'pets', label: 'Pets', emoji: '🐾', color: '#a16207',
+    subCategories: [
+      { id: 'pets_food',       label: 'Pet Food',        emoji: '🦴', color: '#a16207' },
+      { id: 'pets_vet',        label: 'Veterinary Care', emoji: '🩺', color: '#ef4444' },
+      { id: 'pets_grooming',   label: 'Grooming',        emoji: '🛁', color: '#0ea5e9' },
+      { id: 'pets_medicine',   label: 'Medicine',        emoji: '💊', color: '#dc2626' },
+      { id: 'pets_accessories',label: 'Accessories',     emoji: '🦮', color: '#f59e0b' },
+      { id: 'pets_boarding',   label: 'Boarding',        emoji: '🏠', color: '#6366f1' },
+      { id: 'pets_training',   label: 'Training',        emoji: '🎓', color: '#10b981' },
+      { id: 'pets_adoption',   label: 'Adoption',        emoji: '❤️', color: '#e11d48' },
     ],
   },
   {
@@ -431,8 +568,6 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
       { id: 'other_pets',      label: 'Pets',           emoji: '🐾', color: '#a16207' },
       { id: 'other_education', label: 'Education',      emoji: '🎓', color: '#4f46e5' },
       { id: 'other_kids',      label: 'Kids',           emoji: '👶', color: '#fb7185' },
-      { id: 'other_gifts',     label: 'Gifts Given',    emoji: '🎁', color: '#a855f7' },
-      { id: 'other_salon',     label: 'Salon / Grooming', emoji: '💇', color: '#ec4899' },
       { id: 'other_legal',     label: 'Legal',          emoji: '⚖️', color: '#78716c' },
       { id: 'other_tax',       label: 'Tax Payment',    emoji: '🏛️', color: '#dc2626' },
       { id: 'other_misc',      label: 'Miscellaneous',  emoji: '❓', color: '#6b7280' },
@@ -442,7 +577,7 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
 
 export const DEFAULT_INCOME_CATEGORIES = [
   {
-    id: 'salary', label: 'Salary', emoji: '💼', color: '#059669',
+    id: 'salary', label: 'Employment Income', emoji: '💼', color: '#059669',
     subCategories: [
       { id: 'salary_base',          label: 'Base Pay',      emoji: '💵', color: '#059669' },
       { id: 'salary_bonus',         label: 'Bonus',         emoji: '🎁', color: '#10b981' },
@@ -451,10 +586,15 @@ export const DEFAULT_INCOME_CATEGORIES = [
       { id: 'salary_commission',    label: 'Commission',    emoji: '📊', color: '#0ea5e9' },
       { id: 'salary_reimbursement', label: 'Reimbursement', emoji: '💵', color: '#0d9488' },
       { id: 'salary_esop',          label: 'ESOP / RSU',    emoji: '📈', color: '#6366f1' },
+      { id: 'salary_allowances',    label: 'Allowances',    emoji: '🧾', color: '#0d9488' },
+      { id: 'salary_profit_share',  label: 'Profit Sharing',emoji: '🤝', color: '#14b8a6' },
+      { id: 'salary_leave',         label: 'Leave Encashment', emoji: '🏖️', color: '#0ea5e9' },
+      { id: 'salary_gratuity',      label: 'Gratuity',      emoji: '🏆', color: '#eab308' },
+      { id: 'salary_severance',     label: 'Severance',     emoji: '📄', color: '#64748b' },
     ],
   },
   {
-    id: 'freelance', label: 'Freelance', emoji: '💻', color: '#0ea5e9',
+    id: 'freelance', label: 'Business Income', emoji: '💻', color: '#0ea5e9',
     subCategories: [
       { id: 'freelance_client',     label: 'Client Work',    emoji: '🧑‍💻', color: '#0ea5e9' },
       { id: 'freelance_consulting', label: 'Consulting',     emoji: '🗂️', color: '#0284c7' },
@@ -462,19 +602,53 @@ export const DEFAULT_INCOME_CATEGORIES = [
       { id: 'freelance_teaching',   label: 'Teaching / Tuition', emoji: '📚', color: '#f59e0b' },
       { id: 'freelance_royalty',    label: 'Royalty',        emoji: '📜', color: '#0284c7' },
       { id: 'freelance_tips',       label: 'Tips',           emoji: '🪙', color: '#eab308' },
+      { id: 'freelance_sales',      label: 'Sales Revenue',  emoji: '🛒', color: '#10b981' },
+      { id: 'freelance_service',    label: 'Service Revenue',emoji: '🧰', color: '#14b8a6' },
+      { id: 'freelance_partnership',label: 'Partnership Profit Share', emoji: '🤝', color: '#059669' },
+      { id: 'freelance_revenue_share', label: 'Revenue Share', emoji: '📊', color: '#0891b2' },
+      { id: 'freelance_affiliate',  label: 'Affiliate Income', emoji: '🔗', color: '#8b5cf6' },
+      { id: 'freelance_advertising',label: 'Advertising Income', emoji: '📣', color: '#f97316' },
+      { id: 'freelance_reimbursement', label: 'Business Reimbursement', emoji: '🧾', color: '#0d9488' },
     ],
   },
   {
-    id: 'investments', label: 'Investments', emoji: '📈', color: '#14b8a6',
+    id: 'investments', label: 'Investment Income', emoji: '📈', color: '#14b8a6',
     subCategories: [
       { id: 'income_dividend', label: 'Dividend',       emoji: '💰', color: '#14b8a6' },
-      { id: 'income_interest', label: 'Interest',       emoji: '🏦', color: '#0d9488' },
+      { id: 'income_interest', label: 'Savings Interest', emoji: '🏦', color: '#0d9488' },
       { id: 'income_capgain',  label: 'Capital Gain',   emoji: '📈', color: '#0891b2' },
-      { id: 'income_rental',   label: 'Rental Income',  emoji: '🏠', color: '#059669' },
       { id: 'income_coupon',   label: 'Bond Coupon',    emoji: '📃', color: '#6366f1' },
-      { id: 'income_maturity', label: 'FD / RD Maturity', emoji: '🏦', color: '#0369a1' },
       { id: 'income_swp',      label: 'SWP Payout', emoji: '🔄', color: '#059669' },
       { id: 'income_mis',      label: 'MIS Interest Payout', emoji: '💵', color: '#0d9488' },
+      { id: 'income_mf_dividend', label: 'Mutual Fund Dividend', emoji: '💰', color: '#10b981' },
+      { id: 'income_fd_interest', label: 'FD / RD Interest', emoji: '🏦', color: '#0369a1' },
+      { id: 'income_ppf_interest', label: 'PPF Interest', emoji: '🏛️', color: '#7c3aed' },
+      { id: 'income_epf_interest', label: 'EPF Interest', emoji: '🏢', color: '#4338ca' },
+      { id: 'income_reit', label: 'REIT Distribution', emoji: '🏙️', color: '#0891b2' },
+      { id: 'income_invit', label: 'InvIT Distribution', emoji: '🛣️', color: '#0284c7' },
+      { id: 'income_crypto_yield', label: 'Crypto Yield / Staking', emoji: '🪙', color: '#a855f7' },
+    ],
+  },
+  {
+    id: 'rental', label: 'Rental Income', emoji: '🏠', color: '#84cc16',
+    subCategories: [
+      { id: 'rental_residential', label: 'Residential Rent', emoji: '🏠', color: '#84cc16' },
+      { id: 'rental_commercial', label: 'Commercial Rent', emoji: '🏢', color: '#65a30d' },
+      { id: 'rental_land', label: 'Land Lease', emoji: '🌳', color: '#10b981' },
+      { id: 'rental_equipment', label: 'Equipment Rental', emoji: '🧰', color: '#f59e0b' },
+      { id: 'rental_vehicle', label: 'Vehicle Rental', emoji: '🚗', color: '#3b82f6' },
+      { id: 'rental_maintenance', label: 'Maintenance Recovered', emoji: '🧾', color: '#0d9488' },
+    ],
+  },
+  {
+    id: 'pension_benefits', label: 'Pension & Benefits', emoji: '🧓', color: '#7c3aed',
+    subCategories: [
+      { id: 'benefits_pension', label: 'Pension', emoji: '🏦', color: '#7c3aed' },
+      { id: 'benefits_annuity', label: 'Annuity', emoji: '🔁', color: '#8b5cf6' },
+      { id: 'benefits_government', label: 'Government Benefit', emoji: '🏛️', color: '#6366f1' },
+      { id: 'benefits_disability', label: 'Disability Benefit', emoji: '🤝', color: '#0ea5e9' },
+      { id: 'benefits_scholarship', label: 'Scholarship / Stipend', emoji: '🎓', color: '#10b981' },
+      { id: 'benefits_family', label: 'Family Support', emoji: '👨‍👩‍👧', color: '#ec4899' },
     ],
   },
   {
@@ -500,31 +674,18 @@ export const DEFAULT_INCOME_CATEGORIES = [
   {
     id: 'other', label: 'Other', emoji: '💰', color: '#6b7280',
     subCategories: [
-      { id: 'other_reimbursement', label: 'Reimbursement',  emoji: '💵', color: '#10b981' },
+      { id: 'other_reimbursement', label: 'General Reimbursement', emoji: '💵', color: '#10b981' },
       { id: 'other_cashback',      label: 'Cashback',       emoji: '💳', color: '#0ea5e9' },
       { id: 'other_rewards',       label: 'Rewards Points', emoji: '🎯', color: '#a855f7' },
       { id: 'other_sale',          label: 'Sale of Item',   emoji: '🏷️', color: '#6b7280' },
       { id: 'other_prize',         label: 'Prize / Lottery',emoji: '🏆', color: '#eab308' },
-      { id: 'other_loan_received', label: 'Loan Received',  emoji: '🤝', color: '#f59e0b' },
-      { id: 'other_rent_received', label: 'Rent Received',  emoji: '🏠', color: '#059669' },
       { id: 'other_pocket',        label: 'Pocket Money',   emoji: '🪙', color: '#78716c' },
+      { id: 'other_compensation',  label: 'Compensation / Settlement', emoji: '⚖️', color: '#64748b' },
     ],
   },
 ];
 
 export const DEFAULT_INVESTMENT_CATEGORIES = [
-  {
-    id: 'stocks', label: 'Stocks', emoji: '📊', color: '#6366f1',
-    subCategories: [
-      { id: 'stocks_indian',    label: 'Indian',       emoji: '🇮🇳', color: '#6366f1' },
-      { id: 'stocks_us',        label: 'US',           emoji: '🇺🇸', color: '#4f46e5' },
-      { id: 'stocks_dividend',  label: 'Dividend',     emoji: '💰', color: '#4338ca' },
-      { id: 'stocks_ipo',       label: 'IPO',          emoji: '🎯', color: '#0ea5e9' },
-      { id: 'stocks_fno',       label: 'F&O',          emoji: '⚡', color: '#dc2626' },
-      { id: 'stocks_esop',      label: 'ESOP / RSU',   emoji: '🏢', color: '#8b5cf6' },
-      { id: 'stocks_intl',      label: 'International',emoji: '🌐', color: '#0284c7' },
-    ],
-  },
   {
     id: 'mutual_funds', label: 'Mutual Funds', emoji: '📈', color: '#8b5cf6',
     subCategories: [
@@ -535,7 +696,110 @@ export const DEFAULT_INVESTMENT_CATEGORIES = [
       { id: 'mf_elss',          label: 'ELSS (Tax-saver)',  emoji: '🧾', color: '#059669' },
       { id: 'mf_liquid',        label: 'Liquid',            emoji: '💧', color: '#0ea5e9' },
       { id: 'mf_international', label: 'International',     emoji: '🌐', color: '#0284c7' },
-      { id: 'mf_sip',           label: 'SIP',               emoji: '🔁', color: '#f59e0b' },
+      { id: 'mf_large_cap',     label: 'Large Cap',         emoji: '🏢', color: '#6366f1' },
+      { id: 'mf_mid_cap',       label: 'Mid Cap',           emoji: '📈', color: '#8b5cf6' },
+      { id: 'mf_small_cap',     label: 'Small Cap',         emoji: '🌱', color: '#a855f7' },
+      { id: 'mf_flexi_cap',     label: 'Flexi Cap',         emoji: '🔄', color: '#7c3aed' },
+      { id: 'mf_sectoral',      label: 'Sectoral / Thematic', emoji: '🎯', color: '#ec4899' },
+      { id: 'mf_arbitrage',     label: 'Arbitrage',         emoji: '⚖️', color: '#14b8a6' },
+      { id: 'mf_fof',           label: 'Fund of Funds',     emoji: '🧺', color: '#0891b2' },
+    ],
+  },
+  {
+    id: 'stocks', label: 'Stocks', emoji: '📊', color: '#6366f1',
+    subCategories: [
+      { id: 'stocks_indian',    label: 'Domestic Stocks', emoji: '🇮🇳', color: '#6366f1' },
+      { id: 'stocks_esop',      label: 'ESOP / RSU',   emoji: '🏢', color: '#8b5cf6' },
+      { id: 'stocks_intl',      label: 'International Stocks',emoji: '🌐', color: '#0284c7' },
+      { id: 'stocks_unlisted',  label: 'Unlisted Shares', emoji: '📜', color: '#7c3aed' },
+      { id: 'stocks_basket',    label: 'Stock Basket / Smallcase', emoji: '🧺', color: '#0ea5e9' },
+    ],
+  },
+  {
+    id: 'etfs', label: 'ETFs', emoji: '📊', color: '#0891b2',
+    subCategories: [
+      { id: 'etf_equity', label: 'Equity ETF', emoji: '📈', color: '#6366f1' },
+      { id: 'etf_index', label: 'Index ETF', emoji: '🎯', color: '#4f46e5' },
+      { id: 'etf_gold', label: 'Gold ETF', emoji: '🥇', color: '#eab308' },
+      { id: 'etf_silver', label: 'Silver ETF', emoji: '🥈', color: '#94a3b8' },
+      { id: 'etf_debt', label: 'Debt ETF', emoji: '📃', color: '#7c3aed' },
+      { id: 'etf_international', label: 'International ETF', emoji: '🌐', color: '#0284c7' },
+      { id: 'etf_sector', label: 'Sector ETF', emoji: '🏭', color: '#ec4899' },
+    ],
+  },
+  {
+    id: 'gold', label: 'Precious Metals', emoji: '🥇', color: '#f59e0b',
+    subCategories: [
+      { id: 'gold_physical',   label: 'Physical',      emoji: '🥇', color: '#f59e0b' },
+      { id: 'gold_chit',       label: 'Gold Chit',     emoji: '🪙', color: '#d97706' },
+      { id: 'gold_digital',    label: 'Digital Gold',  emoji: '📱', color: '#d97706' },
+      { id: 'gold_silver',     label: 'Physical Silver', emoji: '🥈', color: '#94a3b8' },
+      { id: 'gold_silver_digital', label: 'Digital Silver', emoji: '📱', color: '#94a3b8' },
+    ],
+  },
+  {
+    id: 'fd', label: 'Bank Deposits', emoji: '🏦', color: '#0ea5e9',
+    subCategories: [
+      { id: 'fd_bank',      label: 'Bank FD',           emoji: '🏦', color: '#0ea5e9' },
+      { id: 'fd_corporate', label: 'Corporate FD',      emoji: '🏢', color: '#0284c7' },
+      { id: 'fd_recurring', label: 'Recurring Deposit', emoji: '🔄', color: '#0369a1' },
+      { id: 'fd_tax_saver', label: 'Tax-saver FD',      emoji: '🧾', color: '#0d9488' },
+      { id: 'fd_sweep',     label: 'Sweep Deposit',     emoji: '🔄', color: '#14b8a6' },
+    ],
+  },
+  {
+    id: 'government_savings', label: 'Government Savings', emoji: '🏛️', color: '#7c3aed',
+    subCategories: [
+      { id: 'gov_ppf', label: 'PPF', emoji: '🏛️', color: '#7c3aed' },
+      { id: 'gov_ssy', label: 'Sukanya Samriddhi', emoji: '👧', color: '#ec4899' },
+      { id: 'gov_nsc', label: 'NSC', emoji: '📜', color: '#a16207' },
+      { id: 'gov_kvp', label: 'KVP', emoji: '📄', color: '#d97706' },
+      { id: 'gov_scss', label: 'Senior Citizens Savings Scheme', emoji: '🧓', color: '#0d9488' },
+      { id: 'gov_mis', label: 'Post Office MIS', emoji: '🏤', color: '#0891b2' },
+    ],
+  },
+  {
+    id: 'retirement', label: 'Retirement', emoji: '🌅', color: '#8b5cf6',
+    subCategories: [
+      { id: 'retirement_nps1', label: 'NPS Tier I', emoji: '🏛️', color: '#8b5cf6' },
+      { id: 'retirement_nps2', label: 'NPS Tier II', emoji: '🏛️', color: '#a855f7' },
+      { id: 'retirement_vpf', label: 'VPF', emoji: '🏢', color: '#6366f1' },
+      { id: 'retirement_superannuation', label: 'Superannuation', emoji: '🧓', color: '#7c3aed' },
+      { id: 'retirement_annuity', label: 'Pension / Annuity', emoji: '🔁', color: '#0d9488' },
+    ],
+  },
+  {
+    id: 'bonds', label: 'Bonds & Fixed Income', emoji: '📃', color: '#64748b',
+    subCategories: [
+      { id: 'bonds_government', label: 'Government Bond', emoji: '🏛️', color: '#6366f1' },
+      { id: 'bonds_tbill', label: 'Treasury Bill', emoji: '📄', color: '#4f46e5' },
+      { id: 'bonds_corporate', label: 'Corporate Bond', emoji: '🏢', color: '#64748b' },
+      { id: 'bonds_sgb', label: 'Sovereign Gold Bond', emoji: '🥇', color: '#eab308' },
+      { id: 'bonds_rbi', label: 'RBI Bond', emoji: '🏦', color: '#0ea5e9' },
+      { id: 'bonds_ncd', label: 'Debenture / NCD', emoji: '🧾', color: '#7c3aed' },
+      { id: 'bonds_tax_free', label: 'Tax-free Bond', emoji: '🛡️', color: '#10b981' },
+    ],
+  },
+  {
+    id: 'real_estate', label: 'Real Estate', emoji: '🏠', color: '#14b8a6',
+    subCategories: [
+      { id: 're_residential', label: 'Residential', emoji: '🏠', color: '#14b8a6' },
+      { id: 're_commercial',  label: 'Commercial',  emoji: '🏢', color: '#0d9488' },
+      { id: 're_land',        label: 'Land / Plot', emoji: '🌳', color: '#84cc16' },
+      { id: 're_reit',        label: 'REIT',        emoji: '📈', color: '#0891b2' },
+      { id: 're_agricultural',label: 'Agricultural Land', emoji: '🌾', color: '#65a30d' },
+      { id: 're_construction',label: 'Under-construction Property', emoji: '🏗️', color: '#f59e0b' },
+      { id: 're_invit',       label: 'InvIT', emoji: '🛣️', color: '#0284c7' },
+      { id: 're_fractional',  label: 'Fractional Real Estate', emoji: '🧩', color: '#8b5cf6' },
+    ],
+  },
+  {
+    id: 'insurance_investments', label: 'Insurance Investments', emoji: '🛡️', color: '#0d9488',
+    subCategories: [
+      { id: 'insurance_ulip', label: 'ULIP', emoji: '📈', color: '#0d9488' },
+      { id: 'insurance_endowment', label: 'Endowment Plan', emoji: '📜', color: '#14b8a6' },
+      { id: 'insurance_money_back', label: 'Money-back Plan', emoji: '💵', color: '#10b981' },
+      { id: 'insurance_annuity', label: 'Annuity Plan', emoji: '🔁', color: '#0891b2' },
     ],
   },
   {
@@ -549,48 +813,25 @@ export const DEFAULT_INVESTMENT_CATEGORIES = [
     ],
   },
   {
-    id: 'gold', label: 'Gold', emoji: '🥇', color: '#f59e0b',
+    id: 'derivatives', label: 'Derivatives', emoji: '⚡', color: '#dc2626',
     subCategories: [
-      { id: 'gold_physical',   label: 'Physical',      emoji: '🥇', color: '#f59e0b' },
-      { id: 'gold_chit',       label: 'Gold Chit',     emoji: '🪙', color: '#d97706' },
-      { id: 'gold_etf',        label: 'Gold ETF',      emoji: '📈', color: '#eab308' },
-      { id: 'gold_sgb',        label: 'SGB',           emoji: '🏛️', color: '#ca8a04' },
-      { id: 'gold_digital',    label: 'Digital Gold',  emoji: '📱', color: '#d97706' },
-      { id: 'gold_silver',     label: 'Silver',        emoji: '🥈', color: '#94a3b8' },
+      { id: 'derivatives_futures', label: 'Futures', emoji: '📈', color: '#dc2626' },
+      { id: 'derivatives_options', label: 'Options', emoji: '🎯', color: '#e11d48' },
+      { id: 'derivatives_currency', label: 'Currency Derivatives', emoji: '💱', color: '#f97316' },
+      { id: 'derivatives_commodity', label: 'Commodity Derivatives', emoji: '🛢️', color: '#a16207' },
     ],
   },
   {
-    id: 'fd', label: 'Fixed Deposit', emoji: '🏦', color: '#0ea5e9',
+    id: 'other', label: 'Alternative Investments', emoji: '💼', color: '#6b7280',
     subCategories: [
-      { id: 'fd_bank',      label: 'Bank FD',           emoji: '🏦', color: '#0ea5e9' },
-      { id: 'fd_corporate', label: 'Corporate FD',      emoji: '🏢', color: '#0284c7' },
-      { id: 'fd_recurring', label: 'Recurring Deposit', emoji: '🔄', color: '#0369a1' },
-      { id: 'fd_tax_saver', label: 'Tax-saver FD',      emoji: '🧾', color: '#0d9488' },
-      { id: 'fd_ssy',       label: 'SSY',               emoji: '👧', color: '#ec4899' },
-      { id: 'fd_kvp',       label: 'KVP / NSC',         emoji: '📜', color: '#a16207' },
-    ],
-  },
-  {
-    id: 'real_estate', label: 'Real Estate', emoji: '🏠', color: '#14b8a6',
-    subCategories: [
-      { id: 're_residential', label: 'Residential', emoji: '🏠', color: '#14b8a6' },
-      { id: 're_commercial',  label: 'Commercial',  emoji: '🏢', color: '#0d9488' },
-      { id: 're_land',        label: 'Land / Plot', emoji: '🌳', color: '#84cc16' },
-      { id: 're_reit',        label: 'REIT',        emoji: '📈', color: '#0891b2' },
-    ],
-  },
-  {
-    id: 'other', label: 'Other', emoji: '💼', color: '#6b7280',
-    subCategories: [
-      { id: 'other_bonds',       label: 'Bonds / T-Bill', emoji: '📃', color: '#6366f1' },
-      { id: 'other_ppf_nps',     label: 'PPF',            emoji: '🏛️', color: '#7c3aed' },
-      { id: 'other_nps',         label: 'NPS',            emoji: '🏛️', color: '#a855f7' },
       { id: 'other_epf',         label: 'EPF',            emoji: '🏢', color: '#4338ca' },
-      { id: 'other_insurance',   label: 'ULIP / Endowment', emoji: '🛡️', color: '#0d9488' },
       { id: 'other_startup',     label: 'Startup',        emoji: '🚀', color: '#f97316' },
       { id: 'other_p2p',         label: 'P2P Lending',    emoji: '🤝', color: '#f59e0b' },
       { id: 'other_chit',        label: 'Chit Fund',      emoji: '💼', color: '#dc2626' },
       { id: 'other_collectible', label: 'Collectibles',   emoji: '🎨', color: '#ec4899' },
+      { id: 'other_private_equity', label: 'Private Equity', emoji: '🏢', color: '#6366f1' },
+      { id: 'other_invoice', label: 'Invoice Discounting', emoji: '🧾', color: '#0ea5e9' },
+      { id: 'other_structured', label: 'Structured Product', emoji: '🧩', color: '#8b5cf6' },
     ],
   },
 ];

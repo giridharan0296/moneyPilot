@@ -1,13 +1,14 @@
-import { ActivityIndicator, Image, Platform, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Text, View } from 'react-native';
 
 import AppButton from '../components/AppButton';
 import AppIcon from '../components/AppIcon';
+import { InfoCallout } from '../components/UiPrimitives';
 import { useAuth } from '../contexts/AuthContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { radii, spacing } from '../lib/theme';
 
-export default function SettingsAccountScreen() {
+export default function GoogleAccountSection() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { showToast } = useToast();
@@ -43,13 +44,13 @@ export default function SettingsAccountScreen() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>Account</Text>
-      <Text style={styles.subtitle}>
-        Optional Google sign-in for identity. Your data still lives on this device
-        until cloud sync is added.
-      </Text>
-
+    <View style={styles.section}>
+      <View>
+        <Text style={styles.heading}>Google account</Text>
+        <Text style={styles.subtitle}>
+          Optional identity for future sync. Data stays on this device today.
+        </Text>
+      </View>
       <View style={styles.card}>
         {!ready ? (
           <ActivityIndicator color={themeColors.accent.primary} />
@@ -102,30 +103,20 @@ export default function SettingsAccountScreen() {
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
       </View>
 
-      <View style={styles.noteCard}>
-        <Text style={styles.noteTitle}>What this does today</Text>
-        <Text style={styles.noteBody}>
-          • Remembers who you are across app restarts{'\n'}
-          • Does not upload your transactions yet{'\n'}
-          • Does not replace manual JSON backup
-        </Text>
-      </View>
-    </ScrollView>
+      <InfoCallout
+        icon="info"
+        title="Local today"
+        body="Sign-in remembers your identity. Transactions are not uploaded."
+        compact
+      />
+    </View>
   );
 }
 
 const makeStyles = (c) => ({
-  screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: {
-    padding: spacing.lg,
-    paddingBottom: 48,
-    width: '100%',
-    maxWidth: 760,
-    alignSelf: 'center',
-    gap: spacing.lg,
-  },
-  heading: { color: c.text.primary, fontSize: 28, fontWeight: '800' },
-  subtitle: { color: c.text.secondary, fontSize: 14, lineHeight: 20 },
+  section: { gap: spacing.md, marginBottom: spacing.xl },
+  heading: { color: c.text.primary, fontSize: 17, fontWeight: '800', marginBottom: 4 },
+  subtitle: { color: c.text.secondary, fontSize: 13, lineHeight: 19 },
   card: {
     backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
@@ -156,12 +147,4 @@ const makeStyles = (c) => ({
     marginTop: spacing.sm,
   },
   errorText: { fontSize: 12, color: c.accent.expense, marginTop: spacing.xs },
-  noteCard: {
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    gap: spacing.xs,
-  },
-  noteTitle: { fontSize: 12, fontWeight: '700', color: c.text.secondary, textTransform: 'uppercase' },
-  noteBody: { fontSize: 13, lineHeight: 20, color: c.text.secondary },
 });

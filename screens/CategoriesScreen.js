@@ -30,6 +30,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  KeyboardAvoidingView,
   Modal,
   PanResponder,
   Platform,
@@ -40,11 +41,13 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppIcon from '../components/AppIcon';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { COLOR_PALETTE } from '../constants';
+import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 
 // The three flavours the screen can present. Order here drives the
 // segmented tab order below — Income first because "money in" is the
@@ -99,6 +102,7 @@ const SWIPE_ANGLE_BIAS   = 1.5;
 export default function CategoriesScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const insets = useSafeAreaInsets();
   const {
     categories,
     addCategory,
@@ -214,7 +218,11 @@ export default function CategoriesScreen({ navigation }) {
   );
 
   return (
-    <View style={styles.root}>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 56 : 0}
+    >
       {/* ---- Segmented top-tabs (custom, no native dep) ---- */}
       <View style={styles.segmented}>
         {TYPES.map((t) => {
@@ -264,6 +272,8 @@ export default function CategoriesScreen({ navigation }) {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
         {/* ---- Sub-heading for the active type ---- */}
         <Text style={styles.subtitle}>{copy.subtitle}</Text>
@@ -365,7 +375,7 @@ export default function CategoriesScreen({ navigation }) {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -590,9 +600,12 @@ function SwipeableCategoryRow({
                     style={[styles.subDot, { backgroundColor: sub.color }]}
                   />
                   <Text style={styles.subEmoji}>{sub.emoji}</Text>
-                  <Text style={styles.subLabel} numberOfLines={1}>
-                    {sub.label}
-                  </Text>
+                  <View style={styles.subLabelWrap}>
+                    <Text style={styles.subLabel}>
+                      {formatSubCategoryLabel(sub.label)}
+                    </Text>
+                  </View>
+                  <View style={styles.subActions}>
                   <TouchableOpacity
                     onPress={() => setEditingSubId(sub.id)}
                     style={styles.subEdit}
@@ -630,6 +643,7 @@ function SwipeableCategoryRow({
                       strokeWidth={2.4}
                     />
                   </TouchableOpacity>
+                  </View>
                 </View>
               ),
             )}
@@ -940,16 +954,24 @@ const makeStyles = (c) => ({
   },
   subRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 8,
     paddingHorizontal: 10,
     backgroundColor: c.bg.surfaceAlt,
     borderRadius: 10,
     gap: 8,
   },
-  subDot:    { width: 6, height: 6, borderRadius: 3 },
-  subEmoji:  { fontSize: 14 },
-  subLabel:  { flex: 1, fontSize: 13, color: c.text.primary },
+  subDot:    { width: 6, height: 6, borderRadius: 3, marginTop: 5 },
+  subEmoji:  { fontSize: 14, marginTop: 1, flexShrink: 0 },
+  subLabelWrap: { flex: 1, minWidth: 0, paddingRight: 4 },
+  subLabel:  { fontSize: 13, color: c.text.primary, lineHeight: 18 },
+  subActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+    marginTop: 1,
+  },
   subEdit: {
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: '#dbeafe',

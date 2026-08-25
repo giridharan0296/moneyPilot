@@ -52,6 +52,7 @@ import { useNetWorth }      from './NetWorthContext';
 import { usePortfolio }     from './PortfolioContext';
 
 import { buildFinancialSummary } from '../lib/financialSummary';
+import { computePortfolioSummary } from '../lib/portfolioHoldings';
 import { generateInsights }       from '../lib/aiInsights';
 import { DEMO_INSIGHTS }          from '../lib/demoInsights';
 
@@ -116,6 +117,16 @@ export function AiInsightsProvider({ children }) {
   // Memoised on the source-context values so we don't rebuild the whole
   // JSON on every render — only when data that would change the insights
   // has actually moved.
+  const portfolioSummary = useMemo(
+    () => computePortfolioSummary(
+      portfolioCtx?.holdings ?? [],
+      investments,
+      {},
+      { isSymbolHidden: nwCtx?.isPortfolioSymbolHidden },
+    ),
+    [portfolioCtx?.holdings, investments, nwCtx?.isPortfolioSymbolHidden],
+  );
+
   const summary = useMemo(
     () => buildFinancialSummary({
       transactions:   { expenses, income, investments },
@@ -129,7 +140,7 @@ export function AiInsightsProvider({ children }) {
         assets:  nwCtx.assets,
         history: nwCtx.history,
       },
-      portfolio:      portfolioCtx?.summary ?? null,
+      portfolio:      portfolioSummary.count > 0 ? portfolioSummary : null,
       brokers:        brokers ?? [],
     }),
     [
@@ -137,7 +148,7 @@ export function AiInsightsProvider({ children }) {
       categories, baseCurrency, fxRates,
       budgets, goals, loans, recurringRules,
       nwCtx?.summary, nwCtx?.assets, nwCtx?.history,
-      portfolioCtx?.summary,
+      portfolioSummary,
       brokers,
     ],
   );

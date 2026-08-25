@@ -73,13 +73,23 @@ export default function TransfersScreen({ navigation, embedded = false }) {
   const themeColors = useThemeColors();
   const { transfers, addTransfer, updateTransfer, deleteTransfer } =
     useTransfers();
-  const { deleteEvent, loans } = useLoans();
+  const { deleteEvent, loans, logEmi } = useLoans();
   const { accounts, accountGroups, baseCurrency, fxRates } = useSettings();
   const { assets, liabilities } = useNetWorth();
   const { showToast, showUndoableToast } = useToast();
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null); // full transfer object OR null
+  const [fromAccountId, setFromAccountId] = useState(null);
+  const [toAccountId, setToAccountId] = useState(null);
+
+  const filteredTransfers = useMemo(() => {
+    return transfers.filter((transfer) => {
+      if (fromAccountId && transfer.accountId !== fromAccountId) return false;
+      if (toAccountId && transfer.targetAccountId !== toAccountId) return false;
+      return true;
+    });
+  }, [transfers, fromAccountId, toAccountId]);
 
   // Filter to only Money Lent assets and Personal Loan liabilities for the
   // form's linkable picker. Anything else in NetWorth (houses, gold, etc.)
@@ -142,6 +152,24 @@ export default function TransfersScreen({ navigation, embedded = false }) {
   }, [embedded, creating, editing]);
 
   const handleAdd = (values) => {
+    const formalLoan = values.kind === 'loan_repayment'
+      ? loans.find((loan) => loan.linkedLiabilityId === values.linkedNetWorthId)
+      : null;
+    if (formalLoan) {
+      const loanResult = logEmi(formalLoan.id, {
+        date: values.createdAt,
+        amount: values.amount,
+        note: values.note,
+        accountId: values.accountId,
+      });
+      if (!loanResult.ok) {
+        showToast(errorMessage(loanResult.reason), { variant: 'error' });
+        return;
+      }
+      setCreating(false);
+      showToast('Loan repayment tracked', { variant: 'success', duration: 1800 });
+      return;
+    }
     const res = addTransfer(values);
     if (!res.ok) {
       showToast(errorMessage(res.reason), { variant: 'error' });
@@ -210,6 +238,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
           linkedNetWorthId: removed.linkedNetWorthId,
           interestAmount: removed.interestAmount,
           note: removed.note,
+          tags: removed.tags,
           voiceNote: removed.voiceNote,
           createdAt: removed.createdAt,
         });
@@ -238,7 +267,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
       outstanding: { items: [], total: 0 },
       repayments:  { items: [], total: 0 },
     };
-    for (const t of transfers) {
+    for (const t of filteredTransfers) {
       const bucket = t.kind === 'internal_transfer'
         ? g.internal
         : (t.kind === 'lend' || t.kind === 'borrow' || t.kind === 'loan_disbursement')
@@ -248,7 +277,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
       bucket.total += t.amount || 0;
     }
     return g;
-  }, [transfers]);
+  }, [filteredTransfers]);
 
   return (
     <>
@@ -283,18 +312,42 @@ export default function TransfersScreen({ navigation, embedded = false }) {
           </Text>
         </View>
 
+        {accounts.length > 0 && (
+          <TransferAccountFilter
+            accounts={accounts}
+            fromAccountId={fromAccountId}
+            toAccountId={toAccountId}
+            onChangeFrom={setFromAccountId}
+            onChangeTo={setToAccountId}
+            onClear={() => {
+              setFromAccountId(null);
+              setToAccountId(null);
+            }}
+          />
+        )}
+
         {creating && (
           <TransferForm
             accounts={accounts}
             accountGroups={accountGroups}
             assets={lentAssets}
             liabilities={anyLiabilities}
+            loans={loans}
             onSubmit={handleAdd}
             onCancel={() => setCreating(false)}
           />
         )}
 
         {transfers.length === 0 && !creating && <EmptyState />}
+
+        {transfers.length > 0 && filteredTransfers.length === 0 && !creating && (
+          <FilterEmptyState
+            onClear={() => {
+              setFromAccountId(null);
+              setToAccountId(null);
+            }}
+          />
+        )}
 
         {GROUPS.map((g) => {
           const bucket = grouped[g.id];
@@ -372,6 +425,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
                   accountGroups={accountGroups}
                   assets={lentAssets}
                   liabilities={anyLiabilities}
+                  loans={loans}
                   onSubmit={handleSaveEdit}
                   onCancel={() => setEditing(null)}
                 />
@@ -444,6 +498,18 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
               : ''}
           </Text>
         )}
+        {transfer.tags && transfer.tags.length > 0 && (
+          <View style={styles.rowTagsRow}>
+            {transfer.tags.slice(0, 4).map((t) => (
+              <View key={t} style={styles.rowTag}>
+                <Text style={styles.rowTagText}>#{t}</Text>
+              </View>
+            ))}
+            {transfer.tags.length > 4 && (
+              <Text style={styles.rowTagOverflow}>+{transfer.tags.length - 4}</Text>
+            )}
+          </View>
+        )}
       </View>
       <View style={styles.rowRight}>
         <Text style={[styles.rowAmount, { color: cashColor }]}>
@@ -461,6 +527,103 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
         </TouchableOpacity>
       </View>
     </Pressable>
+  );
+}
+
+function TransferAccountFilter({
+  accounts,
+  fromAccountId,
+  toAccountId,
+  onChangeFrom,
+  onChangeTo,
+  onClear,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const filterActive = fromAccountId != null || toAccountId != null;
+
+  const renderRow = (label, selectedId, onSelect) => (
+    <View style={styles.filterRow}>
+      <Text style={styles.filterLabel}>{label}</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filterChips}
+      >
+        <TouchableOpacity
+          onPress={() => onSelect(null)}
+          style={[styles.filterChip, selectedId == null && styles.filterChipActive]}
+          accessibilityRole="button"
+          accessibilityState={{ selected: selectedId == null }}
+          accessibilityLabel={`${label}: all accounts`}
+        >
+          <Text style={[styles.filterChipText, selectedId == null && styles.filterChipTextActive]}>
+            All
+          </Text>
+        </TouchableOpacity>
+        {accounts.map((account) => {
+          const active = selectedId === account.id;
+          return (
+            <TouchableOpacity
+              key={account.id}
+              onPress={() => onSelect(active ? null : account.id)}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`${label}: ${account.label}`}
+            >
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                {account.emoji} {account.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+
+  return (
+    <View style={styles.filterCard}>
+      <View style={styles.filterHeader}>
+        <View style={styles.filterTitleRow}>
+          <Text style={styles.filterTitle}>Filter by account</Text>
+        </View>
+        {filterActive && (
+          <TouchableOpacity
+            onPress={onClear}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Clear account filters"
+          >
+            <Text style={styles.filterClear}>Clear</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {renderRow('From', fromAccountId, onChangeFrom)}
+      {renderRow('To', toAccountId, onChangeTo)}
+      <Text style={styles.filterHint}>
+        From matches the source account. To applies to between-account transfers.
+      </Text>
+    </View>
+  );
+}
+
+function FilterEmptyState({ onClear }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.filterEmpty}>
+      <Text style={styles.filterEmptyTitle}>No transfers match these accounts</Text>
+      <Text style={styles.filterEmptyBody}>
+        Try a different from/to combination, or clear the filter to see all transfers.
+      </Text>
+      <TouchableOpacity
+        onPress={onClear}
+        style={styles.filterEmptyBtn}
+        accessibilityRole="button"
+        accessibilityLabel="Clear account filters"
+      >
+        <Text style={styles.filterEmptyBtnText}>Clear filters</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -502,6 +665,9 @@ function errorMessage(reason) {
     managed_by_loan:      'This entry is managed by its formal loan. Edit or delete it from the Loans screen.',
     event_not_found:      'The linked loan repayment event no longer exists.',
     cannot_delete_disburse: 'The original loan disbursement cannot be deleted as a repayment.',
+    loan_closed:           'This loan is already closed.',
+    before_disburse:       'Repayment date cannot be before the loan disbursement date.',
+    invalid_date:          'Choose a valid repayment date.',
   }[reason] ?? 'Could not save transfer.';
 }
 
@@ -511,7 +677,7 @@ function errorMessage(reason) {
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
   container: {
-    padding: spacing.xl,
+    padding: spacing.lg,
     paddingBottom: 60,
     gap: spacing.md,
   },
@@ -556,6 +722,107 @@ const makeStyles = (c) => ({
     fontSize: 11,
     color: c.text.muted,
     lineHeight: 16,
+  },
+
+  filterCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    gap: spacing.sm,
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  filterTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  filterClear: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.accent.primary,
+  },
+  filterRow: {
+    gap: 6,
+  },
+  filterLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: c.text.secondary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  filterChips: {
+    gap: 8,
+    paddingRight: spacing.sm,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  filterChipActive: {
+    backgroundColor: '#0ea5e9',
+    borderColor: '#0ea5e9',
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: c.text.secondary,
+  },
+  filterChipTextActive: {
+    color: c.text.inverse,
+  },
+  filterHint: {
+    fontSize: 11,
+    color: c.text.muted,
+    lineHeight: 15,
+  },
+  filterEmpty: {
+    backgroundColor: c.bg.surface,
+    borderRadius: radii.xl,
+    padding: spacing.xl,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  filterEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: c.text.primary,
+    textAlign: 'center',
+  },
+  filterEmptyBody: {
+    fontSize: 13,
+    color: c.text.secondary,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginTop: spacing.xs,
+  },
+  filterEmptyBtn: {
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: c.accent.primary,
+  },
+  filterEmptyBtnText: {
+    color: c.text.inverse,
+    fontWeight: '700',
+    fontSize: 13,
   },
 
   group: {
@@ -626,6 +893,29 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     marginTop: 3,
     fontWeight: '700',
+  },
+  rowTagsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
+    alignItems: 'center',
+  },
+  rowTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+    backgroundColor: c.accent.primary + '15',
+  },
+  rowTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.accent.primary,
+  },
+  rowTagOverflow: {
+    fontSize: 10,
+    color: c.text.muted,
+    fontWeight: '600',
   },
   rowRight: {
     alignItems: 'flex-end',

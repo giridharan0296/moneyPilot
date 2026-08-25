@@ -443,7 +443,7 @@ function OhlcPill({ label, value, styles }) {
 
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: spacing.xl, paddingBottom: spacing['4xl'] },
+  container: { padding: spacing.lg, paddingBottom: spacing['4xl'] },
   introRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

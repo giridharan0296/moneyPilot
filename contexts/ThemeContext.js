@@ -98,7 +98,7 @@ export function ThemeProvider({ children }) {
   // Until google fonts finish loading, fall back to System so we never
   // paint with a fontFamily that isn't registered yet (blank glyphs).
   const fontOption = getFontOption(
-    fontsLoaded || fontId === DEFAULT_FONT_ID ? fontId : DEFAULT_FONT_ID,
+    fontsLoaded ? fontId : 'system',
   );
 
   const setThemeMode = useCallback((next) => {

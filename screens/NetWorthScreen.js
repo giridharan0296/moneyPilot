@@ -23,7 +23,8 @@
 // row to expand into edit mode.
 // ----------------------------------------------------------------------------
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   ScrollView,
   View,
@@ -44,7 +45,9 @@ import AppIcon from '../components/AppIcon';
 import { fetchIndicativeMetalRates, formatMetalRateHint, METAL_PURITY, valuePhysicalMetal } from '../lib/metalRates';
 import AmountCalculatorButton from '../components/AmountCalculatorButton';
 import NetWorthChart from '../components/NetWorthChart';
+import { applyRealEstateHistory } from '../lib/netWorthHistory';
 import ScreenHelpIntro from '../components/ScreenHelpIntro';
+import { StatusBadge } from '../components/UiPrimitives';
 import { HELP_NET_WORTH } from '../lib/helpContent';
 import {
   CURRENCIES,
@@ -55,11 +58,16 @@ import {
 import {
   EPF_ASSET_CATEGORY,
   EPF_INVESTMENT_SUB_CATEGORY,
+  buildEpfContributionPatch,
   filterEpfAssets,
   findDuplicateUan,
+  formatEpfPeriod,
+  formatEpfPeriodLabel,
   formatUanDisplay,
+  getEpfContributions,
   isEpfAsset,
   isValidUan,
+  lastEpfContribution,
   normalizeUan,
   suggestEpfName,
   totalEpfValue,
@@ -91,6 +99,8 @@ export default function NetWorthScreen() {
     restoreLiability,
     findAssetCategory,
     findLiabilityCategory,
+    hidePortfolioSymbol,
+    unhidePortfolioSymbol,
   } = useNetWorth();
   const { baseCurrency, fxRates } = useSettings();
   const { showUndoableToast } = useToast();
@@ -110,14 +120,30 @@ export default function NetWorthScreen() {
     immovable: immovableAssets,
     movable: Math.max(0, summary.totalAssets - immovableAssets),
   };
+  const chartHistory = useMemo(
+    () => applyRealEstateHistory(history, assets),
+    [assets, history],
+  );
+  const hasEstimatedRealEstate = assets.some(
+    (asset) => asset.valuationMethod === 'real_estate_growth' && asset.purchaseDate,
+  );
 
   // Wrap deletes with an undo-toast. The full item is captured before the
   // delete so restore is exact (same id, same createdAt/updatedAt).
   const undoableDeleteAsset = (item) => {
+    const symbol = item.portfolioSymbol;
+    if (item.linkedPortfolioSync && symbol) {
+      hidePortfolioSymbol(symbol);
+    }
     deleteAsset(item.id);
     showUndoableToast({
-      message: `Deleted asset: ${item.name}`,
-      onUndo: () => restoreAsset(item),
+      message: `Removed ${item.name} from Net Worth and Portfolio`,
+      onUndo: () => {
+        restoreAsset(item);
+        if (item.linkedPortfolioSync && symbol) {
+          unhidePortfolioSymbol(symbol);
+        }
+      },
     });
   };
   const undoableDeleteLiability = (item) => {
@@ -191,10 +217,14 @@ export default function NetWorthScreen() {
           <View style={styles.chartHeader}>
             <Text style={styles.chartTitle}>Net worth over time</Text>
             <Text style={styles.chartSub}>
-              One point per day · captured automatically when totals change
+              One point per day · property history may include growth-based estimates
             </Text>
           </View>
-          <NetWorthChart history={history} width={chartWidth} />
+          <NetWorthChart
+            history={chartHistory}
+            width={chartWidth}
+            defaultRangeId={hasEstimatedRealEstate ? 'all' : '90d'}
+          />
         </View>
 
         {hasPortfolioSyncedAssets ? (
@@ -215,6 +245,7 @@ export default function NetWorthScreen() {
           onAdd={addAsset}
           onUpdate={updateAsset}
           onDelete={undoableDeleteAsset}
+          showUndoableToast={showUndoableToast}
           baseCurrency={baseCurrency}
           fxRates={fxRates}
         />
@@ -268,6 +299,187 @@ export default function NetWorthScreen() {
 }
 
 // ----------------------------------------------------------------------------
+// EpfContributionForm — log a monthly employee + employer deposit.
+// ----------------------------------------------------------------------------
+function EpfContributionForm({
+  initialAssetId,
+  epfAssets,
+  accent,
+  onCancel,
+  onSubmit,
+  baseCurrency,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const placeholder = themeColors.text.muted;
+  const [selectedId, setSelectedId] = useState(initialAssetId ?? epfAssets[0]?.id ?? null);
+  const selectedAsset = epfAssets.find((item) => item.id === selectedId) ?? epfAssets[0] ?? null;
+  const [employeeShare, setEmployeeShare] = useState('');
+  const [employerMatches, setEmployerMatches] = useState(true);
+  const [employerShare, setEmployerShare] = useState('');
+  const [monthDate, setMonthDate] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [note, setNote] = useState('');
+
+  const period = formatEpfPeriod(monthDate);
+  const ee = parseFloat(employeeShare) || 0;
+  const er = employerMatches ? ee : (parseFloat(employerShare) || 0);
+  const total = ee + er;
+  const nextBalance = (Number(selectedAsset?.value) || 0) + total;
+
+  const handleSubmit = () => {
+    if (!selectedAsset) return;
+    const result = buildEpfContributionPatch(selectedAsset, {
+      employeeShare: ee,
+      employerShare: er,
+      period,
+      note,
+    });
+    if (!result.ok) {
+      Alert.alert('Cannot record', result.error);
+      return;
+    }
+    onSubmit(selectedAsset, result.patch, result.entry);
+  };
+
+  return (
+    <View style={styles.form}>
+      <Text style={styles.epfFormIntro}>
+        Add this month's employee + employer deposit. Your EPF balance increases by the total — no need to re-enter the full passbook amount.
+      </Text>
+
+      {epfAssets.length > 1 && (
+        <>
+          <Text style={styles.formLabel}>UAN account</Text>
+          <View style={styles.chipRow}>
+            {epfAssets.map((item) => {
+              const active = selectedId === item.id;
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[styles.chip, active && { borderColor: accent, backgroundColor: accent + '20' }]}
+                  onPress={() => setSelectedId(item.id)}
+                >
+                  <Text style={[styles.chipText, active && { color: accent, fontWeight: '700' }]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </>
+      )}
+
+      {selectedAsset && (
+        <Text style={styles.itemNote}>
+          Current balance: {formatMoneyCurrency(selectedAsset.value, selectedAsset.currency ?? baseCurrency)}
+          {(() => {
+            const last = lastEpfContribution(selectedAsset);
+            return last ? ` · Last recorded: ${formatEpfPeriodLabel(last.period)}` : '';
+          })()}
+        </Text>
+      )}
+
+      <Text style={styles.formLabel}>Month</Text>
+      <TouchableOpacity style={styles.input} onPress={() => setShowMonthPicker(true)}>
+        <Text style={{ color: themeColors.text.primary }}>{formatEpfPeriodLabel(period)}</Text>
+      </TouchableOpacity>
+      {showMonthPicker && (
+        <DateTimePicker
+          value={monthDate}
+          mode="date"
+          maximumDate={new Date()}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selected) => {
+            if (Platform.OS !== 'ios') setShowMonthPicker(false);
+            if (event?.type !== 'dismissed' && selected) {
+              setMonthDate(new Date(selected.getFullYear(), selected.getMonth(), 1));
+            }
+          }}
+        />
+      )}
+
+      <Text style={styles.formLabel}>Employee share</Text>
+      <AmountCalculatorButton value={employeeShare} onChangeText={setEmployeeShare}>
+        <TextInput
+          style={styles.input}
+          value={employeeShare}
+          onChangeText={setEmployeeShare}
+          keyboardType="decimal-pad"
+          placeholder="e.g. 1800"
+          placeholderTextColor={placeholder}
+          autoFocus
+        />
+      </AmountCalculatorButton>
+
+      <Text style={styles.formLabel}>Employer share</Text>
+      <View style={styles.chipRow}>
+        {[['match', 'Matches employee'], ['custom', 'Custom amount']].map(([id, label]) => {
+          const active = (id === 'match') === employerMatches;
+          return (
+            <TouchableOpacity
+              key={id}
+              style={[styles.chip, active && { borderColor: accent, backgroundColor: accent + '20' }]}
+              onPress={() => setEmployerMatches(id === 'match')}
+            >
+              <Text style={[styles.chipText, active && { color: accent, fontWeight: '700' }]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {!employerMatches && (
+        <AmountCalculatorButton value={employerShare} onChangeText={setEmployerShare}>
+          <TextInput
+            style={styles.input}
+            value={employerShare}
+            onChangeText={setEmployerShare}
+            keyboardType="decimal-pad"
+            placeholder="e.g. 1800"
+            placeholderTextColor={placeholder}
+          />
+        </AmountCalculatorButton>
+      )}
+
+      {total > 0 && selectedAsset && (
+        <Text style={styles.fxHint}>
+          Balance will increase by {formatMoneyCurrency(total, baseCurrency)} → {formatMoneyCurrency(nextBalance, baseCurrency)}
+        </Text>
+      )}
+
+      <Text style={styles.formLabel}>Note (optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={note}
+        onChangeText={setNote}
+        placeholder="e.g. March salary credit"
+        placeholderTextColor={placeholder}
+      />
+
+      <View style={styles.formButtonsRow}>
+        <TouchableOpacity
+          onPress={onCancel}
+          style={[styles.formBtn, styles.formBtnCancel]}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.formBtnCancelText}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleSubmit}
+          style={[styles.formBtn, { backgroundColor: accent }]}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.formBtnPrimaryText}>Record contribution</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ----------------------------------------------------------------------------
 // EpfQuickSection — shortcut to add/update EPF balances (supports multiple UANs).
 // ----------------------------------------------------------------------------
 function EpfQuickSection({
@@ -279,6 +491,7 @@ function EpfQuickSection({
   onAdd,
   onUpdate,
   onDelete,
+  showUndoableToast,
   baseCurrency,
   fxRates,
 }) {
@@ -287,11 +500,33 @@ function EpfQuickSection({
   const investmentAccent = themeColors.accent.investmentStrong;
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [contributingId, setContributingId] = useState(null);
   const epfCategory = findCategory(EPF_ASSET_CATEGORY);
 
   const openAdd = () => {
     setEditingId(null);
+    setContributingId(null);
     setAdding(true);
+  };
+
+  const openContribution = (assetId = null) => {
+    setAdding(false);
+    setEditingId(null);
+    setContributingId(assetId ?? epfAssets[0]?.id ?? null);
+  };
+
+  const handleContribution = (asset, patch, entry) => {
+    const snapshot = {
+      value: asset.value,
+      valueInBase: asset.valueInBase,
+      epfContributions: getEpfContributions(asset),
+    };
+    onUpdate(asset.id, patch);
+    setContributingId(null);
+    showUndoableToast({
+      message: `Recorded ${formatMoneyCurrency(entry.total, baseCurrency)} for ${formatEpfPeriodLabel(entry.period)}`,
+      onUndo: () => onUpdate(asset.id, snapshot),
+    });
   };
 
   return (
@@ -300,7 +535,7 @@ function EpfQuickSection({
         <View style={{ flex: 1 }}>
           <Text style={styles.sectionTitle}>Employee Provident Fund (EPF)</Text>
           <Text style={styles.sectionSubtitle}>
-            Add one row per UAN — current employer and old accounts stay separate.
+            Add one row per UAN. Record monthly contributions or update the passbook balance anytime.
           </Text>
         </View>
         <Text style={[styles.sectionTotal, { color: investmentAccent }]}>
@@ -345,32 +580,56 @@ function EpfQuickSection({
         }
 
         const uanLabel = formatUanDisplay(item.epfUan);
+        const lastContribution = lastEpfContribution(item);
         return (
-          <TouchableOpacity
-            key={item.id}
-            style={styles.itemRow}
-            activeOpacity={0.7}
-            onPress={() => setEditingId(item.id)}
-          >
-            <View style={[styles.itemDot, { backgroundColor: epfCategory?.color ?? investmentAccent }]} />
-            <Text style={styles.itemEmoji}>{epfCategory?.emoji ?? '🏢'}</Text>
-            <View style={styles.itemMiddle}>
-              <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemCategory}>
-                EPF{uanLabel ? ` · ${uanLabel}` : ''}
+          <View key={item.id} style={styles.epfItemRow}>
+            <TouchableOpacity
+              style={styles.epfItemMain}
+              activeOpacity={0.7}
+              onPress={() => {
+                setContributingId(null);
+                setEditingId(item.id);
+              }}
+            >
+              <View style={[styles.itemDot, { backgroundColor: epfCategory?.color ?? investmentAccent }]} />
+              <Text style={styles.itemEmoji}>{epfCategory?.emoji ?? '🏢'}</Text>
+              <View style={styles.itemMiddle}>
+                <Text style={styles.itemName}>{item.name}</Text>
+                <Text style={styles.itemCategory}>
+                  EPF{uanLabel ? ` · ${uanLabel}` : ''}
+                  {lastContribution ? ` · ${formatEpfPeriodLabel(lastContribution.period)} recorded` : ''}
+                </Text>
+                {item.note ? (
+                  <Text style={styles.itemNote} numberOfLines={1}>{item.note}</Text>
+                ) : null}
+              </View>
+              <Text style={styles.itemAmount}>
+                {formatMoneyCurrency(item.value, item.currency ?? baseCurrency)}
               </Text>
-              {item.note ? (
-                <Text style={styles.itemNote} numberOfLines={1}>{item.note}</Text>
-              ) : null}
-            </View>
-            <Text style={styles.itemAmount}>
-              {formatMoneyCurrency(item.value, item.currency ?? baseCurrency)}
-            </Text>
-          </TouchableOpacity>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.epfContribBtn}
+              activeOpacity={0.8}
+              onPress={() => openContribution(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Record monthly contribution for ${item.name}`}
+            >
+              <AppIcon name="calendar" size={16} color={investmentAccent} strokeWidth={2.2} />
+            </TouchableOpacity>
+          </View>
         );
       })}
 
-      {adding ? (
+      {contributingId ? (
+        <EpfContributionForm
+          initialAssetId={contributingId}
+          epfAssets={epfAssets}
+          accent={investmentAccent}
+          onCancel={() => setContributingId(null)}
+          onSubmit={handleContribution}
+          baseCurrency={baseCurrency}
+        />
+      ) : adding ? (
         <ItemForm
           amountKey="value"
           amountLabel="Current EPF balance"
@@ -391,6 +650,20 @@ function EpfQuickSection({
         />
       ) : (
         <View style={styles.epfActions}>
+          {epfAssets.length > 0 && (
+            <TouchableOpacity
+              style={styles.epfSecondaryBtn}
+              onPress={() => openContribution()}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Record monthly EPF contribution"
+            >
+              <AppIcon name="calendar" size={16} color={investmentAccent} strokeWidth={2.2} />
+              <Text style={[styles.epfSecondaryBtnText, { color: investmentAccent }]}>
+                Record monthly contribution
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.epfPrimaryBtn}
             onPress={openAdd}
@@ -513,6 +786,7 @@ function ItemSection({
                         valuationMethod: 'portfolio_sync',
                         portfolioSymbol: item.portfolioSymbol,
                         portfolioInstrumentKind: item.portfolioInstrumentKind,
+                        portfolioInvestedValue: item.portfolioInvestedValue ?? null,
                         investmentSubCategoryId: item.investmentSubCategoryId ?? null,
                         instrumentSymbol: item.instrumentSymbol ?? null,
                       }
@@ -530,8 +804,19 @@ function ItemSection({
                 }
                 if (item.linkedPortfolioSync) {
                   Alert.alert(
-                    'Synced from portfolio',
-                    'This asset tracks one stock or mutual fund from Portfolio. Remove the holding or investment log for this instrument instead.',
+                    'Remove from balance sheet?',
+                    `Remove "${item.name}" from Net Worth and Portfolio? Your investment logs stay unchanged. Use Undo to bring it back.`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Remove',
+                        style: 'destructive',
+                        onPress: () => {
+                          setEditingId(null);
+                          onDelete(item);
+                        },
+                      },
+                    ],
                   );
                   return;
                 }
@@ -575,6 +860,17 @@ function ItemSection({
                       ? `${cat?.label ?? 'Gold'} · open chit`
                       : (cat?.label ?? 'Other')}
               </Text>
+              {(item.linkedAccountId || item.linkedPortfolioSync || item.chitOpen) ? (
+                <StatusBadge status="synced" />
+              ) : null}
+              {item.linkedPortfolioSync && item.portfolioInvestedValue > 0 ? (
+                <Text style={styles.itemNote}>
+                  Invested {formatMoneyCurrency(item.portfolioInvestedValue, baseCurrency)}
+                  {item.portfolioInvestedValue !== item.value
+                    ? ` · Market ${formatMoneyCurrency(item.value, rowCurrency)}`
+                    : ''}
+                </Text>
+              ) : null}
               {item.valuationMethod === 'metal_spot' ? (
                 <Text style={styles.itemNote}>
                   Movable · {item.metal === 'silver' ? 'Silver' : 'Gold'} {item.purity} · {item.weightGrams} g
@@ -598,6 +894,9 @@ function ItemSection({
                   )}
                 </Text>
               )}
+              {isForeign && !(Number(fxRates?.[rowCurrency]?.rate) > 0) ? (
+                <StatusBadge status="missing_fx_rate" />
+              ) : null}
             </View>
           </TouchableOpacity>
         );
@@ -670,8 +969,23 @@ function ItemForm({
   const [goldValuationMode, setGoldValuationMode] = useState(
     initial ? (initial.valuationMethod === 'metal_spot' ? 'physical' : 'manual') : 'physical',
   );
+  const [realEstateValuationMode, setRealEstateValuationMode] = useState(
+    initial?.valuationMethod === 'real_estate_growth' ? 'estimated' : 'manual',
+  );
+  const [purchasePrice, setPurchasePrice] = useState(
+    initial?.purchasePrice != null ? String(initial.purchasePrice) : '',
+  );
+  const [purchaseDate, setPurchaseDate] = useState(
+    initial?.purchaseDate ? new Date(initial.purchaseDate) : new Date(),
+  );
+  const [annualGrowthPct, setAnnualGrowthPct] = useState(
+    initial?.annualGrowthPct != null ? String(initial.annualGrowthPct) : '6',
+  );
+  const [showPurchaseDatePicker, setShowPurchaseDatePicker] = useState(false);
   const isGoldAsset = amountKey === 'value' && categoryId === 'gold';
   const isPhysicalMetal = isGoldAsset && goldValuationMode === 'physical';
+  const isRealEstateAsset = amountKey === 'value' && categoryId === 'realestate';
+  const isEstimatedRealEstate = isRealEstateAsset && realEstateValuationMode === 'estimated';
   const lockedAutoValue = lockedFromAccount || lockedFromPortfolio || lockedFromChit;
 
   useEffect(() => {
@@ -690,6 +1004,16 @@ function ItemForm({
     const next = valuePhysicalMetal({ metal, purity, weightGrams, rates: metalRates });
     if (next != null) setAmount(next.toFixed(2));
   }, [isPhysicalMetal, metal, purity, weightGrams, metalRates]);
+
+  useEffect(() => {
+    if (!isEstimatedRealEstate) return;
+    const price = Number(purchasePrice);
+    const growth = Number(annualGrowthPct);
+    const boughtAt = new Date(purchaseDate);
+    if (!(price >= 0) || !isFinite(growth) || !isFinite(boughtAt.getTime())) return;
+    const years = Math.max(0, (Date.now() - boughtAt.getTime()) / (365.2425 * 86400000));
+    setAmount((price * ((1 + growth / 100) ** years)).toFixed(2));
+  }, [annualGrowthPct, isEstimatedRealEstate, purchaseDate, purchasePrice]);
 
   // F9 (multi-currency). Balance-sheet rows carry an optional currency +
   // fxRate + <amountKey>InBase snapshot. Defaults to base for legacy rows.
@@ -736,6 +1060,10 @@ function ItemForm({
       Alert.alert('Invalid amount', 'Please enter a valid positive number.');
       return;
     }
+    if (isEstimatedRealEstate && (!(Number(purchasePrice) > 0) || !isFinite(Number(annualGrowthPct)) || Number(annualGrowthPct) <= -100)) {
+      Alert.alert('Invalid property estimate', 'Enter a positive purchase price and a growth rate greater than -100%.');
+      return;
+    }
     if (isPhysicalMetal && !(Number(weightGrams) > 0)) {
       Alert.alert('Invalid weight', 'Enter the physical metal weight in grams.');
       return;
@@ -773,6 +1101,14 @@ function ItemForm({
         assetNature: 'movable', valuationMethod: 'manual', metal: null,
         purity: null, weightGrams: null, referenceRatePerGram: null,
         valuedAt: null, valuationSource: null,
+      } : isRealEstateAsset ? {
+        assetNature: 'immovable',
+        valuationMethod: isEstimatedRealEstate ? 'real_estate_growth' : 'manual',
+        purchasePrice: Number(purchasePrice) >= 0 ? Number(purchasePrice) : null,
+        purchaseDate: isFinite(new Date(purchaseDate).getTime()) ? new Date(purchaseDate).toISOString() : null,
+        annualGrowthPct: isEstimatedRealEstate ? Number(annualGrowthPct) : null,
+        valuedAt: new Date().toISOString(),
+        valuationSource: isEstimatedRealEstate ? 'User growth assumption' : 'Manual estimate',
       } : {}),
       currency:                   cur,
       fxRate:                     rate,
@@ -821,7 +1157,7 @@ function ItemForm({
         </Text>
       ) : lockedFromPortfolio ? (
         <Text style={styles.itemNote}>
-          Synced from Portfolio — one asset per stock or mutual fund. Value updates from live prices.
+          Synced from Portfolio — one asset per stock, ETF, or mutual fund. Value updates from live prices. Use Delete to hide it from Net Worth without changing Portfolio.
         </Text>
       ) : lockedFromChit ? (
         <Text style={styles.itemNote}>
@@ -838,7 +1174,10 @@ function ItemForm({
                   styles.chip,
                   active && { borderColor: c.color, backgroundColor: c.color + '20' },
                 ]}
-                onPress={() => setCategoryId(c.id)}
+                onPress={() => {
+                  setCategoryId(c.id);
+                  if (!initial && c.id === 'realestate') setRealEstateValuationMode('estimated');
+                }}
               >
                 <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
                   {c.emoji}  {c.label}
@@ -849,6 +1188,67 @@ function ItemForm({
         </View>
       )}
         </>
+      )}
+
+      {isRealEstateAsset && (
+        <View style={styles.metalPanel}>
+          <Text style={styles.formLabel}>Current-value method</Text>
+          <View style={styles.chipRow}>
+            {[['estimated', 'Estimate from growth'], ['manual', 'Manual value']].map(([id, label]) => (
+              <TouchableOpacity
+                key={id}
+                style={[styles.chip, realEstateValuationMode === id && { borderColor: accent, backgroundColor: accent + '20' }]}
+                onPress={() => setRealEstateValuationMode(id)}
+              >
+                <Text style={styles.chipText}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.formLabel}>Purchase price</Text>
+          <AmountCalculatorButton value={purchasePrice} onChangeText={setPurchasePrice}>
+            <TextInput
+              style={styles.input}
+              value={purchasePrice}
+              onChangeText={setPurchasePrice}
+              keyboardType="decimal-pad"
+              placeholder="e.g. 5800000"
+              placeholderTextColor={placeholder}
+            />
+          </AmountCalculatorButton>
+
+          <Text style={styles.formLabel}>Purchase date</Text>
+          <TouchableOpacity style={styles.input} onPress={() => setShowPurchaseDatePicker(true)}>
+            <Text style={{ color: themeColors.text.primary }}>{purchaseDate.toLocaleDateString()}</Text>
+          </TouchableOpacity>
+          {showPurchaseDatePicker && (
+            <DateTimePicker
+              value={purchaseDate}
+              mode="date"
+              maximumDate={new Date()}
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, selected) => {
+                if (Platform.OS !== 'ios') setShowPurchaseDatePicker(false);
+                if (event?.type !== 'dismissed' && selected) setPurchaseDate(selected);
+              }}
+            />
+          )}
+
+          {isEstimatedRealEstate && (
+            <>
+              <Text style={styles.formLabel}>Assumed annual growth (%)</Text>
+              <TextInput
+                style={styles.input}
+                value={annualGrowthPct}
+                onChangeText={setAnnualGrowthPct}
+                keyboardType="decimal-pad"
+                placeholder="6"
+                placeholderTextColor={placeholder}
+              />
+              <Text style={styles.itemNote}>Estimate only—not a live property appraisal. You can switch to Manual value anytime.</Text>
+            </>
+          )}
+        </View>
       )}
 
       {isGoldAsset && (
@@ -890,8 +1290,8 @@ function ItemForm({
         </View>
       )}
 
-      <Text style={styles.formLabel}>{isPhysicalMetal ? `${amountLabel} (auto-calculated)` : amountLabel}</Text>
-      {!lockedAutoValue && !isPhysicalMetal && (
+      <Text style={styles.formLabel}>{isPhysicalMetal || isEstimatedRealEstate ? `${amountLabel} (auto-calculated)` : amountLabel}</Text>
+      {!lockedAutoValue && !isPhysicalMetal && !isEstimatedRealEstate && (
         <AmountCalculatorButton value={amount} onChangeText={setAmount}>
           <TextInput
             style={[styles.input, (lockedAutoValue || isPhysicalMetal) && { opacity: 0.6 }]}
@@ -904,7 +1304,7 @@ function ItemForm({
           />
         </AmountCalculatorButton>
       )}
-      {(lockedAutoValue || isPhysicalMetal) && (
+      {(lockedAutoValue || isPhysicalMetal || isEstimatedRealEstate) && (
         <TextInput
           style={[styles.input, { opacity: 0.6 }]}
           value={amount}
@@ -1027,11 +1427,14 @@ const makeStyles = (c) => ({
   heroLabel: { color: c.text.onHeroFaint, fontSize: 12, letterSpacing: 1, fontWeight: '600' },
   heroValue: { color: c.text.onHero, fontSize: 36, fontWeight: '800', marginTop: 6 },
   heroBreakdownRow: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row',
+    alignItems: 'stretch',
     marginTop: 14,
+    gap: 8,
   },
   heroPill: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: c.bg.heroOverlay,
     borderRadius: 10,
     paddingVertical: 8,
@@ -1039,12 +1442,18 @@ const makeStyles = (c) => ({
   },
   heroPillLabel: { color: c.text.onHeroSoft, fontSize: 11, fontWeight: '600' },
   heroPillValue: { color: c.text.onHero, fontSize: 15, fontWeight: '700', marginTop: 2 },
-  heroMinus:    { color: c.text.onHero, fontSize: 22, fontWeight: '700', marginHorizontal: 10 },
+  heroMinus:    { color: c.text.onHero, fontSize: 22, fontWeight: '700', alignSelf: 'center', flexShrink: 0 },
   classificationCard: {
-    flexDirection: 'row', backgroundColor: c.bg.surface, borderRadius: 16,
-    borderWidth: 1, borderColor: c.border.subtle, padding: 14, marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: 14,
+    marginBottom: 16,
   },
-  classificationItem: { flex: 1 },
+  classificationItem: { flex: 1, minWidth: 0 },
   classificationDivider: { width: 1, backgroundColor: c.border.subtle, marginHorizontal: 12 },
   classificationLabel: { fontSize: 11, fontWeight: '700', color: c.text.secondary, textTransform: 'uppercase' },
   classificationValue: { fontSize: 16, fontWeight: '800', color: c.text.primary, marginTop: 5 },
@@ -1101,15 +1510,15 @@ const makeStyles = (c) => ({
   // Item row (view mode)
   itemRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     backgroundColor: c.bg.surfaceAlt,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 12,
     marginBottom: 8,
   },
-  itemDot:   { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
-  itemEmoji: { fontSize: 20, marginRight: 10 },
+  itemDot:   { width: 8, height: 8, borderRadius: 4, marginRight: 10, marginTop: 5, flexShrink: 0 },
+  itemEmoji: { fontSize: 20, marginRight: 10, marginTop: 1 },
   itemMiddle: { flex: 1 },
   itemName:     { fontSize: 14, fontWeight: '700', color: c.text.primary },
   itemCategory: { fontSize: 11, color: c.text.secondary, marginTop: 1 },
@@ -1239,6 +1648,47 @@ const makeStyles = (c) => ({
   epfActions: {
     gap: 8,
     marginTop: 4,
+  },
+  epfItemRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    marginBottom: 8,
+  },
+  epfItemMain: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  epfContribBtn: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: c.accent.investmentStrong + '44',
+  },
+  epfSecondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: c.bg.surface,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: c.accent.investmentStrong + '55',
+  },
+  epfSecondaryBtnText: {
+    fontWeight: '800',
+    fontSize: 14,
   },
   epfPrimaryBtn: {
     flexDirection: 'row',

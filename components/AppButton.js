@@ -1,12 +1,11 @@
 import { Text } from 'react-native';
 
 import PressableScale from './PressableScale';
-import { hapticMedium } from '../lib/haptics';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { radii, spacing } from '../lib/theme';
 
 /**
- * Shared CTA — primary / secondary / ghost / destructive with spring press + haptic.
+ * Shared CTA — primary / secondary / ghost / destructive with spring press.
  */
 export default function AppButton({
   label,
@@ -14,7 +13,6 @@ export default function AppButton({
   variant = 'primary',
   color,
   disabled = false,
-  haptic = true,
   fullWidth = true,
   style,
   textStyle,
@@ -55,7 +53,6 @@ export default function AppButton({
 
   const handlePress = () => {
     if (disabled) return;
-    if (haptic) hapticMedium();
     onPress?.();
   };
 
@@ -63,7 +60,6 @@ export default function AppButton({
     <PressableScale
       onPress={handlePress}
       disabled={disabled}
-      haptic={false}
       scaleTo={0.98}
       style={fullWidth ? styles.fullWidth : undefined}
       contentStyle={[

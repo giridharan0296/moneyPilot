@@ -8,11 +8,14 @@ import {
   View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import DateFilterBar from '../components/DateFilterBar';
 import SetupChecklist from '../components/SetupChecklist';
+import GuidedOnboarding from '../components/GuidedOnboarding';
+import { StatusBadge } from '../components/UiPrimitives';
 import DashboardSection from '../components/DashboardSection';
 import HomeSectionsToolbar from '../components/HomeSectionsToolbar';
+import DashboardCustomizer from '../components/DashboardCustomizer';
 import DashboardCashflowCard from '../components/DashboardCashflowCard';
 import SpendOverTimeChart from '../components/SpendOverTimeChart';
 import { useDateFilter } from '../contexts/DateFilterContext';
@@ -34,7 +37,9 @@ import { budgetDisplayLabel, computeProgress, periodLabel } from '../lib/budget'
 import { goalsSummary } from '../lib/goals';
 import { upcomingOccurrence } from '../lib/recurring';
 import { buildMonthClose } from '../lib/monthClose';
+import { flowInvestments, periodStats } from '../lib/reports';
 import { withAlpha } from '../lib/colorAlpha';
+import { spacing } from '../lib/theme';
 import { STORAGE_KEYS } from '../constants';
 import {
   baseAmountOf,
@@ -54,11 +59,13 @@ import {
 } from '../lib/setupChecklist';
 import {
   broadcastDashboardSectionsBulk,
-  DASHBOARD_HOME_SECTION_KEYS,
+  defaultDashboardLayout,
   persistDashboardSectionsBulk,
+  persistDashboardLayout,
+  readDashboardLayout,
 } from '../lib/dashboardSections';
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const incomeColor = themeColors.accent.income;
@@ -76,6 +83,7 @@ export default function DashboardScreen() {
   // transactions. We just read the summary here to show a compact strip.
   const netWorth = useNetWorth();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
 
   // Chart width = screen minus dashboard container padding (20 each side)
   // minus card padding (14 each side).
@@ -134,13 +142,21 @@ export default function DashboardScreen() {
 
   const [setupDismissed, setSetupDismissed] = useState(false);
   const [currencyConfirmed, setCurrencyConfirmed] = useState(false);
+  const [onboardingReady, setOnboardingReady] = useState(false);
+  const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEYS.setup_checklist_dismissed)
-      .then((v) => { if (v === '1') setSetupDismissed(true); })
-      .catch(() => {});
-    AsyncStorage.getItem(STORAGE_KEYS.setup_currency_confirmed)
-      .then((v) => { if (v === '1') setCurrencyConfirmed(true); })
-      .catch(() => {});
+    AsyncStorage.multiGet([
+      STORAGE_KEYS.setup_checklist_dismissed,
+      STORAGE_KEYS.setup_currency_confirmed,
+      STORAGE_KEYS.guided_onboarding_step,
+    ]).then((rows) => {
+      const values = Object.fromEntries(rows);
+      if (values[STORAGE_KEYS.setup_checklist_dismissed] === '1') setSetupDismissed(true);
+      if (values[STORAGE_KEYS.setup_currency_confirmed] === '1') setCurrencyConfirmed(true);
+      const savedStep = Number(values[STORAGE_KEYS.guided_onboarding_step]);
+      if (Number.isInteger(savedStep) && savedStep >= 0 && savedStep <= 3) setOnboardingStep(savedStep);
+    }).catch(() => {}).finally(() => setOnboardingReady(true));
   }, []);
 
   const { loadDemoData } = useDemoRestore();
@@ -155,14 +171,35 @@ export default function DashboardScreen() {
   });
   const showSetupChecklist = ready && !setupDismissed && !setupComplete;
 
+  useEffect(() => {
+    if (isFocused && ready && onboardingReady && !setupDismissed && !setupComplete) {
+      setOnboardingVisible(true);
+    }
+  }, [isFocused, ready, onboardingReady, setupDismissed, setupComplete]);
+
+  useEffect(() => {
+    if (!route?.params?.startOnboarding) return;
+    setOnboardingStep(0);
+    setOnboardingVisible(true);
+    navigation.setParams({ startOnboarding: undefined });
+  }, [navigation, route?.params?.startOnboarding]);
+
+  const changeOnboardingStep = useCallback((nextStep) => {
+    const safeStep = Math.max(0, Math.min(3, nextStep));
+    setOnboardingStep(safeStep);
+    AsyncStorage.setItem(STORAGE_KEYS.guided_onboarding_step, String(safeStep)).catch(() => {});
+  }, []);
+
   const dismissSetupChecklist = useCallback(() => {
     setSetupDismissed(true);
+    setOnboardingVisible(false);
     AsyncStorage.setItem(STORAGE_KEYS.setup_checklist_dismissed, '1').catch(() => {});
   }, []);
 
   const markSetupFinished = useCallback(() => {
     setCurrencyConfirmed(true);
     setSetupDismissed(true);
+    setOnboardingVisible(false);
     AsyncStorage.multiSet([
       [STORAGE_KEYS.setup_currency_confirmed, '1'],
       [STORAGE_KEYS.setup_checklist_dismissed, '1'],
@@ -194,6 +231,18 @@ export default function DashboardScreen() {
     openSettingsAccountsData();
   }, [openSettingsAccountsData]);
 
+  const reviewCurrencyFromGuide = useCallback(() => {
+    setOnboardingVisible(false);
+    setCurrencyConfirmed(true);
+    AsyncStorage.setItem(STORAGE_KEYS.setup_currency_confirmed, '1').catch(() => {});
+    openSettingsAccountsData();
+  }, [openSettingsAccountsData]);
+
+  const openAccountsFromGuide = useCallback(() => {
+    setOnboardingVisible(false);
+    openAccounts();
+  }, [openAccounts]);
+
   // Auto-dismiss the banner after a while so it doesn't get stuck if the
   // user ignores it. Keeps the top of the Dashboard clean over time.
   useEffect(() => {
@@ -215,17 +264,30 @@ export default function DashboardScreen() {
   // base-currency rows.
   const sumInBase = (arr) =>
     arr.reduce((s, e) => s + baseAmountOf(e, fxRates, baseCurrency, 'amount'), 0);
+  const toBaseRows = (arr) => arr.map((tx) => ({
+    ...tx,
+    amount: baseAmountOf(tx, fxRates, baseCurrency, 'amount'),
+  }));
+  const fFlowInvestments = flowInvestments(fInvestments);
   const totalIncome = sumInBase(fIncome);
   const totalExpenses = sumInBase(fExpenses);
-  const totalInvestments = sumInBase(fInvestments);
-
-  // Available balance follows the date filter:
+  const totalInvestments = sumInBase(fFlowInvestments);
+  const cashflowStats = periodStats(
+    toBaseRows(fExpenses),
+    toBaseRows(fIncome),
+    toBaseRows(fFlowInvestments),
+    { transfers: fTransfers, accounts, fxRates, baseCurrency },
+  );
+  const moneySaved = cashflowStats.net;
+  const savingsRate = totalIncome > 0 ? cashflowStats.savingsRate * 100 : 0;
   //   all time  → full account ledgers (opening + all activity)
   //   month/week/custom → ledger as of the end of that range
   // In / Out / Invested stay as activity inside the selected range.
   const availableBalance = useMemo(() => {
     const now = new Date();
-    const asOf = range ? (range.end < now ? range.end : now) : null;
+    // Available balance is a point-in-time value. All-time must stop at
+    // now instead of including future-dated ledger entries.
+    const asOf = range && range.end < now ? range.end : now;
     const balances = computeAccountBalances({
       accounts,
       income,
@@ -242,17 +304,21 @@ export default function DashboardScreen() {
     }
     return total;
   }, [accounts, income, expenses, investments, transfers, fxRates, baseCurrency, range]);
-  const moneySaved = totalIncome - totalExpenses;
-  const savingsRate =
-    totalIncome > 0 ? Math.max(0, (moneySaved / totalIncome) * 100) : 0;
 
-  // Budget summary for the Dashboard strip. We show the WORST-OFF active
+  // Available balance follows the date filter:
   // budget (highest percent, "over" ranked above "warn" above "safe") so
   // the user's eye lands on the one that most needs attention. Progress
   // math intentionally runs on the FULL expense list, not the filtered
   // one — budgets have their own period, unrelated to the Dashboard's
   // date-filter chip.
   const activeBudgets = budgets.filter((b) => b.active);
+  const expensesInBase = useMemo(
+    () => expenses.map((e) => ({
+      ...e,
+      amount: baseAmountOf(e, fxRates, baseCurrency, 'amount'),
+    })),
+    [expenses, fxRates, baseCurrency],
+  );
   const budgetSummary = (() => {
     if (activeBudgets.length === 0) return null;
     const now = new Date();
@@ -262,7 +328,7 @@ export default function DashboardScreen() {
     let worst = null;
     const RANK = { over: 3, warn: 2, safe: 1 };
     for (const b of activeBudgets) {
-      const p = computeProgress(b, expenses, now);
+      const p = computeProgress(b, expensesInBase, now);
       if (p.status === 'over') over++;
       else if (p.status === 'warn') warn++;
       else safe++;
@@ -476,6 +542,28 @@ export default function DashboardScreen() {
     broadcastDashboardSectionsBulk(false);
   }, []);
 
+  const [dashboardLayout, setDashboardLayout] = useState(defaultDashboardLayout);
+  const [customizerVisible, setCustomizerVisible] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    readDashboardLayout().then((layout) => {
+      if (!cancelled) setDashboardLayout(layout);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const dashboardLayoutByKey = useMemo(() => new Map(
+    dashboardLayout.map((item) => [item.key, { hidden: !item.visible }]),
+  ), [dashboardLayout]);
+  const sectionLayoutProps = useCallback((key) => (
+    dashboardLayoutByKey.get(key) ?? { hidden: false }
+  ), [dashboardLayoutByKey]);
+  const saveDashboardLayout = useCallback((nextLayout) => {
+    setDashboardLayout(nextLayout);
+    setCustomizerVisible(false);
+    persistDashboardLayout(nextLayout).catch(() => {});
+  }, []);
+
   // ---- Backup nag (soft banner if last backup > 14 days / never) -----
   const BACKUP_NAG_DAYS = 14;
   const [backupNag, setBackupNag] = useState(null); // null | { daysAgo, never }
@@ -581,7 +669,7 @@ export default function DashboardScreen() {
   // `transactions:openAdd` event the tab's FAB uses so a single tap
   // takes the user straight to the pre-filled add-transaction modal.
   //
-  // Entry point is the header "+" — Income / Expense / Investment are
+  // Entry point is the header "+" — Income / Expense / Investment / Transfer are
   // picked from an action sheet so the dashboard stays uncluttered.
   const [addSheetVisible, setAddSheetVisible] = useState(false);
 
@@ -643,6 +731,22 @@ export default function DashboardScreen() {
 
   return (
     <>
+    <GuidedOnboarding
+      visible={onboardingVisible}
+      step={onboardingStep}
+      baseCurrency={baseCurrency}
+      hasUserAccounts={hasUserAccounts}
+      hasTransactions={hasTransactions}
+      onStepChange={changeOnboardingStep}
+      onReviewCurrency={reviewCurrencyFromGuide}
+      onOpenAccounts={openAccountsFromGuide}
+      onAddTransaction={() => {
+        setOnboardingVisible(false);
+        showAddMenu();
+      }}
+      onFinish={markSetupFinished}
+      onDismiss={dismissSetupChecklist}
+    />
     <ScrollView
       style={styles.root}
       contentContainerStyle={styles.container}
@@ -712,14 +816,15 @@ export default function DashboardScreen() {
         totalInvestments={totalInvestments}
         incomeCount={fIncome.length}
         expenseCount={fExpenses.length}
-        investmentCount={fInvestments.length}
+        investmentCount={fFlowInvestments.length}
         baseCurrency={baseCurrency}
       />
 
       <HomeSectionsToolbar
-        sectionCount={DASHBOARD_HOME_SECTION_KEYS.length}
+        sectionCount={dashboardLayout.filter((item) => item.visible).length}
         onExpandAll={expandAllHomeSections}
         onCollapseAll={collapseAllHomeSections}
+        onCustomize={() => setCustomizerVisible(true)}
       />
 
       {/* MONTH CLOSE — calendar month-to-date snapshot (income / spend /
@@ -733,6 +838,7 @@ export default function DashboardScreen() {
       ) && (
         <DashboardSection
           persistKey="dashboard.monthClose"
+          {...sectionLayoutProps('dashboard.monthClose')}
           title={`${monthClose.monthLabel} snapshot`}
           icon="calendar"
           collapsedHint={monthClosePeek}
@@ -789,7 +895,7 @@ export default function DashboardScreen() {
           </View>
           {monthClose.invested > 0 ? (
             <Text style={styles.monthCloseSub}>
-              Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month (included in Saved)
+              Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month (deducted from Saved)
               {monthClose.budget
                 ? ` · Budget “${monthClose.budget.label}” ${Math.round(monthClose.budget.percent)}% (${monthClose.budget.status})`
                 : ''}
@@ -805,6 +911,7 @@ export default function DashboardScreen() {
 
       <DashboardSection
         persistKey="dashboard.spendingInsights"
+        {...sectionLayoutProps('dashboard.spendingInsights')}
         title="Spending"
         icon="trending-up"
         collapsedHint={spendingPeek}
@@ -960,6 +1067,7 @@ export default function DashboardScreen() {
 
       <DashboardSection
         persistKey="dashboard.upcomingBills"
+        {...sectionLayoutProps('dashboard.upcomingBills')}
         title="Upcoming bills"
         icon="calendar"
         collapsedHint={upcomingPeek}
@@ -1022,11 +1130,7 @@ export default function DashboardScreen() {
                     })}
                   </Text>
                 </View>
-                {isToday ? (
-                  <View style={styles.dueTodayPill}>
-                    <Text style={styles.dueTodayPillText}>Due</Text>
-                  </View>
-                ) : null}
+                <StatusBadge status={isToday ? 'due_today' : 'upcoming'} />
                 <Text
                   style={[
                     styles.upcomingAmount,
@@ -1096,6 +1200,7 @@ export default function DashboardScreen() {
 
       <DashboardSection
         persistKey="dashboard.planning"
+        {...sectionLayoutProps('dashboard.planning')}
         title="Planning & balances"
         icon="layers"
         collapsedHint={planningPeek}
@@ -1105,7 +1210,7 @@ export default function DashboardScreen() {
       {heroGoal && (
         <NavCard
           onPress={() =>
-            navigation.navigate('More', { screen: 'Goals', initial: false })
+            navigation.navigate('More', { screen: 'Plans', params: { tab: 'goals' }, initial: false })
           }
           style={styles.sectionBlockFlat}
         >
@@ -1164,36 +1269,43 @@ export default function DashboardScreen() {
           }
           style={styles.sectionBlockFlat}
         >
-          <View style={styles.networthLeft}>
-            <View style={styles.networthLabelRow}>
-              <Text style={styles.networthLabel}>Net worth</Text>
-              <AppIcon name="gem" size={12} color={investmentColor} strokeWidth={2} />
-            </View>
-            <Text
-              style={[
-                styles.networthValue,
-                {
-                  color:
-                    netWorth.summary.netWorth >= 0 ? incomeColor : expenseColor,
-                },
-              ]}
-            >
-              {netWorth.summary.netWorth >= 0 ? '' : '−'}
-              {formatMoneyCurrency(Math.abs(netWorth.summary.netWorth), baseCurrency)}
-            </Text>
-          </View>
-          <View style={styles.networthRight}>
-            <View style={styles.networthSubRow}>
-              <View style={[styles.networthDot, { backgroundColor: incomeColor }]} />
-              <Text style={styles.networthSub}>
-                {formatMoneyCurrency(netWorth.summary.totalAssets, baseCurrency)} assets
+          <View style={styles.networthStripBody}>
+            <View style={styles.networthPrimary}>
+              <View style={styles.networthLabelRow}>
+                <Text style={styles.networthLabel}>Net worth</Text>
+                <AppIcon name="gem" size={12} color={investmentColor} strokeWidth={2} />
+              </View>
+              <Text
+                style={[
+                  styles.networthValue,
+                  {
+                    color:
+                      netWorth.summary.netWorth >= 0 ? incomeColor : expenseColor,
+                  },
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+              >
+                {netWorth.summary.netWorth >= 0 ? '' : '−'}
+                {formatMoneyCurrency(Math.abs(netWorth.summary.netWorth), baseCurrency)}
               </Text>
             </View>
-            <View style={styles.networthSubRow}>
-              <View style={[styles.networthDot, { backgroundColor: expenseColor }]} />
-              <Text style={styles.networthSub}>
-                {formatMoneyCurrency(netWorth.summary.totalLiabilities, baseCurrency)} debt
-              </Text>
+            <View style={styles.networthBreakdown}>
+              <View style={styles.networthBreakdownRow}>
+                <View style={[styles.networthDot, { backgroundColor: incomeColor }]} />
+                <Text style={styles.networthMetricLabel}>Assets</Text>
+                <Text style={styles.networthMetricValue} numberOfLines={1}>
+                  {formatMoneyCurrency(netWorth.summary.totalAssets, baseCurrency)}
+                </Text>
+              </View>
+              <View style={styles.networthBreakdownRow}>
+                <View style={[styles.networthDot, { backgroundColor: expenseColor }]} />
+                <Text style={styles.networthMetricLabel}>Debt</Text>
+                <Text style={styles.networthMetricValue} numberOfLines={1}>
+                  {formatMoneyCurrency(netWorth.summary.totalLiabilities, baseCurrency)}
+                </Text>
+              </View>
             </View>
           </View>
         </NavCard>
@@ -1220,7 +1332,7 @@ export default function DashboardScreen() {
       {budgetSummary ? (
         <NavCard
           onPress={() =>
-            navigation.navigate('More', { screen: 'Budgets', initial: false })
+            navigation.navigate('More', { screen: 'Plans', params: { tab: 'budgets' }, initial: false })
           }
           style={styles.sectionBlockFlat}
         >
@@ -1259,7 +1371,7 @@ export default function DashboardScreen() {
       ) : (
         <NavCard
           onPress={() =>
-            navigation.navigate('More', { screen: 'Budgets', initial: false })
+            navigation.navigate('More', { screen: 'Plans', params: { tab: 'budgets' }, initial: false })
           }
           style={styles.sectionBlockDashed}
         >
@@ -1308,6 +1420,7 @@ export default function DashboardScreen() {
 
       <DashboardSection
         persistKey="dashboard.insightsActivity"
+        {...sectionLayoutProps('dashboard.insightsActivity')}
         title="Insights & activity"
         icon="sparkles"
         collapsedHint={insightsPeek}
@@ -1413,6 +1526,12 @@ export default function DashboardScreen() {
       onClose={() => setAddSheetVisible(false)}
       onSelect={handleAddType}
     />
+    <DashboardCustomizer
+      visible={customizerVisible}
+      layout={dashboardLayout}
+      onClose={() => setCustomizerVisible(false)}
+      onSave={saveDashboardLayout}
+    />
     </>
   );
 }
@@ -1455,14 +1574,12 @@ function ActivityRow({ item, findCategory, findAccount, accounts, baseCurrency, 
     <View style={styles.activityRow}>
       <Text style={styles.activityEmoji}>{cat?.emoji ?? '📌'}</Text>
       <View style={styles.activityMiddle}>
-        <View style={styles.activityLabelRow}>
-          <Text style={styles.activityLabel}>{cat?.label ?? 'Unknown'}</Text>
-          {sub && (
-            <Text style={styles.activitySubLabel} numberOfLines={1}>
-              {' · '}{sub.emoji} {sub.label}
-            </Text>
-          )}
-        </View>
+        <Text style={styles.activityLabel}>{cat?.label ?? 'Unknown'}</Text>
+        {sub && (
+          <Text style={styles.activitySubLabel}>
+            {sub.emoji} {sub.label}
+          </Text>
+        )}
         {item.note ? (
           <Text style={styles.activityNote} numberOfLines={1}>
             {item.note}
@@ -1584,7 +1701,7 @@ function formatDate(iso) {
 // ----------------------------------------------------------------------------
 const makeStyles = (c) => ({
   root: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: 20, paddingBottom: 60 },
+  container: { padding: spacing.lg, paddingBottom: 60 },
 
   recurringBanner: {
     flexDirection: 'row',
@@ -1973,27 +2090,41 @@ const makeStyles = (c) => ({
     fontWeight: '600',
   },
 
-  // Net worth strip (shown between summary cards and money-flow chart)
-  networthStrip: {
+  // Net worth strip (Planning & balances section)
+  networthStripBody: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: c.bg.surface,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1, borderColor: c.border.subtle,
-    borderLeftWidth: 4, borderLeftColor: c.accent.investment,
+    gap: 14,
   },
-  networthLeft:  { flex: 1 },
-  networthRight: { alignItems: 'flex-end' },
+  networthPrimary: { flex: 1, minWidth: 0 },
   networthLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   networthLabel: { fontSize: 10, fontWeight: '700', color: c.text.secondary, letterSpacing: 0.8 },
   networthValue: { fontSize: 18, fontWeight: '800', marginTop: 4, color: c.text.primary },
-  networthSubRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2,
+  networthBreakdown: {
+    flexShrink: 0,
+    minWidth: 148,
+    gap: 6,
   },
-  networthDot: { width: 8, height: 8, borderRadius: 4 },
-  networthSub:   { fontSize: 11, color: c.text.secondary, fontWeight: '600' },
+  networthBreakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  networthDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  networthMetricLabel: {
+    width: 44,
+    fontSize: 11,
+    fontWeight: '600',
+    color: c.text.secondary,
+  },
+  networthMetricValue: {
+    flex: 1,
+    minWidth: 72,
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.text.primary,
+    textAlign: 'right',
+  },
 
   networthEmpty: {
     backgroundColor: c.bg.surface,
@@ -2354,10 +2485,9 @@ const makeStyles = (c) => ({
     justifyContent: 'center',
     marginRight: 10,
   },
-  activityMiddle: { flex: 1 },
-  activityLabelRow: { flexDirection: 'row', alignItems: 'center' },
+  activityMiddle: { flex: 1, minWidth: 0 },
   activityLabel: { fontSize: 14, fontWeight: '600', color: c.text.primary },
-  activitySubLabel: { fontSize: 12, color: c.text.secondary, flexShrink: 1 },
+  activitySubLabel: { fontSize: 12, color: c.text.secondary, marginTop: 2, lineHeight: 16 },
   activityNote: { fontSize: 12, color: c.text.secondary, marginTop: 1 },
   activityMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   activityDate: { fontSize: 11, color: c.text.muted },

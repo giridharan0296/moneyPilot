@@ -1,0 +1,424 @@
+import { useMemo, useState } from 'react';
+import {
+  Platform,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+import AmountCalculatorButton from './AmountCalculatorButton';
+import DateTimePicker from './DatePicker';
+import TagInput from './TagInput';
+import QuickAddPickerItem from './QuickAddPickerItem';
+import {
+  POLICY_TYPES,
+  PREMIUM_FREQUENCIES,
+  defaultExpenseCategoriesForType,
+  policyTypeMeta,
+  premiumTransactionType,
+} from '../lib/insurancePolicies';
+import { radii, spacing } from '../lib/theme';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+
+export default function InsurancePolicyForm({
+  expenseCategories = [],
+  initialValues = null,
+  submitLabel = 'Save policy',
+  onSubmit,
+  onCancel,
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const isEdit = !!initialValues;
+
+  const [name, setName] = useState(initialValues?.name ?? '');
+  const [type, setType] = useState(initialValues?.type ?? 'health');
+  const [insurer, setInsurer] = useState(initialValues?.insurer ?? '');
+  const [policyNumber, setPolicyNumber] = useState(initialValues?.policyNumber ?? '');
+  const [premiumAmount, setPremiumAmount] = useState(
+    initialValues?.premiumAmount != null ? String(initialValues.premiumAmount) : '',
+  );
+  const [premiumFrequency, setPremiumFrequency] = useState(
+    initialValues?.premiumFrequency ?? 'yearly',
+  );
+  const [renewalDate, setRenewalDate] = useState(
+    initialValues?.renewalDate ? new Date(initialValues.renewalDate) : null,
+  );
+  const [showRenewalPicker, setShowRenewalPicker] = useState(false);
+  const [coverAmount, setCoverAmount] = useState(
+    initialValues?.coverAmount != null ? String(initialValues.coverAmount) : '',
+  );
+  const [expenseCategoryId, setExpenseCategoryId] = useState(
+    initialValues?.expenseCategoryId
+      ?? defaultExpenseCategoriesForType(type).expenseCategoryId,
+  );
+  const [expenseSubCategoryId, setExpenseSubCategoryId] = useState(
+    initialValues?.expenseSubCategoryId
+      ?? defaultExpenseCategoriesForType(type).expenseSubCategoryId,
+  );
+  const [tags, setTags] = useState(initialValues?.tags ?? []);
+  const [notes, setNotes] = useState(initialValues?.notes ?? '');
+  const [error, setError] = useState(null);
+
+  const typeMeta = policyTypeMeta(type);
+  const txType = premiumTransactionType(type);
+
+  const selectedCategory = useMemo(
+    () => expenseCategories.find((c) => c.id === expenseCategoryId) ?? null,
+    [expenseCategories, expenseCategoryId],
+  );
+  const subCategories = selectedCategory?.subCategories ?? [];
+
+  const changeType = (nextType) => {
+    setType(nextType);
+    const defaults = defaultExpenseCategoriesForType(nextType);
+    setExpenseCategoryId(defaults.expenseCategoryId);
+    setExpenseSubCategoryId(defaults.expenseSubCategoryId);
+  };
+
+  const handleSubmit = () => {
+    const trimmed = name.trim();
+    const premium = Number(premiumAmount);
+    if (!trimmed) {
+      setError('Enter a policy name.');
+      return;
+    }
+    if (!Number.isFinite(premium) || premium <= 0) {
+      setError('Enter a positive premium amount.');
+      return;
+    }
+    setError(null);
+    onSubmit({
+      name: trimmed,
+      type,
+      insurer: insurer.trim(),
+      policyNumber: policyNumber.trim(),
+      premiumAmount: premium,
+      premiumFrequency,
+      renewalDate: renewalDate ? renewalDate.toISOString() : null,
+      coverAmount: coverAmount.trim() ? Number(coverAmount) || null : null,
+      expenseCategoryId,
+      expenseSubCategoryId: subCategories.length ? expenseSubCategoryId : null,
+      tags,
+      notes: notes.trim(),
+    });
+  };
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.label}>Policy name</Text>
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="e.g. Star Health Family Floater"
+        placeholderTextColor={themeColors.text.muted}
+      />
+
+      <Text style={styles.label}>Type</Text>
+      <View style={styles.chipRow}>
+        {POLICY_TYPES.map((t) => {
+          const selected = type === t.id;
+          return (
+            <TouchableOpacity
+              key={t.id}
+              onPress={() => changeType(t.id)}
+              activeOpacity={0.7}
+              style={[styles.chip, selected && styles.chipSelected]}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                {t.emoji} {t.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {typeMeta.premiumAsInvestment ? (
+        <Text style={styles.hint}>
+          ULIP premiums are usually logged as investments. Policy value can sit in Net Worth separately.
+        </Text>
+      ) : (
+        <Text style={styles.hint}>
+          Premiums log as {txType === 'investment' ? 'investments' : 'expenses'} under the category below.
+        </Text>
+      )}
+
+      <Text style={styles.label}>Insurer (optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={insurer}
+        onChangeText={setInsurer}
+        placeholder="e.g. HDFC ERGO"
+        placeholderTextColor={themeColors.text.muted}
+      />
+
+      <Text style={styles.label}>Policy number (optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={policyNumber}
+        onChangeText={setPolicyNumber}
+        placeholder="Policy / certificate no."
+        placeholderTextColor={themeColors.text.muted}
+        autoCapitalize="characters"
+      />
+
+      <Text style={styles.label}>Premium amount</Text>
+      <View style={styles.amountRow}>
+        <TextInput
+          style={[styles.input, styles.amountInput]}
+          value={premiumAmount}
+          onChangeText={setPremiumAmount}
+          keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+          placeholder="0"
+          placeholderTextColor={themeColors.text.muted}
+        />
+        <AmountCalculatorButton
+          value={premiumAmount}
+          onChange={setPremiumAmount}
+        />
+      </View>
+
+      <Text style={styles.label}>Premium frequency</Text>
+      <View style={styles.chipRow}>
+        {PREMIUM_FREQUENCIES.map((f) => {
+          const selected = premiumFrequency === f.id;
+          return (
+            <TouchableOpacity
+              key={f.id}
+              onPress={() => setPremiumFrequency(f.id)}
+              activeOpacity={0.7}
+              style={[styles.chip, selected && styles.chipSelected]}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                {f.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <Text style={styles.label}>Next renewal date</Text>
+      <TouchableOpacity
+        onPress={() => setShowRenewalPicker(true)}
+        style={styles.dateBtn}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.dateBtnText}>
+          {renewalDate
+            ? renewalDate.toLocaleDateString(undefined, {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+              })
+            : 'Pick renewal date'}
+        </Text>
+      </TouchableOpacity>
+      {showRenewalPicker && (
+        <DateTimePicker
+          value={renewalDate ?? new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, d) => {
+            setShowRenewalPicker(Platform.OS === 'ios');
+            if (event.type !== 'dismissed' && d) setRenewalDate(d);
+          }}
+        />
+      )}
+
+      <Text style={styles.label}>Sum assured (optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={coverAmount}
+        onChangeText={setCoverAmount}
+        keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+        placeholder="Cover amount"
+        placeholderTextColor={themeColors.text.muted}
+      />
+
+      <Text style={styles.label}>Log premium under</Text>
+      <View style={styles.pickerList}>
+        {expenseCategories.map((cat) => (
+          <QuickAddPickerItem
+            key={cat.id}
+            emoji={cat.emoji}
+            label={cat.label}
+            selected={expenseCategoryId === cat.id}
+            onPress={() => {
+              setExpenseCategoryId(cat.id);
+              setExpenseSubCategoryId(null);
+            }}
+          />
+        ))}
+      </View>
+
+      {subCategories.length > 0 && (
+        <>
+          <Text style={styles.label}>Sub-category</Text>
+          <View style={styles.chipRow}>
+            {subCategories.map((sub) => {
+              const selected = expenseSubCategoryId === sub.id;
+              return (
+                <TouchableOpacity
+                  key={sub.id}
+                  onPress={() => setExpenseSubCategoryId(sub.id)}
+                  activeOpacity={0.7}
+                  style={[styles.chip, selected && styles.chipSelected]}
+                >
+                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                    {sub.emoji ? `${sub.emoji} ` : ''}{sub.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </>
+      )}
+
+      <Text style={styles.label}>Tags (optional)</Text>
+      <TagInput
+        tags={tags}
+        onChangeTags={setTags}
+        placeholder="e.g. family-floater"
+      />
+
+      <Text style={styles.label}>Notes (optional)</Text>
+      <TextInput
+        style={[styles.input, styles.notesInput]}
+        value={notes}
+        onChangeText={setNotes}
+        placeholder="Nominee, agent contact, riders…"
+        placeholderTextColor={themeColors.text.muted}
+        multiline
+      />
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <View style={styles.actions}>
+        {onCancel ? (
+          <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity onPress={handleSubmit} style={styles.submitBtn}>
+          <Text style={styles.submitText}>{submitLabel}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const makeStyles = (c) => ({
+  card: {
+    backgroundColor: c.bg.surface,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: c.text.secondary,
+    marginTop: spacing.xs,
+  },
+  hint: {
+    fontSize: 12,
+    color: c.text.muted,
+    lineHeight: 17,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
+    fontSize: 16,
+    color: c.text.primary,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  amountInput: {
+    flex: 1,
+  },
+  notesInput: {
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  chip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.full,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  chipSelected: {
+    backgroundColor: '#0d9488',
+    borderColor: '#0d9488',
+  },
+  chipText: {
+    fontSize: 13,
+    color: c.text.primary,
+  },
+  chipTextSelected: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  dateBtn: {
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  dateBtnText: {
+    fontSize: 16,
+    color: c.text.primary,
+  },
+  pickerList: {
+    gap: spacing.xs,
+  },
+  error: {
+    color: c.accent.expense,
+    fontSize: 13,
+    marginTop: spacing.xs,
+  },
+  actions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  cancelBtn: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  cancelText: {
+    fontSize: 15,
+    color: c.text.secondary,
+  },
+  submitBtn: {
+    backgroundColor: '#0d9488',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
+  },
+  submitText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+});

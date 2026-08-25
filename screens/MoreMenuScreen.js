@@ -9,7 +9,7 @@
 //
 // Section rationale (5 groups, ~14 items):
 //
-//   1. Analyze     — "Show me trends / history" (Reports, Search)
+//   1. Analyze     — "Show me trends / history" (Search, Reports, …)
 //   2. Track & rules — "Set ongoing rules or accounts" (Budgets, Loans,
 //                    Goals, Recurring, Transfers)
 //   3. Import      — Bulk data-in flows (Bank statement, Transactions CSV)
@@ -40,6 +40,20 @@ const SECTIONS = [
     caption: 'See where your money goes and where it\'s heading.',
     items: [
       {
+        route: 'DataHealth',
+        icon: 'activity',
+        name: 'Data Health',
+        desc: 'Find missing links, FX rates, duplicate entries, stale reconciliations, and portfolio issues.',
+        tint: '#059669',
+      },
+      {
+        route: 'ActivityTimeline',
+        icon: 'activity',
+        name: 'Activity & search',
+        desc: 'Timeline of income, spending, transfers, and loans — switch to Find for advanced transaction search.',
+        tint: '#0ea5e9',
+      },
+      {
         route: 'Reports',
         icon: 'bar-chart-2',
         name: 'Reports',
@@ -50,15 +64,8 @@ const SECTIONS = [
         route: 'AccountActivity',
         icon: 'activity',
         name: 'Account Activity',
-        desc: 'Opening balance, money in, money out, closing balance, and recent movements per account.',
+        desc: 'Opening balance, money in/out, and closing balance per account — switch to Find to search transactions in that account.',
         tint: '#0ea5e9',
-      },
-      {
-        route: 'Search',
-        icon: 'search',
-        name: 'Search',
-        desc: 'Find transactions by note, category, tag, account, or amount.',
-        tint: '#0891b2',
       },
       {
         route: 'CashFlow',
@@ -74,11 +81,11 @@ const SECTIONS = [
     caption: 'Ongoing money rules and relationships.',
     items: [
       {
-        route: 'Budgets',
-        icon: 'target',
-        name: 'Budgets',
-        desc: 'Set spending caps per category or overall, tracked automatically.',
-        tint: '#dc2626',
+        route: 'Plans',
+        icon: 'compass',
+        name: 'Plans',
+        desc: 'Budgets and goals — monthly limits, savings targets, and one-time spend caps.',
+        tint: '#6366f1',
       },
       {
         route: 'Loans',
@@ -88,18 +95,18 @@ const SECTIONS = [
         tint: '#dc2626',
       },
       {
-        route: 'Goals',
-        icon: 'flag',
-        name: 'Goals',
-        desc: 'Set savings targets or spending caps and track progress automatically.',
-        tint: '#059669',
-      },
-      {
         route: 'RecurringTransactions',
         icon: 'repeat',
         name: 'Recurring',
         desc: 'Auto-add salary, rent, subscriptions, and SIPs on a schedule.',
         tint: '#f59e0b',
+      },
+      {
+        route: 'InsurancePolicies',
+        icon: 'shield',
+        name: 'Insurance',
+        desc: 'Track health, term, motor policies — premiums, renewals, and recurring links.',
+        tint: '#0d9488',
       },
     ],
   },

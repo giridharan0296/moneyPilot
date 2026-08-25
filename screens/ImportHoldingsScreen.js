@@ -2,7 +2,7 @@
 // ImportHoldingsScreen — a 4-step wizard, all on one screen:
 //
 //   1) Pick broker (chip row)                — narrows the column presets
-//   2) Pick CSV file (document picker)       — reads the raw text
+//   2) Pick CSV / Excel file                 — reads rows from the file
 //   3) Map columns (auto-detected + manual)  — user can override any field
 //   4) Preview parsed rows, confirm to save  — pure until this step
 //
@@ -20,11 +20,15 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Modal,
+  Pressable,
+  TextInput,
 } from 'react-native';
-import { pickTextFile } from '../lib/openFile';
+import { pickFile } from '../lib/openFile';
 
 import { BROKERS } from '../constants';
 import { parseCSV } from '../lib/csv';
+import { parseXLSX } from '../lib/xlsx';
 import {
   parseHoldings,
   autoDetectColumns,
@@ -32,7 +36,7 @@ import {
 } from '../lib/parseHoldings';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useSettings } from '../contexts/SettingsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AppIcon from '../components/AppIcon';
 
 function formatMoney(n) {
@@ -46,8 +50,23 @@ const EMPTY_COLUMNS = Object.fromEntries(
   HOLDING_FIELDS.map((f) => [f.key, null]),
 );
 
+function bestHoldingsSheet(sheets, brokerId) {
+  const nonEmpty = sheets.filter((sheet) => sheet.rows.length > 0);
+  if (nonEmpty.length === 0) return null;
+
+  return nonEmpty.reduce((best, sheet) => {
+    const detected = autoDetectColumns(sheet.headers, brokerId);
+    const score =
+      (detected.symbol ? 10 : 0) +
+      (detected.quantity ? 10 : 0) +
+      HOLDING_FIELDS.filter((field) => detected[field.key]).length;
+    return !best || score > best.score ? { sheet, score } : best;
+  }, null)?.sheet;
+}
+
 export default function ImportHoldingsScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const { importFromBroker } = usePortfolio();
   const { brokers: userBrokers } = useSettings();
 
@@ -75,12 +94,16 @@ export default function ImportHoldingsScreen({ navigation }) {
 
   const [broker, setBroker] = useState('zerodha');
   const [fileName, setFileName] = useState(null);
-  // Cache the raw CSV text so switching brokers can re-parse without
+  // Cache parsed rows so switching brokers can re-parse without
   // forcing the user to re-pick the exact same file. Users experimenting
   // with different broker mappings should be able to iterate freely.
-  const [fileText, setFileText] = useState(null);
+  const [fileRows, setFileRows] = useState([]);
   const [headers, setHeaders] = useState([]);        // ordered header strings
+  const [fileMeta, setFileMeta] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [brokerPickerOpen, setBrokerPickerOpen] = useState(false);
+  const [brokerSearch, setBrokerSearch] = useState('');
+  const [mappingExpanded, setMappingExpanded] = useState(false);
 
   // User-visible column mapping. Starts as auto-detected on file pick /
   // broker change; user can override any field.
@@ -89,25 +112,49 @@ export default function ImportHoldingsScreen({ navigation }) {
   async function handlePickFile() {
     try {
       setLoading(true);
-      // Some brokers name CSVs .xls, so accept a broad set of MIME types.
-      const picked = await pickTextFile({
-        mimeTypes: ['text/csv', 'text/comma-separated-values', 'application/csv', 'text/plain', '*/*'],
+      const picked = await pickFile({
+        mimeTypes: [
+          'text/csv',
+          'text/comma-separated-values',
+          'application/csv',
+          'text/plain',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+          '*/*',
+        ],
       });
       if (picked.cancelled) {
         setLoading(false);
         return;
       }
 
-      // Grab the ORIGINAL-CASE headers straight from the low-level
-      // parser (lib/csv.js). parseHoldings has its own internal wrapper
-      // that lowercases keys for lookup, but the UI needs the pretty
-      // original strings to show as chips.
-      const { headers: rawHeaders } = parseCSV(picked.text);
+      const ext = (picked.name ?? '').toLowerCase().split('.').pop();
+      let parsed;
+      if (ext === 'xlsx' || ext === 'xls') {
+        const base64 = await picked.readBase64();
+        const { sheets } = parseXLSX(base64, { rawNumbers: true });
+        parsed = bestHoldingsSheet(sheets, broker);
+      } else {
+        parsed = parseCSV(await picked.readText());
+      }
+
+      if (!parsed?.rows?.length) {
+        Alert.alert('Empty file', 'No readable holdings rows found in this file.');
+        return;
+      }
+
+      const rawHeaders = parsed.headers;
 
       setFileName(picked.name);
-      setFileText(picked.text);
+      setFileRows(parsed.rows);
       setHeaders(rawHeaders);
-      setColumns(autoDetectColumns(rawHeaders, broker));
+      setFileMeta({
+        format: ext === 'xlsx' || ext === 'xls' ? 'Excel' : 'CSV',
+        sheet: parsed.name ?? null,
+      });
+      const detected = autoDetectColumns(rawHeaders, broker);
+      setColumns(detected);
+      setMappingExpanded(!detected.symbol || !detected.quantity);
     } catch (e) {
       Alert.alert('Import failed', e.message ?? 'Could not read the file.');
     } finally {
@@ -122,7 +169,9 @@ export default function ImportHoldingsScreen({ navigation }) {
     // discarded — which is the correct behaviour because a Zerodha
     // "Qty." override doesn't necessarily map cleanly to Groww semantics.
     if (headers.length > 0) {
-      setColumns(autoDetectColumns(headers, id));
+      const detected = autoDetectColumns(headers, id);
+      setColumns(detected);
+      setMappingExpanded(!detected.symbol || !detected.quantity);
     }
   }
 
@@ -138,14 +187,20 @@ export default function ImportHoldingsScreen({ navigation }) {
   // Live preview: re-parse on every mapping / broker change so the user
   // sees the effect immediately. Cheap because the file is a few KB.
   const result = useMemo(() => {
-    if (!fileText) return null;
-    return parseHoldings({ text: fileText, broker, columns });
-  }, [fileText, broker, columns]);
+    if (fileRows.length === 0) return null;
+    return parseHoldings({ rows: fileRows, broker, columns });
+  }, [fileRows, broker, columns]);
 
   const ready =
     result?.ok &&
     columns.symbol && columns.quantity &&
     (result?.holdings?.length ?? 0) > 0;
+
+  const mappedCount = HOLDING_FIELDS.filter((field) => columns[field.key]).length;
+  const selectedBroker = brokerChoices.find((choice) => choice.id === broker);
+  const filteredBrokers = brokerChoices.filter((choice) =>
+    `${choice.label} ${choice.id}`.toLowerCase().includes(brokerSearch.trim().toLowerCase()),
+  );
 
   function handleConfirm() {
     if (!ready) return;
@@ -157,37 +212,30 @@ export default function ImportHoldingsScreen({ navigation }) {
     );
   }
 
-  const brokerHint = brokerChoices.find((b) => b.id === broker)?.hint;
+  const brokerHint = selectedBroker?.hint;
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.container}
-      keyboardShouldPersistTaps="handled"
-    >
+    <View style={styles.screen}>
+      <ScrollView
+        contentContainerStyle={[styles.container, result && styles.containerWithFooter]}
+        keyboardShouldPersistTaps="handled"
+      >
       {/* STEP 1 — broker */}
       <StepHeader index={1} title="Broker" done={!!broker} />
-      <View style={styles.chipRow}>
-        {brokerChoices.map((b) => {
-          const active = broker === b.id;
-          return (
-            <TouchableOpacity
-              key={b.id}
-              style={[styles.chip, active && { borderColor: b.color, backgroundColor: b.color + '15' }]}
-              onPress={() => handleBrokerChange(b.id)}
-            >
-              <Text style={styles.chipEmoji}>{b.emoji}</Text>
-              <Text style={[styles.chipLabel, active && { color: b.color, fontWeight: '700' }]}>
-                {b.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <TouchableOpacity style={styles.selectField} onPress={() => setBrokerPickerOpen(true)}>
+        <View style={[styles.brokerMark, { backgroundColor: `${selectedBroker?.color ?? '#6b7280'}18` }]}>
+          <Text style={styles.brokerMarkText}>{selectedBroker?.emoji ?? '📄'}</Text>
+        </View>
+        <View style={styles.selectTextCol}>
+          <Text style={styles.selectLabel}>Import from</Text>
+          <Text style={styles.selectValue}>{selectedBroker?.label ?? broker}</Text>
+        </View>
+        <AppIcon name="chevron-down" size={18} color={colors.text.secondary} strokeWidth={2} />
+      </TouchableOpacity>
       {brokerHint ? <Text style={styles.hint}>{brokerHint}</Text> : null}
 
       {/* STEP 2 — file */}
-      <StepHeader index={2} title="CSV file" done={!!fileName} />
+      <StepHeader index={2} title="Holdings file" done={!!fileName} />
       <TouchableOpacity
         style={styles.pickerButton}
         onPress={handlePickFile}
@@ -201,12 +249,12 @@ export default function ImportHoldingsScreen({ navigation }) {
               <AppIcon name="file-text" size={32} color="#6b7280" strokeWidth={1.7} />
             </View>
             <Text style={styles.pickerLabel}>
-              {fileName ? `Selected: ${fileName}` : 'Pick CSV file'}
+              {fileName ? `Selected: ${fileName}` : 'Pick CSV or Excel file'}
             </Text>
             <Text style={styles.pickerSub}>
               {fileName
-                ? `${headers.length} column${headers.length === 1 ? '' : 's'} · tap to change`
-                : 'Choose from your phone'}
+                ? `${fileMeta?.format ?? 'File'}${fileMeta?.sheet ? ` · ${fileMeta.sheet}` : ''} · ${headers.length} columns`
+                : 'Supported: .csv, .xlsx, .xls'}
             </Text>
           </>
         )}
@@ -220,26 +268,54 @@ export default function ImportHoldingsScreen({ navigation }) {
             title="Map columns"
             done={!!columns.symbol && !!columns.quantity}
           />
-          <Text style={styles.hint}>
-            We auto-detected these based on your broker's format. Tap a column to
-            override, tap it again to clear.
-          </Text>
-          {HOLDING_FIELDS.map((f) => (
-            <ColumnMapper
-              key={f.key}
-              field={f}
-              headers={headers}
-              selected={columns[f.key]}
-              onSelect={(col) => setColumnFor(f.key, col)}
-            />
-          ))}
+          <TouchableOpacity
+            style={styles.mappingSummary}
+            onPress={() => setMappingExpanded((value) => !value)}
+          >
+            <View style={styles.mappingIcon}>
+              <AppIcon
+                name={columns.symbol && columns.quantity ? 'check' : 'alert-triangle'}
+                size={18}
+                color={columns.symbol && columns.quantity ? '#059669' : '#b45309'}
+                strokeWidth={2.2}
+              />
+            </View>
+            <View style={styles.selectTextCol}>
+              <Text style={styles.mappingTitle}>
+                {columns.symbol && columns.quantity ? 'Columns detected' : 'Mapping needs attention'}
+              </Text>
+              <Text style={styles.mappingSub}>{mappedCount} of {HOLDING_FIELDS.length} fields mapped</Text>
+            </View>
+            <Text style={styles.mappingAction}>{mappingExpanded ? 'Hide' : 'Review'}</Text>
+          </TouchableOpacity>
+          {mappingExpanded && (
+            <View style={styles.mappingEditor}>
+              {HOLDING_FIELDS.map((f) => (
+                <ColumnMapper
+                  key={f.key}
+                  field={f}
+                  headers={headers}
+                  selected={columns[f.key]}
+                  onSelect={(col) => setColumnFor(f.key, col)}
+                />
+              ))}
+            </View>
+          )}
         </>
       )}
 
       {/* STEP 4 — preview + confirm (only shown when a result exists) */}
       {result && (
         <>
-          <StepHeader index={4} title="Preview & import" done={false} />
+          <StepHeader index={4} title="Preview & import" done={ready} />
+
+          <View style={styles.validationRow}>
+            <StatusPill tone="good" label={`${result.holdings.length} ready`} />
+            <StatusPill
+              tone={result.errors.length > 0 ? 'warn' : 'neutral'}
+              label={`${result.errors.length} skipped`}
+            />
+          </View>
 
           {result.ok ? (
             <View style={styles.summaryCard}>
@@ -314,19 +390,6 @@ export default function ImportHoldingsScreen({ navigation }) {
             </View>
           )}
 
-          {result.ok && (
-            <TouchableOpacity
-              style={[styles.confirmButton, !ready && styles.confirmButtonDisabled]}
-              onPress={handleConfirm}
-              disabled={!ready}
-            >
-              <Text style={styles.confirmText}>
-                Import {result.holdings.length} holding
-                {result.holdings.length === 1 ? '' : 's'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
           <View style={styles.warningRow}>
             <AppIcon name="alert-triangle" size={16} color="#b45309" strokeWidth={2} />
             <Text style={styles.warning}>
@@ -336,7 +399,77 @@ export default function ImportHoldingsScreen({ navigation }) {
           </View>
         </>
       )}
-    </ScrollView>
+      </ScrollView>
+
+      {result?.ok && (
+        <View style={styles.footerBar}>
+          <View style={styles.footerTextCol}>
+            <Text style={styles.footerTitle}>{result.holdings.length} holdings ready</Text>
+            <Text style={styles.footerSub}>Replaces {selectedBroker?.label ?? broker} holdings</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.confirmButton, !ready && styles.confirmButtonDisabled]}
+            onPress={handleConfirm}
+            disabled={!ready}
+          >
+            <Text style={styles.confirmText}>Import</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <Modal
+        visible={brokerPickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBrokerPickerOpen(false)}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setBrokerPickerOpen(false)} />
+          <View style={styles.brokerSheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Select broker</Text>
+            <View style={styles.searchField}>
+              <AppIcon name="search" size={17} color={colors.text.secondary} strokeWidth={2} />
+              <TextInput
+                value={brokerSearch}
+                onChangeText={setBrokerSearch}
+                placeholder="Search brokers"
+                placeholderTextColor={colors.text.muted}
+                style={styles.searchInput}
+                autoCapitalize="none"
+              />
+            </View>
+            <ScrollView style={styles.brokerList} keyboardShouldPersistTaps="handled">
+              {filteredBrokers.map((choice) => {
+                const active = choice.id === broker;
+                return (
+                  <TouchableOpacity
+                    key={choice.id}
+                    style={[styles.brokerOption, active && styles.brokerOptionActive]}
+                    onPress={() => {
+                      handleBrokerChange(choice.id);
+                      setBrokerPickerOpen(false);
+                      setBrokerSearch('');
+                    }}
+                  >
+                    <Text style={styles.brokerOptionEmoji}>{choice.emoji}</Text>
+                    <Text style={[styles.brokerOptionLabel, active && styles.brokerOptionLabelActive]}>
+                      {choice.label}
+                    </Text>
+                    {active && <AppIcon name="check" size={17} color="#2563eb" strokeWidth={2.4} />}
+                  </TouchableOpacity>
+                );
+              })}
+              {filteredBrokers.length === 0 && (
+                <View style={styles.brokerEmpty}>
+                  <Text style={styles.brokerEmptyText}>No matching broker</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
@@ -431,9 +564,19 @@ function SummaryRow({ label, value, emphasize, positive }) {
   );
 }
 
+function StatusPill({ label, tone }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={[styles.statusPill, styles[`statusPill_${tone}`]]}>
+      <Text style={[styles.statusPillText, styles[`statusPillText_${tone}`]]}>{label}</Text>
+    </View>
+  );
+}
+
 const makeStyles = (c) => ({
   screen:    { flex: 1, backgroundColor: c.bg.canvas },
   container: { padding: 16, paddingBottom: 40 },
+  containerWithFooter: { paddingBottom: 112 },
 
   stepHeader: { flexDirection: 'row', alignItems: 'center', marginTop: 18, marginBottom: 10 },
   stepBadge: {
@@ -469,6 +612,17 @@ const makeStyles = (c) => ({
   chipSmallActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   chipTextSmall: { fontSize: 12, color: c.text.secondary },
 
+  selectField: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: 14, borderWidth: 1,
+    borderColor: c.border.subtle, backgroundColor: c.bg.surface,
+  },
+  brokerMark: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  brokerMarkText: { fontSize: 20 },
+  selectTextCol: { flex: 1, minWidth: 0 },
+  selectLabel: { fontSize: 11, color: c.text.muted, fontWeight: '600' },
+  selectValue: { fontSize: 15, color: c.text.primary, fontWeight: '700', marginTop: 2 },
+
   hint: {
     fontSize: 12,
     color: c.text.secondary,
@@ -494,6 +648,16 @@ const makeStyles = (c) => ({
   pickerSub: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
 
   mapBlock: { marginTop: 10, marginBottom: 6 },
+  mappingSummary: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: 14, borderWidth: 1,
+    borderColor: c.border.subtle, backgroundColor: c.bg.surface,
+  },
+  mappingIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: c.bg.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  mappingTitle: { fontSize: 14, color: c.text.primary, fontWeight: '700' },
+  mappingSub: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
+  mappingAction: { fontSize: 12, color: '#2563eb', fontWeight: '800' },
+  mappingEditor: { marginTop: 6 },
   mapLabelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -518,6 +682,15 @@ const makeStyles = (c) => ({
   summaryValue: { fontSize: 15, color: c.text.primary, fontWeight: '600' },
   summaryValueBold: { fontSize: 17, fontWeight: '800' },
   divider: { height: 1, backgroundColor: c.border.subtle },
+  validationRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  statusPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+  statusPill_good: { backgroundColor: '#dcfce7' },
+  statusPill_warn: { backgroundColor: '#ffedd5' },
+  statusPill_neutral: { backgroundColor: c.bg.surfaceAlt },
+  statusPillText: { fontSize: 11, fontWeight: '800' },
+  statusPillText_good: { color: '#166534' },
+  statusPillText_warn: { color: '#9a3412' },
+  statusPillText_neutral: { color: c.text.secondary },
 
   errorTitle: { fontSize: 15, fontWeight: '700', color: '#991b1b', padding: 16 },
   errorBody:  { fontSize: 13, color: '#7f1d1d', paddingHorizontal: 16, paddingBottom: 16 },
@@ -557,7 +730,7 @@ const makeStyles = (c) => ({
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 16,
+    paddingHorizontal: 24,
   },
   confirmButtonDisabled: { backgroundColor: '#a7f3d0' },
   confirmText: { color: '#fff', fontSize: 15, fontWeight: '700' },
@@ -576,4 +749,37 @@ const makeStyles = (c) => ({
     fontStyle: 'italic',
     flexShrink: 1,
   },
+  footerBar: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16,
+    borderTopWidth: 1, borderTopColor: c.border.subtle,
+    backgroundColor: c.bg.surface,
+  },
+  footerTextCol: { flex: 1, minWidth: 0 },
+  footerTitle: { fontSize: 14, fontWeight: '800', color: c.text.primary },
+  footerSub: { fontSize: 11, color: c.text.secondary, marginTop: 2 },
+  modalRoot: { flex: 1, justifyContent: 'flex-end' },
+  modalBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15,23,42,0.45)' },
+  brokerSheet: {
+    maxHeight: '78%', backgroundColor: c.bg.surface,
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    paddingHorizontal: 16, paddingTop: 10, paddingBottom: 24,
+  },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: c.border.strong, alignSelf: 'center', marginBottom: 14 },
+  sheetTitle: { fontSize: 18, fontWeight: '800', color: c.text.primary, marginBottom: 12 },
+  searchField: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, borderRadius: 12, borderWidth: 1,
+    borderColor: c.border.subtle, backgroundColor: c.bg.surfaceAlt,
+  },
+  searchInput: { flex: 1, minHeight: 44, color: c.text.primary, fontSize: 14 },
+  brokerList: { marginTop: 10 },
+  brokerOption: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 12, borderRadius: 12 },
+  brokerOptionActive: { backgroundColor: c.bg.surfaceAlt },
+  brokerOptionEmoji: { width: 32, fontSize: 18 },
+  brokerOptionLabel: { flex: 1, fontSize: 14, color: c.text.primary, fontWeight: '600' },
+  brokerOptionLabelActive: { color: '#2563eb', fontWeight: '800' },
+  brokerEmpty: { paddingVertical: 28, alignItems: 'center' },
+  brokerEmptyText: { fontSize: 13, color: c.text.muted },
 });

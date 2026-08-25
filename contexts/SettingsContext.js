@@ -166,6 +166,366 @@ function mergeMissingDefaultSubcats(stored, defaults) {
   });
 }
 
+// Adds the dedicated Gift expense category to existing installs. If the
+// user already created a category named Gift/Gifts, keep their category
+// identity and styling, and only merge the new starter sub-categories.
+function ensureExpenseGiftCategory(stored) {
+  if (!Array.isArray(stored)) return stored;
+  const seededGift = DEFAULT_EXPENSE_CATEGORIES.find((category) => category.id === 'gifts');
+  if (!seededGift) return stored;
+  const existingIndex = stored.findIndex((category) => {
+    const label = String(category?.label ?? '').trim().toLowerCase();
+    return category?.id === seededGift.id || label === 'gift' || label === 'gifts';
+  });
+  if (existingIndex < 0) return [...stored, seededGift];
+  const existing = stored[existingIndex];
+  const existingSubs = Array.isArray(existing.subCategories) ? existing.subCategories : [];
+  const existingSubIds = new Set(existingSubs.map((item) => item.id));
+  const missingSubs = seededGift.subCategories.filter((item) => !existingSubIds.has(item.id));
+  if (missingSubs.length === 0) return stored;
+  return stored.map((category, index) => (
+    index === existingIndex
+      ? { ...category, subCategories: [...existingSubs, ...missingSubs] }
+      : category
+  ));
+}
+
+// Adds Utilities as a first-class expense category to existing installs.
+// Matching by label avoids duplicating a category the user already created.
+function ensureExpenseUtilitiesCategory(stored) {
+  if (!Array.isArray(stored)) return stored;
+  const seededUtilities = DEFAULT_EXPENSE_CATEGORIES.find(
+    (category) => category.id === 'utilities',
+  );
+  if (!seededUtilities) return stored;
+  const exists = stored.some((category) => (
+    category?.id === seededUtilities.id
+    || String(category?.label ?? '').trim().toLowerCase() === 'utilities'
+  ));
+  return exists ? stored : [...stored, seededUtilities];
+}
+
+const NEW_EXPENSE_CATEGORY_IDS = [
+  'pets',
+  'personal_care',
+  'education',
+  'household',
+  'travel',
+  'family_support',
+  'events',
+];
+
+// Adds the new first-class categories while respecting a user-created
+// category with the same label. Starter sub-categories are merged by id,
+// preserving the existing category's identity, styling, and custom entries.
+function ensureNewExpenseCategories(stored) {
+  if (!Array.isArray(stored)) return stored;
+  let result = stored;
+  for (const categoryId of NEW_EXPENSE_CATEGORY_IDS) {
+    const seeded = DEFAULT_EXPENSE_CATEGORIES.find((item) => item.id === categoryId);
+    if (!seeded) continue;
+    const seededLabel = String(seeded.label).trim().toLowerCase();
+    const existingIndex = result.findIndex((item) => (
+      item?.id === categoryId
+      || String(item?.label ?? '').trim().toLowerCase() === seededLabel
+    ));
+    if (existingIndex < 0) {
+      result = [...result, seeded];
+      continue;
+    }
+    const existing = result[existingIndex];
+    const existingSubs = Array.isArray(existing.subCategories) ? existing.subCategories : [];
+    const existingIds = new Set(existingSubs.map((item) => item.id));
+    const missingSubs = seeded.subCategories.filter((item) => !existingIds.has(item.id));
+    if (missingSubs.length > 0) {
+      result = result.map((item, index) => (
+        index === existingIndex
+          ? { ...item, subCategories: [...existingSubs, ...missingSubs] }
+          : item
+      ));
+    }
+  }
+  return result;
+}
+
+const LEGACY_BILLS_UTILITY_SUBCATEGORY_IDS = new Set([
+  'bills_electricity',
+  'bills_water',
+  'bills_gas',
+  'bills_internet',
+  'bills_phone',
+  'bills_dth',
+]);
+
+// Utilities now owns these choices. Remove their former Bills entries so
+// the picker does not show the same household services in two categories.
+function removeLegacyUtilitiesFromBills(stored) {
+  if (!Array.isArray(stored)) return stored;
+  return stored.map((category) => {
+    if (category?.id !== 'bills' || !Array.isArray(category.subCategories)) {
+      return category;
+    }
+    const subCategories = category.subCategories.filter(
+      (item) => !LEGACY_BILLS_UTILITY_SUBCATEGORY_IDS.has(item?.id),
+    );
+    return subCategories.length === category.subCategories.length
+      ? category
+      : { ...category, subCategories };
+  });
+}
+
+const DEPRECATED_LIFESTYLE_SUBCATEGORY_IDS = new Set([
+  'shopping_household', 'shopping_furniture', 'shopping_appliances',
+  'shopping_beauty', 'shopping_gifts',
+  'gifts_family_relatives', 'gifts_host',
+  'fun_books', 'fun_travel',
+  'other_gifts',
+  'other_salon',
+]);
+
+// Function names (wedding, reception, sangeet, …) belong in tags, not
+// sub-categories. These legacy subs are removed from the Events picker.
+const DEPRECATED_EVENTS_FUNCTION_SUBCATEGORY_IDS = new Set([
+  'events_wedding',
+  'events_reception',
+  'events_engagement',
+  'events_sangeet',
+  'events_birthday',
+  'events_housewarming',
+  'events_religious',
+]);
+
+function pruneDeprecatedEventFunctionSubs(stored) {
+  if (!Array.isArray(stored)) return stored;
+  return stored.map((category) => {
+    if (category?.id !== 'events' || !Array.isArray(category.subCategories)) {
+      return category;
+    }
+    return {
+      ...category,
+      subCategories: category.subCategories.filter(
+        (item) => !DEPRECATED_EVENTS_FUNCTION_SUBCATEGORY_IDS.has(item?.id),
+      ),
+    };
+  });
+}
+
+function optimizeExpenseLifestyleCategories(stored) {
+  if (!Array.isArray(stored)) return stored;
+  const targetIds = new Set(['shopping', 'gifts', 'fun']);
+  const defaultsById = new Map(DEFAULT_EXPENSE_CATEGORIES.map((item) => [item.id, item]));
+  return stored.map((category) => {
+    if (category?.id === 'other') {
+      return {
+        ...category,
+        subCategories: (category.subCategories ?? []).filter(
+          (item) => !DEPRECATED_LIFESTYLE_SUBCATEGORY_IDS.has(item?.id),
+        ),
+      };
+    }
+    if (!targetIds.has(category?.id)) return category;
+    const defaults = defaultsById.get(category.id)?.subCategories ?? [];
+    const defaultIds = new Set(defaults.map((item) => item.id));
+    const custom = (category.subCategories ?? []).filter(
+      (item) => !defaultIds.has(item?.id) && !DEPRECATED_LIFESTYLE_SUBCATEGORY_IDS.has(item?.id),
+    );
+    return { ...category, label: defaultsById.get(category.id)?.label ?? category.label, subCategories: [...defaults, ...custom] };
+  });
+}
+
+// Clarifies the boundary between routine local transport and longer trips.
+// Stable ids preserve transaction references while their labels are updated.
+function separateTransportAndTravel(stored) {
+  if (!Array.isArray(stored)) return stored;
+  const labelsById = new Map([
+    ['transport_public', 'Local Bus'],
+    ['transport_metro', 'Metro / Local Train'],
+    ['travel_trains', 'Intercity Train'],
+    ['travel_bus', 'Intercity Bus'],
+  ]);
+  return stored.map((category) => {
+    if (!['transport', 'travel'].includes(category?.id)
+      || !Array.isArray(category.subCategories)) {
+      return category;
+    }
+    let changed = false;
+    const subCategories = category.subCategories
+      .filter((item) => {
+        if (item?.id !== 'transport_travel') return true;
+        changed = true;
+        return false;
+      })
+      .map((item) => {
+        const label = labelsById.get(item?.id);
+        if (!label || item.label === label) return item;
+        changed = true;
+        return { ...item, label };
+      });
+    return changed ? { ...category, subCategories } : category;
+  });
+}
+
+const NEW_INCOME_CATEGORY_IDS = ['rental', 'pension_benefits'];
+const NEW_INVESTMENT_CATEGORY_IDS = [
+  'etfs',
+  'bonds',
+  'government_savings',
+  'retirement',
+  'derivatives',
+  'insurance_investments',
+];
+
+function ensureSeededCategories(stored, defaults, categoryIds) {
+  if (!Array.isArray(stored)) return stored;
+  let result = stored;
+  for (const categoryId of categoryIds) {
+    const seeded = defaults.find((item) => item.id === categoryId);
+    if (!seeded || result.some((item) => item?.id === categoryId)) continue;
+    result = [...result, seeded];
+  }
+  return result;
+}
+
+const DEPRECATED_INCOME_SUBCATEGORY_IDS = new Set([
+  'income_rental',
+  'income_maturity',
+  'other_loan_received',
+  'other_rent_received',
+]);
+const DEPRECATED_INVESTMENT_SUBCATEGORY_IDS = new Set([
+  'stocks_us',
+  'stocks_dividend',
+  'stocks_ipo',
+  'stocks_fno',
+  'mf_sip',
+  'fd_ssy',
+  'fd_kvp',
+  'other_bonds',
+  'other_ppf_nps',
+  'other_nps',
+  'other_insurance',
+  'gold_etf',
+  'gold_sgb',
+  'gold_silver_etf',
+]);
+
+function optimizeFinancialCategories(stored, defaults, deprecatedIds) {
+  if (!Array.isArray(stored)) return stored;
+  const defaultsById = new Map(defaults.map((item) => [item.id, item]));
+  return stored.map((category) => {
+    const seeded = defaultsById.get(category?.id);
+    if (!seeded) return category;
+    const subCategories = (Array.isArray(category.subCategories) ? category.subCategories : [])
+      .filter((item) => !deprecatedIds.has(item?.id))
+      .map((item) => {
+        const seededSub = seeded.subCategories?.find((entry) => entry.id === item.id);
+        return seededSub && seededSub.label !== item.label
+          ? { ...item, label: seededSub.label }
+          : item;
+      });
+    return { ...category, label: seeded.label, subCategories };
+  });
+}
+
+// Align stored lists with the default seed order. Custom categories the
+// user added stay at the end; default categories pick up any new subs
+// from the seed and drop duplicate sub ids.
+function reorderCategoriesToDefaults(stored, defaults) {
+  if (!Array.isArray(stored)) return defaults;
+  const storedById = new Map(stored.map((item) => [item.id, item]));
+  const defaultIds = new Set(defaults.map((item) => item.id));
+  const ordered = defaults.map((seed) => {
+    const existing = storedById.get(seed.id);
+    return existing ? { ...existing } : { ...seed };
+  });
+  const custom = stored.filter((item) => item?.id && !defaultIds.has(item.id));
+  return [...ordered, ...custom];
+}
+
+/** Repair stored sub-labels that look like a truncated copy of the current seed. */
+function mergeStoredSubLabel(storedLabel, seedLabel, subId) {
+  const stored = String(storedLabel ?? '').trim();
+  const seed = String(seedLabel ?? '').trim();
+  if (!seed) return stored || '';
+  if (!stored) return seed;
+  if (stored === seed) return seed;
+  // Known legacy abbreviations that should pick up the new seed wording.
+  if (
+    subId === 'food_fruitveg'
+    && (
+      stored === 'Fruits & Veg'
+      || stored === 'Fruits &'
+      || stored === 'Fruits &\u00a0Veg'
+      || stored === 'Fruits and Veg'
+      || stored === 'Fruits and'
+      || stored === 'Fruits and\u00a0'
+      || stored === 'Fruits and\u00a0Veg'
+    )
+  ) {
+    return seed;
+  }
+  if (
+    seed.startsWith(stored)
+    && seed.length > stored.length
+    && seed.length - stored.length <= 8
+  ) {
+    return seed;
+  }
+  return stored;
+}
+
+function repairTruncatedSeededSubLabels(stored, defaults) {
+  if (!Array.isArray(stored)) return stored;
+  const defaultsById = new Map(defaults.map((item) => [item.id, item]));
+  return stored.map((category) => {
+    const seeded = defaultsById.get(category?.id);
+    if (!seeded?.subCategories?.length) return category;
+    const seedById = new Map(seeded.subCategories.map((sub) => [sub.id, sub]));
+    let changed = false;
+    const subCategories = (category.subCategories ?? []).map((sub) => {
+      const seedSub = seedById.get(sub.id);
+      if (!seedSub) return sub;
+      const label = mergeStoredSubLabel(sub.label, seedSub.label, sub.id);
+      if (label === sub.label) return sub;
+      changed = true;
+      return { ...sub, label };
+    });
+    return changed ? { ...category, subCategories } : category;
+  });
+}
+
+function syncSeededCategorySubcategories(stored, defaults, deprecatedSubIds = new Set()) {
+  if (!Array.isArray(stored)) return stored;
+  const defaultsById = new Map(defaults.map((item) => [item.id, item]));
+  return stored.map((category) => {
+    const seeded = defaultsById.get(category?.id);
+    if (!seeded) return category;
+    const seededSubs = Array.isArray(seeded.subCategories) ? seeded.subCategories : [];
+    const storedSubs = (Array.isArray(category.subCategories) ? category.subCategories : [])
+      .filter((item) => item?.id && !deprecatedSubIds.has(item.id));
+    const seen = new Set();
+    const deduped = storedSubs.filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+    const storedBySubId = new Map(deduped.map((item) => [item.id, item]));
+    const defaultSubIds = new Set(seededSubs.map((item) => item.id));
+    const orderedDefaults = seededSubs.map((seedSub) => {
+      const existing = storedBySubId.get(seedSub.id);
+      return existing
+        ? {
+            ...seedSub,
+            ...existing,
+            label: mergeStoredSubLabel(existing.label, seedSub.label, seedSub.id),
+          }
+        : seedSub;
+    });
+    const custom = deduped.filter((item) => !defaultSubIds.has(item.id));
+    return { ...category, subCategories: [...orderedDefaults, ...custom] };
+  });
+}
+
 // The complete set of migration keys the CURRENT app expects to be
 // applied. Kept in one place so the load effect + restore path agree.
 // When a new merge migration ships, bump the top key (e.g. `_v4`) here
@@ -175,8 +535,22 @@ const CATEGORY_MIGRATION_KEYS = [
   'merge_default_subcats_v2',
   'merge_default_subcats_v3',
   'merge_default_subcats_v4',
+  'add_expense_gift_category_v5',
+  'repair_expense_subcategories_v6',
+  'add_expense_utilities_category_v7',
+  'separate_bills_and_utilities_v8',
+  'add_expense_categories_v9',
+  'separate_transport_and_travel_v10',
+  'optimize_income_investment_categories_v11',
+  'optimize_shopping_gifts_fun_v12',
+  'add_expense_family_support_v13',
+  'add_expense_events_reorder_v14',
+  'restructure_events_department_subs_v15',
+  'add_events_travel_sweets_subs_v16',
+  'add_household_events_subs_v17',
+  'add_events_jewellery_sub_v18',
 ];
-const CURRENT_CATEGORY_MIGRATION = 'merge_default_subcats_v4';
+const CURRENT_CATEGORY_MIGRATION = 'add_events_jewellery_sub_v18';
 
 // Persist categories THEN the migration flag, IN THAT ORDER. Ordering
 // matters because of the crash-window (BK-M3):
@@ -446,6 +820,10 @@ export function SettingsProvider({ children }) {
         let income     = migrateCategoriesWithSubs(incRaw ? JSON.parse(incRaw) : DEFAULT_INCOME_CATEGORIES);
         let investment = migrateCategoriesWithSubs(invRaw ? JSON.parse(invRaw) : DEFAULT_INVESTMENT_CATEGORIES);
 
+        expense    = repairTruncatedSeededSubLabels(expense, DEFAULT_EXPENSE_CATEGORIES);
+        income     = repairTruncatedSeededSubLabels(income, DEFAULT_INCOME_CATEGORIES);
+        investment = repairTruncatedSeededSubLabels(investment, DEFAULT_INVESTMENT_CATEGORIES);
+
         // One-time merge of default sub-categories for known seeded
         // categories. Adds any missing default subs to every default
         // category — preserves user edits and custom subs. Each bump of
@@ -460,10 +838,60 @@ export function SettingsProvider({ children }) {
         //        deleted a default sub will see it re-appear once —
         //        after which they can delete again and it stays gone.
         //   v4 → Gold Chit sub-category under Gold investments.
+        //   v5 → dedicated Gift expense category.
+        //   v6 → repairs missing default sub-categories across every type.
+        //   v7 → dedicated Utilities expense category.
+        //   v8 → removes utility sub-categories from Bills.
+        //   v9 → adds Pets, Personal Care, Education, Household, and Travel.
+        //   v10 → separates routine local transport from longer trips.
+        //   v11 → expands and de-duplicates income and investment taxonomy.
+        //   v12 → shopping / gifts / fun taxonomy cleanup.
+        //   v13 → Family Support expense category (monthly parent support).
+        //   v14 → Events & Functions category + category/sub order sync.
+        //   v15 → Events sub-categories = departments only (functions → tags).
+        //   v16 → Events: Travel + Sweets & Snacks subs.
+        //   v17 → Household toiletries + Events accessories/cosmetics subs.
+        //   v18 → Events: Jewellery & Ornaments sub (split from Clothing).
         if (!migApplied.has(CURRENT_CATEGORY_MIGRATION)) {
+          expense    = ensureExpenseGiftCategory(expense);
+          expense    = ensureExpenseUtilitiesCategory(expense);
+          expense    = ensureNewExpenseCategories(expense);
           expense    = mergeMissingDefaultSubcats(expense,    DEFAULT_EXPENSE_CATEGORIES);
+          expense    = removeLegacyUtilitiesFromBills(expense);
+          expense    = separateTransportAndTravel(expense);
+          expense    = optimizeExpenseLifestyleCategories(expense);
+          expense    = syncSeededCategorySubcategories(
+            expense,
+            DEFAULT_EXPENSE_CATEGORIES,
+            new Set([
+              ...DEPRECATED_LIFESTYLE_SUBCATEGORY_IDS,
+              ...DEPRECATED_EVENTS_FUNCTION_SUBCATEGORY_IDS,
+            ]),
+          );
+          expense    = pruneDeprecatedEventFunctionSubs(expense);
+          expense    = reorderCategoriesToDefaults(expense, DEFAULT_EXPENSE_CATEGORIES);
+          income     = ensureSeededCategories(
+            income, DEFAULT_INCOME_CATEGORIES, NEW_INCOME_CATEGORY_IDS,
+          );
+          investment = ensureSeededCategories(
+            investment, DEFAULT_INVESTMENT_CATEGORIES, NEW_INVESTMENT_CATEGORY_IDS,
+          );
           income     = mergeMissingDefaultSubcats(income,     DEFAULT_INCOME_CATEGORIES);
           investment = mergeMissingDefaultSubcats(investment, DEFAULT_INVESTMENT_CATEGORIES);
+          income     = optimizeFinancialCategories(
+            income, DEFAULT_INCOME_CATEGORIES, DEPRECATED_INCOME_SUBCATEGORY_IDS,
+          );
+          investment = optimizeFinancialCategories(
+            investment, DEFAULT_INVESTMENT_CATEGORIES, DEPRECATED_INVESTMENT_SUBCATEGORY_IDS,
+          );
+          income     = syncSeededCategorySubcategories(
+            income, DEFAULT_INCOME_CATEGORIES, DEPRECATED_INCOME_SUBCATEGORY_IDS,
+          );
+          investment = syncSeededCategorySubcategories(
+            investment, DEFAULT_INVESTMENT_CATEGORIES, DEPRECATED_INVESTMENT_SUBCATEGORY_IDS,
+          );
+          income     = reorderCategoriesToDefaults(income, DEFAULT_INCOME_CATEGORIES);
+          investment = reorderCategoriesToDefaults(investment, DEFAULT_INVESTMENT_CATEGORIES);
           for (const key of CATEGORY_MIGRATION_KEYS) migApplied.add(key);
           // BK-M3 fix: persist categories BEFORE the migration flag so
           // a crash between the two writes is recoverable (merge is
@@ -881,23 +1309,41 @@ export function SettingsProvider({ children }) {
     // The old code no-op'd on missing keys, which produced a Frankenstein
     // hybrid of pre-restore settings + post-restore transactions.
     const cats = payload.categories || {};
-    const mergedExpense = mergeMissingDefaultSubcats(
-      migrateCategoriesWithSubs(
-        Array.isArray(cats.expense) ? cats.expense : DEFAULT_EXPENSE_CATEGORIES,
-      ),
-      DEFAULT_EXPENSE_CATEGORIES,
-    );
-    const mergedIncome = mergeMissingDefaultSubcats(
-      migrateCategoriesWithSubs(
-        Array.isArray(cats.income) ? cats.income : DEFAULT_INCOME_CATEGORIES,
+    const mergedExpense = optimizeExpenseLifestyleCategories(separateTransportAndTravel(removeLegacyUtilitiesFromBills(ensureNewExpenseCategories(
+      ensureExpenseUtilitiesCategory(ensureExpenseGiftCategory(mergeMissingDefaultSubcats(
+          migrateCategoriesWithSubs(
+            Array.isArray(cats.expense) ? cats.expense : DEFAULT_EXPENSE_CATEGORIES,
+          ),
+          DEFAULT_EXPENSE_CATEGORIES,
+        ))),
+    ))));
+    const mergedIncome = optimizeFinancialCategories(
+      mergeMissingDefaultSubcats(
+        ensureSeededCategories(
+          migrateCategoriesWithSubs(
+            Array.isArray(cats.income) ? cats.income : DEFAULT_INCOME_CATEGORIES,
+          ),
+          DEFAULT_INCOME_CATEGORIES,
+          NEW_INCOME_CATEGORY_IDS,
+        ),
+        DEFAULT_INCOME_CATEGORIES,
       ),
       DEFAULT_INCOME_CATEGORIES,
+      DEPRECATED_INCOME_SUBCATEGORY_IDS,
     );
-    const mergedInvestment = mergeMissingDefaultSubcats(
-      migrateCategoriesWithSubs(
-        Array.isArray(cats.investment) ? cats.investment : DEFAULT_INVESTMENT_CATEGORIES,
+    const mergedInvestment = optimizeFinancialCategories(
+      mergeMissingDefaultSubcats(
+        ensureSeededCategories(
+          migrateCategoriesWithSubs(
+            Array.isArray(cats.investment) ? cats.investment : DEFAULT_INVESTMENT_CATEGORIES,
+          ),
+          DEFAULT_INVESTMENT_CATEGORIES,
+          NEW_INVESTMENT_CATEGORY_IDS,
+        ),
+        DEFAULT_INVESTMENT_CATEGORIES,
       ),
       DEFAULT_INVESTMENT_CATEGORIES,
+      DEPRECATED_INVESTMENT_SUBCATEGORY_IDS,
     );
     setCategories({
       expense:    mergedExpense,

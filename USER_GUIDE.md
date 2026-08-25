@@ -69,6 +69,10 @@ You can create more than one account in every group.
 
 An opening balance is the money already in an account when you begin tracking it. It is not income and does not affect budgets, reports, or savings rate.
 
+The opening-balance date is also the account's tracking boundary. Transactions
+before that date are already reflected in the opening balance, so the app does
+not apply them to the account again.
+
 The account activity balance is calculated as:
 
 ```text
@@ -190,6 +194,12 @@ Use Loans for formal loans. It supports:
 - Prepayments
 - Loan closure
 - Net-worth liability mirroring
+
+When an older loan is backfilled, every past EMI remains in the loan ledger so
+principal, interest, and outstanding balance stay accurate. EMIs before the
+selected cash account's opening-balance date are treated as historical: they do
+not create account transfers or expense-report entries. EMIs on or after that
+date create the normal principal transfer and loan-interest expense.
 
 ### Portfolio
 

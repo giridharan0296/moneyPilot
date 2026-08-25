@@ -162,7 +162,6 @@ export default function CategoryPieChart({
         />
         {segments.map((seg) => {
           const isSelected = selectedIndex === seg.index;
-          const isDimmed = selectedIndex != null && !isSelected;
           const tx = isSelected ? seg.popDx : 0;
           const ty = isSelected ? seg.popDy : 0;
           return (
@@ -176,7 +175,7 @@ export default function CategoryPieChart({
                 stroke={sliceStroke}
                 strokeWidth={2}
                 strokeLinejoin="round"
-                opacity={isDimmed ? 0.28 : 1}
+                opacity={1}
                 onPress={() => setSelectedIndex(isSelected ? null : seg.index)}
               />
             </G>
@@ -202,7 +201,7 @@ export default function CategoryPieChart({
             <>
               <Text
                 style={styles.centerSliceLabel}
-                numberOfLines={1}
+                numberOfLines={2}
                 adjustsFontSizeToFit
                 minimumFontScale={0.75}
               >
@@ -273,7 +272,8 @@ export function PieLegendList({
       {visible.map((r, index) => {
         const selected = selectedIndex === index;
         const pct = total > 0 ? (r.value / total) * 100 : 0;
-        const key = r.categoryId ?? r.id ?? `${r.label}-${index}`;
+        const rowId = r.categoryId ?? r.id ?? r.label;
+        const key = `${rowId}-${index}`;
         return (
           <Pressable
             key={key}
@@ -288,27 +288,26 @@ export function PieLegendList({
               <View style={[
                 styles.legendSwatch,
                 { backgroundColor: r.color },
-                selected && styles.legendSwatchSelected,
               ]}
               />
               <View style={styles.legendTextCol}>
                 <Text
                   style={[styles.legendLabel, selected && styles.legendLabelSelected]}
-                  numberOfLines={1}
                 >
                   {r.emoji ? `${r.emoji} ` : ''}{r.label}
                 </Text>
-                {selected && (
-                  <Text style={[styles.legendAmount, styles.legendAmountSelected]} numberOfLines={1}>
-                    {formatMoneyCurrency(r.value, baseCurrency, { decimals: 0 })}
-                  </Text>
-                )}
+                <Text
+                  style={[styles.legendAmount, selected && styles.legendAmountSelected]}
+                  numberOfLines={1}
+                >
+                  {formatMoneyCurrency(r.value, baseCurrency, { decimals: 0 })}
+                </Text>
               </View>
               <View style={styles.legendPercentCol}>
                 <Text
                   style={[
                     styles.legendPercent,
-                    selected && { color: r.color },
+                    selected && styles.legendPercentSelected,
                   ]}
                   numberOfLines={1}
                 >
@@ -365,12 +364,7 @@ export function PieBreakdownView({
   const total = rows.reduce((s, x) => s + x.value, 0);
 
   return (
-    <Pressable
-      style={styles.pieBreakdown}
-      onPress={() => {
-        if (selectedIndex != null) setSelectedIndex(null);
-      }}
-    >
+    <View style={styles.pieBreakdown}>
       <View style={styles.chartCol}>
         <CategoryPieChart
           data={data}
@@ -390,7 +384,7 @@ export function PieBreakdownView({
         maxItems={maxLegend}
         style={styles.legendFullWidth}
       />
-    </Pressable>
+    </View>
   );
 }
 
@@ -418,17 +412,13 @@ const makeStyles = (c) => ({
     borderRadius: radii.md,
     borderLeftWidth: 3,
     borderLeftColor: 'transparent',
-    overflow: 'hidden',
   },
   legendItemSelected: {
     backgroundColor: c.bg.surfaceAlt,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    borderLeftWidth: 3,
   },
   legendHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing.xs,
     minWidth: 0,
     overflow: 'hidden',
@@ -443,11 +433,7 @@ const makeStyles = (c) => ({
     height: 10,
     borderRadius: 3,
     flexShrink: 0,
-  },
-  legendSwatchSelected: {
-    width: 12,
-    height: 12,
-    borderRadius: 4,
+    marginTop: 3,
   },
   legendLabel: {
     fontSize: 12,
@@ -470,13 +456,17 @@ const makeStyles = (c) => ({
     width: 44,
     flexShrink: 0,
     alignItems: 'flex-end',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 1,
   },
   legendPercent: {
     fontSize: 11,
     fontWeight: '800',
     color: c.text.secondary,
     textAlign: 'right',
+  },
+  legendPercentSelected: {
+    color: c.text.primary,
   },
   progressTrack: {
     height: 4,
@@ -516,7 +506,6 @@ const makeStyles = (c) => ({
     borderWidth: 0,
     borderColor: 'transparent',
     backgroundColor: 'transparent',
-    overflow: 'hidden',
   },
   centerHubSelected: {
     borderWidth: 2,

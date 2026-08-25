@@ -30,6 +30,8 @@ export default function TrendBarChart({
   height = HEIGHT,
   incomeColor = '#10b981',
   expenseColor = '#ef4444',
+  incomeLabel = 'Income',
+  expenseLabel = 'Expense',
 }) {
   const styles = useThemedStyles(makeStyles);
   if (!data || data.length === 0) {
@@ -121,11 +123,11 @@ export default function TrendBarChart({
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: incomeColor }]} />
-          <Text style={styles.legendText}>Income</Text>
+          <Text style={styles.legendText}>{incomeLabel}</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: expenseColor }]} />
-          <Text style={styles.legendText}>Expense</Text>
+          <Text style={styles.legendText}>{expenseLabel}</Text>
         </View>
       </View>
     </View>

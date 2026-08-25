@@ -20,7 +20,10 @@ import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
+import { usePortfolio } from '../contexts/PortfolioContext';
+import { useNetWorth } from '../contexts/NetWorthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useRecurring } from '../contexts/RecurringContext';
 import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { radii, spacing, elevation } from '../lib/theme';
@@ -29,7 +32,36 @@ import {
   formatMoney as formatMoneyCurrency,
   isForeign,
 } from '../lib/currency';
+import { formatSubCategoryLabel } from '../lib/categoryDisplay';
+import { buildRecurringRuleInput } from '../lib/recurring';
 import { formatChitGrams, GOLD_CHIT_SUB_ID, isClosedGoldChitTx } from '../lib/goldChit';
+import {
+  aggregateOpeningLots,
+  buildOpeningPositionPayload,
+  openingLotsFromSaved,
+  removeSavedOpeningLots,
+  syncOpeningLots,
+} from '../lib/openingPositions';
+import { holdingPortfolioSymbol } from '../lib/portfolioHoldings';
+
+function investmentBrokerKey(tx) {
+  return tx?.openingPosition?.broker ?? tx?.brokerId ?? 'logged';
+}
+
+function investmentSymbolKey(tx) {
+  const raw = tx?.openingPosition?.symbol ?? tx?.instrumentSymbol;
+  return raw ? holdingPortfolioSymbol({ symbol: raw }) : null;
+}
+
+function hasOtherInvestmentLogs(items, { excludeId, broker, symbolKey }) {
+  if (!symbolKey) return false;
+  return items.some((tx) => {
+    if (excludeId && tx.id === excludeId) return false;
+    if (!tx.instrumentSymbol) return false;
+    if (holdingPortfolioSymbol({ symbol: tx.instrumentSymbol }) !== symbolKey) return false;
+    return (tx.brokerId || 'logged') === broker;
+  });
+}
 
 // ----------------------------------------------------------------------------
 // TransactionsList — the reusable "list of transactions of one type" screen.
@@ -83,6 +115,8 @@ export default function TransactionsList({
         : themeColors.accent.investment
   );
   const resolvedAccentColor = accentColor ?? resolvedAmountColor;
+  const { addOpeningPosition, removeOpeningPosition, removeOpeningPositionsForInstrument, clearOpeningPositions } = usePortfolio();
+  const { unhidePortfolioSymbol } = useNetWorth();
   const t = {
     totalLabel: 'TOTAL',
     chartTitle: 'By Category',
@@ -145,6 +179,7 @@ export default function TransactionsList({
     clearTransactions,
   } = useTransactions();
   const { showToast, showUndoableToast } = useToast();
+  const { addRule } = useRecurring();
   const { confirm } = useConfirmSheet();
 
   const items = listFor(type);
@@ -250,9 +285,12 @@ export default function TransactionsList({
   // `amountInBase` snapshot; pure INR (or same-as-base) rows keep their
   // raw `amount`. This means the headline TOTAL is always in the user's
   // base currency, even for multi-currency accounts.
-  const total = filteredItems.reduce(
-    (sum, e) => sum + baseAmountOf(e, fxRates, baseCurrency, 'amount'),
-    0,
+  const total = useMemo(
+    () => filteredItems.reduce(
+      (sum, e) => sum + baseAmountOf(e, fxRates, baseCurrency, 'amount'),
+      0,
+    ),
+    [filteredItems, fxRates, baseCurrency],
   );
 
   // Bucket every filtered transaction by its categoryId. Any tx pointing at
@@ -260,7 +298,7 @@ export default function TransactionsList({
   // synthetic "Unknown / Deleted" slice — this way the pie segments always
   // sum to TOTAL (previously stale-category rows silently disappeared from
   // the chart while still counting in the headline number).
-  const byCategory = (() => {
+  const byCategory = useMemo(() => {
     const totals = {};
     for (const e of filteredItems) {
       const inBase = baseAmountOf(e, fxRates, baseCurrency, 'amount');
@@ -296,7 +334,7 @@ export default function TransactionsList({
       });
     }
     return slices.sort((a, b) => b.value - a.value);
-  })();
+  }, [filteredItems, categories, fxRates, baseCurrency, total, unknownCategory]);
 
   useEffect(() => {
     setChartSelection(null);
@@ -350,6 +388,7 @@ export default function TransactionsList({
         instrumentName: values.instrumentName ?? null,
         instrumentType: values.instrumentType ?? null,
         investmentUnits: values.investmentUnits ?? null,
+        historicalOnly: values.historicalOnly === true,
         ...(values.chitSchemeId ? {
           chitSchemeId: values.chitSchemeId,
           chitSchemeName: values.chitSchemeName,
@@ -373,7 +412,69 @@ export default function TransactionsList({
         payslipAmountMode: values.payslipAmountMode ?? null,
       } : {}),
     };
+    let openingResult = null;
+    if (type === 'investment' && values.openingPosition) {
+      const lots = openingLotsFromSaved(values.openingPosition);
+      const broker = values.openingPosition.broker ?? values.brokerId;
+      const symbol = values.openingPosition.symbol ?? values.instrumentSymbol;
+      if (broker && symbol) {
+        removeOpeningPositionsForInstrument(broker, symbol);
+      }
+      openingResult = syncOpeningLots({
+        broker,
+        symbol,
+        name: values.openingPosition.name ?? values.instrumentName ?? values.instrumentSymbol,
+        lots,
+        previousLots: [],
+        addOpeningPosition,
+        removeOpeningPosition,
+      });
+      if (openingResult?.ok) {
+        newItem.openingPosition = buildOpeningPositionPayload({
+          broker: values.openingPosition.broker ?? values.brokerId,
+          symbol: values.openingPosition.symbol ?? values.instrumentSymbol,
+          name: values.openingPosition.name ?? values.instrumentName ?? values.instrumentSymbol,
+          lots: openingResult.lots,
+          trackingDate: values.openingPosition.openingDate,
+        });
+      } else {
+        showToast('Investment saved, but opening lots failed — edit the entry to add them again.', {
+          variant: 'warning',
+          duration: 3500,
+        });
+      }
+    }
     addTransaction(type, newItem);
+    if (type === 'investment' && values.instrumentSymbol) {
+      unhidePortfolioSymbol(values.instrumentSymbol);
+    }
+
+    let recurringCreated = false;
+    if (values.makeRecurring) {
+      const ruleInput = buildRecurringRuleInput(values, type);
+      if (ruleInput) {
+        const created = addRule(ruleInput);
+        recurringCreated = Boolean(created);
+        if (!created) {
+          showToast('Entry saved, but the recurring rule could not be created.', {
+            variant: 'warning',
+            duration: 3500,
+          });
+        }
+      }
+    }
+
+    const recurringSuffix = recurringCreated ? ' · recurring rule added' : '';
+
+    if (openingResult?.ok) {
+      const summary = aggregateOpeningLots(openingResult.lots);
+      showToast(
+        (values.historicalOnly
+          ? `Historical holding saved — ${summary.quantity.toLocaleString('en-IN')} units in portfolio (bank balance unchanged).`
+          : `Saved current purchase + ${summary.quantity} historical units across ${openingResult.lots.length} lot${openingResult.lots.length === 1 ? '' : 's'}.`) + recurringSuffix,
+        { variant: 'success', duration: recurringCreated ? 2800 : 2500 },
+      );
+    }
 
     // Remember "user last used <broker> for <sub-category>". Only
     // record when BOTH are present — writing null would poison the
@@ -424,13 +525,83 @@ export default function TransactionsList({
           onAction: () => setBrokerFilter(null),
         },
       );
-    } else {
-      showToast('Saved', { variant: 'success', duration: 1500 });
+    } else if (!(type === 'investment' && openingResult?.ok)) {
+      showToast(
+        recurringCreated ? 'Saved · recurring rule added' : 'Saved',
+        { variant: 'success', duration: recurringCreated ? 2200 : 1500 },
+      );
     }
   };
 
   const handleSaveEdit = (updated) => {
+    if (type === 'investment' && editing) {
+      const prevBroker = investmentBrokerKey(editing);
+      const prevSymbol = investmentSymbolKey(editing);
+      const nextBroker = investmentBrokerKey(updated);
+      const nextSymbol = investmentSymbolKey(updated);
+      const instrumentChanged = Boolean(
+        prevSymbol && nextSymbol && (prevSymbol !== nextSymbol || prevBroker !== nextBroker),
+      );
+
+      if (instrumentChanged) {
+        if (editing.openingPosition) {
+          removeSavedOpeningLots(editing.openingPosition, removeOpeningPosition);
+        }
+        if (
+          prevSymbol
+          && !hasOtherInvestmentLogs(items, {
+            excludeId: editing.id,
+            broker: prevBroker,
+            symbolKey: prevSymbol,
+          })
+        ) {
+          removeOpeningPositionsForInstrument(prevBroker, prevSymbol);
+        }
+      }
+
+      if (updated.openingPosition) {
+        const lots = openingLotsFromSaved(updated.openingPosition);
+        const broker = updated.openingPosition.broker ?? updated.brokerId;
+        const symbol = updated.openingPosition.symbol ?? updated.instrumentSymbol;
+        if (broker && symbol) {
+          removeOpeningPositionsForInstrument(broker, symbol);
+        }
+        const openingResult = syncOpeningLots({
+          broker,
+          symbol,
+          name: updated.openingPosition.name ?? updated.instrumentName ?? updated.instrumentSymbol,
+          lots,
+          previousLots: instrumentChanged ? [] : openingLotsFromSaved(editing.openingPosition),
+          addOpeningPosition,
+          removeOpeningPosition,
+        });
+        if (openingResult?.ok) {
+          updated.openingPosition = buildOpeningPositionPayload({
+            broker: updated.openingPosition.broker ?? updated.brokerId,
+            symbol: updated.openingPosition.symbol ?? updated.instrumentSymbol,
+            name: updated.openingPosition.name ?? updated.instrumentName ?? updated.instrumentSymbol,
+            lots: openingResult.lots,
+            trackingDate: updated.openingPosition.openingDate,
+          });
+        }
+      } else if (editing.openingPosition) {
+        removeSavedOpeningLots(editing.openingPosition, removeOpeningPosition);
+        if (
+          prevSymbol
+          && !hasOtherInvestmentLogs(items, {
+            excludeId: editing.id,
+            broker: prevBroker,
+            symbolKey: prevSymbol,
+          })
+        ) {
+          removeOpeningPositionsForInstrument(prevBroker, prevSymbol);
+        }
+      }
+    }
     updateTransaction(type, updated);
+    if (type === 'investment' && updated.instrumentSymbol) {
+      unhidePortfolioSymbol(updated.instrumentSymbol);
+    }
     // Same "remember last broker" write on Edit. This is intentional:
     // if the user CORRECTS a wrong broker choice, that correction is
     // just as good a signal as an Add for what "usually" goes with
@@ -457,9 +628,29 @@ export default function TransactionsList({
   // touching the voice-note file yet, shows a toast with Undo, and schedules
   // the audio cleanup only when the undo window expires. If the user taps
   // Undo we re-insert the item and cancel the pending file delete.
+  const cleanupOpeningForDeletedInvestment = useCallback((item) => {
+    if (type !== 'investment') return;
+    if (item.openingPosition) {
+      removeSavedOpeningLots(item.openingPosition, removeOpeningPosition);
+      return;
+    }
+    if (item.instrumentSymbol && item.brokerId) {
+      const hasOtherLogs = items.some((tx) =>
+        tx.id !== item.id
+        && tx.instrumentSymbol
+        && String(tx.instrumentSymbol).toUpperCase() === String(item.instrumentSymbol).toUpperCase()
+        && tx.brokerId === item.brokerId,
+      );
+      if (!hasOtherLogs) {
+        removeOpeningPositionsForInstrument(item.brokerId, item.instrumentSymbol);
+      }
+    }
+  }, [type, items, removeOpeningPosition, removeOpeningPositionsForInstrument]);
+
   const softDeleteWithUndo = useCallback(
     (item) => {
       if (!item) return;
+      cleanupOpeningForDeletedInvestment(item);
       deleteTransaction(type, item.id, { cleanupFiles: false });
 
       const UNDO_MS = 5000;
@@ -476,13 +667,41 @@ export default function TransactionsList({
         onUndo: () => {
           undone = true;
           clearTimeout(cleanupTimer);
-          addTransaction(type, item);
+          if (type === 'investment' && item.openingPosition) {
+            const lots = openingLotsFromSaved(item.openingPosition);
+            const openingResult = syncOpeningLots({
+              broker: item.openingPosition.broker ?? item.brokerId,
+              symbol: item.openingPosition.symbol ?? item.instrumentSymbol,
+              name: item.openingPosition.name ?? item.instrumentName ?? item.instrumentSymbol,
+              lots,
+              previousLots: [],
+              addOpeningPosition,
+              removeOpeningPosition,
+            });
+            const restored = openingResult?.ok
+              ? {
+                ...item,
+                openingPosition: buildOpeningPositionPayload({
+                  broker: item.openingPosition.broker ?? item.brokerId,
+                  symbol: item.openingPosition.symbol ?? item.instrumentSymbol,
+                  name: item.openingPosition.name ?? item.instrumentName ?? item.instrumentSymbol,
+                  lots: openingResult.lots,
+                  trackingDate: item.openingPosition.openingDate,
+                }),
+              }
+              : item;
+            addTransaction(type, restored);
+          } else {
+            addTransaction(type, item);
+          }
         },
       });
     },
     [
       addTransaction,
+      addOpeningPosition,
       categories,
+      cleanupOpeningForDeletedInvestment,
       deleteTransaction,
       showUndoableToast,
       type,
@@ -506,7 +725,10 @@ export default function TransactionsList({
       confirmLabel: 'Clear',
       destructive: true,
     });
-    if (ok) clearTransactions(type);
+    if (ok) {
+      if (type === 'investment') clearOpeningPositions();
+      clearTransactions(type);
+    }
   };
 
   // ---- Render helpers ----
@@ -536,17 +758,19 @@ export default function TransactionsList({
       >
         <Text style={styles.rowEmoji}>{cat.emoji}</Text>
         <View style={styles.rowMiddle}>
-          <View style={styles.rowCategoryRow}>
-            <Text style={styles.rowCategory}>{cat.label}</Text>
-            {sub && (
-              <Text style={styles.rowSubCategory} numberOfLines={1}>
-                {' · '}{sub.emoji} {sub.label}
-              </Text>
-            )}
-          </View>
+          <Text style={styles.rowCategory}>{cat.label}</Text>
+          {sub && (
+            <Text style={styles.rowSubCategory}>
+              {sub.emoji} {formatSubCategoryLabel(sub.label)}
+            </Text>
+          )}
           {item.note ? (
             <Text style={styles.rowNote} numberOfLines={1}>
               {item.note}
+            </Text>
+          ) : type === 'investment' && item.instrumentName ? (
+            <Text style={styles.rowNote} numberOfLines={1}>
+              {item.instrumentName}
             </Text>
           ) : null}
           {item.tags && item.tags.length > 0 && (
@@ -690,12 +914,7 @@ export default function TransactionsList({
             </View>
 
             {byCategory.length > 0 && (
-              <Pressable
-                style={styles.chartCard}
-                onPress={() => {
-                  if (chartSelection != null) setChartSelection(null);
-                }}
-              >
+              <View style={styles.chartCard}>
                 <Text style={styles.chartTitle}>{t.chartTitle}</Text>
                 <CategoryPieChart
                   data={byCategory}
@@ -711,7 +930,7 @@ export default function TransactionsList({
                   onSelect={setChartSelection}
                   style={{ marginTop: spacing.lg, width: '100%' }}
                 />
-              </Pressable>
+              </View>
             )}
 
             {/* Inline add form was removed as part of the FAB migration:
@@ -1058,10 +1277,9 @@ const makeStyles = (c) => ({
     borderColor: c.accent.primary,
   },
   rowEmoji: { fontSize: 24, marginRight: spacing.md },
-  rowMiddle: { flex: 1 },
-  rowCategoryRow: { flexDirection: 'row', alignItems: 'center' },
+  rowMiddle: { flex: 1, minWidth: 0 },
   rowCategory: { fontSize: 14, fontWeight: '600', color: c.text.primary },
-  rowSubCategory: { fontSize: 12, color: c.text.secondary, flexShrink: 1 },
+  rowSubCategory: { fontSize: 12, color: c.text.secondary, marginTop: 2, lineHeight: 16 },
   rowNote: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
   rowTagsRow: {
     flexDirection: 'row',

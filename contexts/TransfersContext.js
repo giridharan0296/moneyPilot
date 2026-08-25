@@ -80,6 +80,20 @@ import { shortId } from '../lib/ids';
 
 const TransfersContext = createContext(null);
 
+function sanitizeTags(raw) {
+  const seen = new Set();
+  const out = [];
+  for (const r of raw) {
+    const s = String(r ?? '').trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
 
 function normalize(t) {
   const kind = ['cash_withdrawal', 'cash_deposit'].includes(t.kind)
@@ -102,6 +116,7 @@ function normalize(t) {
     // Shape: { ledger: 'asset'|'liability', item: <full asset or liability> }
     preEffectSnapshot: t.preEffectSnapshot ?? null,
     note:             (t.note ?? '').trim(),
+    tags:             Array.isArray(t?.tags) ? sanitizeTags(t.tags) : [],
     createdAt:        t.createdAt ?? new Date().toISOString(),
     voiceNote:        t.voiceNote ?? null,
   };
@@ -191,6 +206,7 @@ export function TransfersProvider({ children }) {
       linkedNetWorthId,
       interestAmount,
       note,
+      tags,
       voiceNote,
       createdAt,
       linkedLoanId,
@@ -321,6 +337,7 @@ export function TransfersProvider({ children }) {
         linkedExpenseId: newExpenseId,
         preEffectSnapshot,
         note,
+        tags,
         voiceNote,
         createdAt,
         linkedLoanId: linkedLoanId ?? null,
@@ -351,7 +368,7 @@ export function TransfersProvider({ children }) {
   // and re-create.
   //
   // Editable fields (patch): amount, interestAmount, accountId,
-  //                          counterpartyName, note, createdAt, voiceNote.
+  //                          counterpartyName, note, tags, createdAt, voiceNote.
   //
   // Returns { ok: true, transfer } on success, { ok: false, reason } on
   // validation error.

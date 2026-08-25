@@ -23,19 +23,22 @@ import {
 } from 'react-native';
 
 import { usePortfolio } from '../contexts/PortfolioContext';
+import { useNetWorth } from '../contexts/NetWorthContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
 import { baseAmountOf } from '../lib/currency';
 import { fetchLiveQuotes } from '../lib/fundamentals';
+import { instrumentDisplayLabel } from '../lib/instrumentMemory';
 import {
-  buildDisplayHoldings,
+  computePortfolioSummary,
+  holdingPortfolioSymbol,
   symbolsNeedingQuotes,
-  sumHoldingsValue,
 } from '../lib/portfolioHoldings';
 import AppIcon from '../components/AppIcon';
 import ScreenHelpIntro from '../components/ScreenHelpIntro';
+import { StatusBadge } from '../components/UiPrimitives';
 import { HELP_PORTFOLIO } from '../lib/helpContent';
 
 function formatMoney(n) {
@@ -81,7 +84,8 @@ function formatDateTime(iso) {
 
 export default function PortfolioScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
-  const { holdings, summary, clearAll, refreshLivePrices, pricesUpdatedAt } = usePortfolio();
+  const { holdings, clearAll, refreshLivePrices, pricesUpdatedAt } = usePortfolio();
+  const { isPortfolioSymbolHidden, unhidePortfolioSymbol } = useNetWorth();
   const { investments, income } = useTransactions();
   const { baseCurrency, fxRates, brokers } = useSettings();
   const { showToast } = useToast();
@@ -106,15 +110,17 @@ export default function PortfolioScreen({ navigation }) {
     [brokerById],
   );
 
-  const logMissingInvestment = useCallback((brokerId) => {
+  const openInvestmentEntry = useCallback((brokerId = null) => {
     navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
     setTimeout(() => {
       DeviceEventEmitter.emit('transactions:openAdd', {
         type: 'investment',
-        prefill: { brokerId },
+        prefill: brokerId ? { brokerId } : {},
       });
     }, 80);
   }, [navigation]);
+
+  const logMissingInvestment = openInvestmentEntry;
 
   // Tiny colored dot used everywhere a broker is referenced.
   const BrokerDot = useCallback(({ id, size = 8 }) => {
@@ -132,14 +138,49 @@ export default function PortfolioScreen({ navigation }) {
     );
   }, [brokerColor]);
 
-  const displayHoldings = useMemo(
-    () => buildDisplayHoldings(holdings, investments, transactionQuotes),
-    [holdings, investments, transactionQuotes],
+  const portfolioVisibility = useMemo(
+    () => ({ isSymbolHidden: isPortfolioSymbolHidden }),
+    [isPortfolioSymbolHidden],
   );
-  const displaySummary = useMemo(() => {
-    const totalValue = sumHoldingsValue(displayHoldings);
-    const totalCost = displayHoldings.reduce((sum, h) => sum + (Number(h.avgCost) || 0) * (Number(h.quantity) || 0), 0);
-    return { totalValue, totalCost, totalPnL: totalValue - totalCost, count: displayHoldings.length };
+
+  const portfolioSummary = useMemo(
+    () => computePortfolioSummary(holdings, investments, transactionQuotes, portfolioVisibility),
+    [holdings, investments, transactionQuotes, portfolioVisibility],
+  );
+  const displayHoldings = portfolioSummary.displayHoldings;
+  const displaySummary = useMemo(() => ({
+    totalValue: portfolioSummary.totalValue,
+    totalCost: portfolioSummary.totalCost,
+    totalPnL: portfolioSummary.totalPnL,
+    pnlPct: portfolioSummary.pnlPct,
+    count: portfolioSummary.count,
+  }), [portfolioSummary]);
+
+  const importedBrokerIds = useMemo(() => new Set(
+    holdings.filter((holding) => holding.source !== 'opening').map((holding) => holding.broker),
+  ), [holdings]);
+
+  const brokerCards = useMemo(() => {
+    const grouped = new Map();
+    for (const holding of displayHoldings) {
+      const row = grouped.get(holding.broker) ?? {
+        broker: holding.broker,
+        count: 0,
+        value: 0,
+        cost: 0,
+        pnl: 0,
+        importedAt: null,
+      };
+      row.count += 1;
+      row.value += Number(holding.currentValue) || 0;
+      row.cost += Number(holding.investedValue) || 0;
+      row.pnl += Number(holding.pnl) || 0;
+      if (holding.importedAt && (!row.importedAt || new Date(holding.importedAt) > new Date(row.importedAt))) {
+        row.importedAt = holding.importedAt;
+      }
+      grouped.set(holding.broker, row);
+    }
+    return [...grouped.values()].sort((a, b) => b.value - a.value);
   }, [displayHoldings]);
 
   // Sort so the biggest positions show up first.
@@ -208,6 +249,7 @@ export default function PortfolioScreen({ navigation }) {
     const bag = new Map(); // brokerId -> { logged, loggedCount, cost, holdingCount, importedAt }
 
     for (const tx of investments) {
+      if (tx.historicalOnly) continue;
       if (!tx.brokerId) continue; // unassigned tx have no side to compare against
       const bucket = bag.get(tx.brokerId) ?? {
         broker: tx.brokerId,
@@ -216,16 +258,23 @@ export default function PortfolioScreen({ navigation }) {
         cost: 0,
         holdingCount: 0,
         importedAt: null,
+        openingCost: 0,
+        openingCount: 0,
+        transactions: [],
       };
       // Convert to base currency so a USD investment doesn't skew
       // the INR-native holdings comparison. baseAmountOf falls back
       // to `amount` when the row is already in base.
       bucket.logged += baseAmountOf(tx, fxRates, baseCurrency, 'amount');
       bucket.loggedCount += 1;
+      bucket.transactions.push({
+        amount: baseAmountOf(tx, fxRates, baseCurrency, 'amount'),
+        createdAt: tx.createdAt,
+      });
       bag.set(tx.brokerId, bucket);
     }
 
-    for (const b of summary.byBroker) {
+    for (const b of portfolioSummary.byBroker) {
       const bucket = bag.get(b.broker) ?? {
         broker: b.broker,
         logged: 0,
@@ -233,10 +282,13 @@ export default function PortfolioScreen({ navigation }) {
         cost: 0,
         holdingCount: 0,
         importedAt: null,
+        transactions: [],
       };
       bucket.cost = b.cost || 0;
       bucket.holdingCount = b.count;
       bucket.importedAt = b.importedAt;
+      bucket.openingCost = b.openingCost || 0;
+      bucket.openingCount = b.openingCount || 0;
       bag.set(b.broker, bucket);
     }
 
@@ -245,21 +297,69 @@ export default function PortfolioScreen({ navigation }) {
     // Negative = user logged LESS ("you probably forgot to add a
     // few buy transactions"). We sort by absolute delta desc so the
     // biggest gaps land at the top of the list.
-    const rows = Array.from(bag.values()).map((r) => ({
-      ...r,
-      delta: r.logged - r.cost,
-    }));
+    const rows = Array.from(bag.values()).filter((r) => importedBrokerIds.has(r.broker)).map((r) => {
+      const importTime = r.importedAt ? new Date(r.importedAt).getTime() : NaN;
+      const hasImport = Number.isFinite(importTime);
+      let syncedLogged = 0;
+      let pendingLogged = 0;
+      let pendingCount = 0;
+      for (const tx of r.transactions ?? []) {
+        const txTime = new Date(tx.createdAt).getTime();
+        if (hasImport && Number.isFinite(txTime) && txTime <= importTime) {
+          syncedLogged += tx.amount;
+        } else {
+          pendingLogged += tx.amount;
+          pendingCount += 1;
+        }
+      }
+      const trackedCost = Math.max(0, r.cost - (r.openingCost || 0));
+      return {
+        ...r,
+        trackedCost,
+        syncedLogged,
+        pendingLogged,
+        pendingCount,
+        delta: syncedLogged - trackedCost,
+      };
+    });
     rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
     return rows;
-  }, [investments, summary.byBroker, fxRates, baseCurrency]);
+  }, [investments, portfolioSummary.byBroker, fxRates, baseCurrency, importedBrokerIds]);
 
   const hasHoldings = displayHoldings.length > 0;
+  const investmentsMissingHoldingData = investments.filter(
+    (tx) => !tx.instrumentSymbol || !(Number(tx.investmentUnits) > 0),
+  ).length;
+  const hiddenTrackedInvestments = useMemo(() => {
+    const seen = new Set();
+    const rows = [];
+    for (const tx of investments) {
+      if (!tx.instrumentSymbol || !(Number(tx.investmentUnits) > 0)) continue;
+      const symbol = holdingPortfolioSymbol({ symbol: tx.instrumentSymbol });
+      if (!symbol || !isPortfolioSymbolHidden(symbol) || seen.has(symbol)) continue;
+      seen.add(symbol);
+      rows.push({ symbol, label: tx.instrumentName || tx.instrumentSymbol });
+    }
+    return rows;
+  }, [investments, isPortfolioSymbolHidden]);
+
+  const restoreHiddenHoldings = useCallback(() => {
+    for (const row of hiddenTrackedInvestments) {
+      unhidePortfolioSymbol(row.symbol);
+    }
+    if (hiddenTrackedInvestments.length > 0) {
+      showToast('Restored hidden holdings to Portfolio and Net Worth.', {
+        variant: 'success',
+        duration: 2500,
+      });
+    }
+  }, [hiddenTrackedInvestments, showToast, unhidePortfolioSymbol]);
   const pnlIsPositive = displaySummary.totalPnL >= 0;
 
   function handleClearAll() {
     Alert.alert(
       'Clear all holdings?',
-      'This removes every imported broker holding. This cannot be undone.',
+      'This removes imported holdings and manual opening positions. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear all', style: 'destructive', onPress: () => clearAll() },
@@ -272,11 +372,15 @@ export default function PortfolioScreen({ navigation }) {
     setRefreshing(true);
     try {
       const result = await refreshLivePrices();
-      const trackedSymbols = symbolsNeedingQuotes(holdings, investments);
+      const trackedSymbols = symbolsNeedingQuotes(holdings, investments, portfolioVisibility);
       const tracked = trackedSymbols.length ? await fetchLiveQuotes(trackedSymbols) : null;
       if (tracked) setTransactionQuotes(tracked.quotes || {});
       result.updated += tracked?.resolved || 0;
-      result.failed = [...(result.failed || []), ...(tracked?.failed || [])];
+      result.failed = [
+        ...(result.failed || []),
+        ...(result.skipped || []),
+        ...(tracked?.failed || []),
+      ];
       const failedCount = result.failed?.length || 0;
       if (result.updated > 0) {
         const msg = failedCount > 0
@@ -316,16 +420,36 @@ export default function PortfolioScreen({ navigation }) {
           <View style={styles.emptyEmoji}>
             <AppIcon name="download" size={56} color="#9ca3af" strokeWidth={1.7} />
           </View>
-          <Text style={styles.emptyTitle}>No holdings imported</Text>
+          <Text style={styles.emptyTitle}>No holdings yet</Text>
           <Text style={styles.emptyBody}>
-            Import a CSV export from Zerodha, Groww, or any broker to see your
-            portfolio summary here. Or log investments with symbol and units.
+            {hiddenTrackedInvestments.length > 0
+              ? `${hiddenTrackedInvestments.length} investment${hiddenTrackedInvestments.length === 1 ? ' is' : 's are'} hidden because ${hiddenTrackedInvestments.length === 1 ? 'it was' : 'they were'} removed from Net Worth earlier. Restore below to show ${hiddenTrackedInvestments.length === 1 ? 'it' : 'them'} again.`
+              : investmentsMissingHoldingData > 0
+              ? `${investmentsMissingHoldingData} investment entr${investmentsMissingHoldingData === 1 ? 'y is' : 'ies are'} missing a symbol or units. Add those details to build holdings manually, or import a broker file if you prefer.`
+              : 'Add investments manually or import a broker file. Both tracking methods are optional and can be used independently.'}
           </Text>
+          {hiddenTrackedInvestments.length > 0 ? (
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={restoreHiddenHoldings}
+            >
+              <Text style={styles.primaryButtonText}>Restore hidden holdings</Text>
+            </TouchableOpacity>
+          ) : (
           <TouchableOpacity
             style={styles.primaryButton}
+            onPress={() => investmentsMissingHoldingData > 0
+              ? navigation.navigate('InvestmentsHome')
+              : openInvestmentEntry()}
+          >
+            <Text style={styles.primaryButtonText}>{investmentsMissingHoldingData > 0 ? 'Review investment entries' : 'Add investment manually'}</Text>
+          </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.secondaryButton}
             onPress={() => navigation.navigate('ImportHoldings')}
           >
-            <Text style={styles.primaryButtonText}>Import Holdings</Text>
+            <Text style={styles.secondaryButtonText}>Import broker holdings</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -386,7 +510,7 @@ export default function PortfolioScreen({ navigation }) {
                 { color: pnlIsPositive ? '#065f46' : '#991b1b' },
               ]}
             >
-              {pnlIsPositive ? '+' : '−'}{Math.abs(summary.pnlPct).toFixed(2)}%
+              {pnlIsPositive ? '+' : '−'}{Math.abs(displaySummary.pnlPct).toFixed(2)}%
             </Text>
           </View>
         </View>
@@ -398,6 +522,17 @@ export default function PortfolioScreen({ navigation }) {
             ? `Live prices · ${formatDateTime(pricesUpdatedAt)}`
             : 'Prices from last import — tap Refresh for live quotes'}
         </Text>
+      </View>
+
+      <View style={styles.quickActionsRow}>
+        <TouchableOpacity style={styles.quickAction} onPress={() => openInvestmentEntry()}>
+          <AppIcon name="plus" size={16} color="#7c3aed" strokeWidth={2.4} />
+          <Text style={styles.quickActionText}>Add investment</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickAction} onPress={() => navigation.navigate('ImportHoldings')}>
+          <AppIcon name="download" size={16} color="#7c3aed" strokeWidth={2.4} />
+          <Text style={styles.quickActionText}>Import holdings</Text>
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity
@@ -471,7 +606,7 @@ export default function PortfolioScreen({ navigation }) {
 
       {/* Per-broker cards */}
       <Text style={styles.sectionTitle}>By broker</Text>
-      {summary.byBroker.map((b) => (
+      {brokerCards.map((b) => (
         <View
           key={b.broker}
           style={[styles.brokerCard, { borderLeftColor: brokerColor(b.broker) }]}
@@ -480,12 +615,19 @@ export default function PortfolioScreen({ navigation }) {
             <View style={styles.brokerNameRow}>
               <BrokerDot id={b.broker} />
               <Text style={styles.brokerName}>{brokerLabel(b.broker)}</Text>
+              <StatusBadge
+                status={importedBrokerIds.has(b.broker) ? 'synced' : undefined}
+                label={importedBrokerIds.has(b.broker) ? undefined : 'Manual'}
+                tone="neutral"
+                icon="edit"
+              />
             </View>
             <Text style={styles.brokerValue}>{formatMoney(b.value)}</Text>
           </View>
           <View style={styles.brokerSubRow}>
             <Text style={styles.brokerMeta}>
-              {b.count} holding{b.count === 1 ? '' : 's'} · Imported {formatDate(b.importedAt)}
+              {b.count} holding{b.count === 1 ? '' : 's'}
+              {b.importedAt ? ` · Imported ${formatDate(b.importedAt)}` : ' · Entered manually'}
             </Text>
             <Text
               style={[
@@ -504,10 +646,9 @@ export default function PortfolioScreen({ navigation }) {
           it would be a lone header with no rows on a fresh install. */}
       {reconciliation.length > 0 && (
         <>
-          <Text style={styles.sectionTitle}>Reconciliation</Text>
+          <Text style={styles.sectionTitle}>Imported portfolio checks</Text>
           <Text style={styles.sectionSub}>
-            Money you logged as investment transactions vs the invested
-            cost of your imported holdings.
+            Only brokers using imports appear here. Manual-only portfolios do not require reconciliation.
           </Text>
           {reconciliation.map((r) => {
             const absDelta = Math.abs(r.delta);
@@ -516,17 +657,15 @@ export default function PortfolioScreen({ navigation }) {
             // gentle yellow tint, and everything else is a red
             // "check this" nudge. Percentages are relative to the
             // larger side so a small holding + no logs still flags.
-            const denom = Math.max(r.logged, r.cost, 1);
+            const denom = Math.max(r.syncedLogged, r.trackedCost, 1);
             const pct = absDelta / denom;
             const tier = absDelta < 500 ? 'ok'
                        : pct < 0.05 ? 'warn'
                        : 'alert';
+            const pendingSync = tier === 'ok' && r.pendingCount > 0;
             const tint = tier === 'ok'    ? '#059669'
                        : tier === 'warn'  ? '#f59e0b'
                        : '#dc2626';
-            const chip = tier === 'ok'    ? 'In sync'
-                       : tier === 'warn'  ? 'Small gap'
-                       : 'Check this';
             return (
               <View
                 key={r.broker}
@@ -537,12 +676,17 @@ export default function PortfolioScreen({ navigation }) {
                     <BrokerDot id={r.broker} />
                     <Text style={styles.brokerName}>{brokerLabel(r.broker)}</Text>
                   </View>
-                  <View style={[styles.reconChip, { backgroundColor: tint }]}>
-                    <Text style={styles.reconChipText}>{chip}</Text>
-                  </View>
+                  <StatusBadge status={pendingSync ? 'pending_sync' : tier === 'ok' ? 'reconciled' : 'needs_review'} />
                 </View>
+                <Text style={styles.reconExplanation}>
+                  {pendingSync
+                    ? `${r.pendingCount} investment transaction${r.pendingCount === 1 ? '' : 's'} added after the last holdings import.`
+                    : tier === 'ok'
+                      ? `Matched against holdings imported ${formatDate(r.importedAt) || 'recently'}.`
+                      : `This difference remains within transactions dated on or before the latest holdings import${r.importedAt ? ` (${formatDate(r.importedAt)})` : ''}.`}
+                </Text>
                 <View style={styles.reconRow}>
-                  <Text style={styles.reconLabel}>Logged</Text>
+                  <Text style={styles.reconLabel}>Logged total</Text>
                   <Text style={styles.reconValue}>
                     {formatMoney(r.logged)}
                     {r.loggedCount > 0
@@ -550,14 +694,26 @@ export default function PortfolioScreen({ navigation }) {
                       : '  ·  no transactions'}
                   </Text>
                 </View>
+                {r.pendingCount > 0 && (
+                  <View style={styles.reconRow}>
+                    <Text style={styles.reconLabel}>Awaiting import</Text>
+                    <Text style={styles.reconValue}>{formatMoney(r.pendingLogged)} · {r.pendingCount} tx</Text>
+                  </View>
+                )}
                 <View style={styles.reconRow}>
-                  <Text style={styles.reconLabel}>Holdings cost</Text>
+                  <Text style={styles.reconLabel}>Post-tracking cost</Text>
                   <Text style={styles.reconValue}>
                     {r.holdingCount > 0
-                      ? `${formatMoney(r.cost)}  ·  ${r.holdingCount} holding${r.holdingCount === 1 ? '' : 's'}`
+                      ? `${formatMoney(r.trackedCost)}  ·  ${r.holdingCount} holding${r.holdingCount === 1 ? '' : 's'}`
                       : 'no holdings imported'}
                   </Text>
                 </View>
+                {r.openingCost > 0 ? (
+                  <View style={styles.reconRow}>
+                    <Text style={styles.reconLabel}>Opening cost</Text>
+                    <Text style={styles.reconValue}>{formatMoney(r.openingCost)} · Historical</Text>
+                  </View>
+                ) : null}
                 {absDelta >= 1 && (
                   <View style={styles.reconRow}>
                     <Text style={styles.reconLabel}>Gap</Text>
@@ -570,6 +726,17 @@ export default function PortfolioScreen({ navigation }) {
                     </Text>
                   </View>
                 )}
+                {r.pendingCount > 0 && (
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('ImportHoldings')}
+                    style={styles.reconAction}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Import latest holdings for ${brokerLabel(r.broker)}`}
+                  >
+                    <AppIcon name="download" size={14} color={styles.reconActionText.color} strokeWidth={2.4} />
+                    <Text style={styles.reconActionText}>Import latest holdings</Text>
+                  </TouchableOpacity>
+                )}
                 {(r.delta < -0.01 || (r.loggedCount === 0 && r.holdingCount > 0)) && (
                   <TouchableOpacity
                     onPress={() => logMissingInvestment(r.broker)}
@@ -579,6 +746,17 @@ export default function PortfolioScreen({ navigation }) {
                   >
                     <AppIcon name="plus" size={14} color={styles.reconActionText.color} strokeWidth={2.4} />
                     <Text style={styles.reconActionText}>Log missing investment</Text>
+                  </TouchableOpacity>
+                )}
+                {!pendingSync && tier !== 'ok' && (
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('InvestmentsHome')}
+                    style={styles.reconAction}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Review investment transactions for ${brokerLabel(r.broker)}`}
+                  >
+                    <AppIcon name="search" size={14} color={styles.reconActionText.color} strokeWidth={2.4} />
+                    <Text style={styles.reconActionText}>Review transactions</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -592,6 +770,7 @@ export default function PortfolioScreen({ navigation }) {
       <View style={styles.listCard}>
         {sortedHoldings.map((h, i) => {
           const pnlPositive = (h.pnl || 0) >= 0;
+          const { primary: holdingLabel, secondary: holdingSymbolHint } = instrumentDisplayLabel(h);
           return (
             <TouchableOpacity
               key={`${h.broker}-${h.symbol}-${i}`}
@@ -605,7 +784,13 @@ export default function PortfolioScreen({ navigation }) {
               }
             >
               <View style={styles.holdingLeft}>
-                <Text style={styles.holdingSymbol}>{h.symbol}</Text>
+                <View style={styles.holdingSymbolRow}>
+                  <Text style={styles.holdingSymbol} numberOfLines={1}>{holdingLabel}</Text>
+                  {String(h.source).startsWith('opening') ? <StatusBadge status="historical" /> : null}
+                </View>
+                {holdingSymbolHint ? (
+                  <Text style={styles.holdingNameHint} numberOfLines={1}>{holdingSymbolHint}</Text>
+                ) : null}
                 {h.dayChangePct != null && (
                   <Text style={[styles.holdingPnl, { color: h.dayChangePct >= 0 ? '#059669' : '#dc2626' }]}>
                     Today {h.dayChangePct >= 0 ? '+' : ''}{Number(h.dayChangePct).toFixed(2)}%
@@ -639,7 +824,7 @@ export default function PortfolioScreen({ navigation }) {
         style={styles.primaryButton}
         onPress={() => navigation.navigate('ImportHoldings')}
       >
-        <Text style={styles.primaryButtonText}>Import / Re-sync</Text>
+        <Text style={styles.primaryButtonText}>Import / Re-sync broker (optional)</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.dangerButton} onPress={handleClearAll}>
         <Text style={styles.dangerButtonText}>Clear all holdings</Text>
@@ -739,6 +924,20 @@ const makeStyles = (c) => ({
   heroPnlPct: { fontSize: 12, fontWeight: '700' },
   heroSub:    { color: '#9ca3af', fontSize: 12, marginTop: 10 },
   heroLive:   { color: '#a5b4fc', fontSize: 11, marginTop: 6, fontWeight: '600' },
+  quickActionsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  quickAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  quickActionText: { color: c.text.primary, fontSize: 12, fontWeight: '700' },
 
   incomeCard: {
     backgroundColor: c.bg.surface,
@@ -794,6 +993,7 @@ const makeStyles = (c) => ({
 
   // ---- Reconciliation cards (per-broker: logged vs holdings cost) ----
   sectionSub: { fontSize: 12, color: c.text.secondary, marginTop: -4, marginBottom: 10 },
+  reconExplanation: { fontSize: 11, lineHeight: 16, color: c.text.secondary, marginBottom: 8 },
   reconCard: {
     backgroundColor: c.bg.surface,
     borderLeftWidth: 4,
@@ -849,7 +1049,9 @@ const makeStyles = (c) => ({
   },
   holdingRowBorder: { borderTopWidth: 1, borderTopColor: c.border.subtle },
   holdingLeft:   { flex: 1 },
-  holdingSymbol: { fontSize: 14, fontWeight: '700', color: c.text.primary },
+  holdingSymbolRow: { flexDirection: 'row', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+  holdingSymbol: { fontSize: 14, fontWeight: '700', color: c.text.primary, flexShrink: 1 },
+  holdingNameHint: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
   holdingMeta:   { fontSize: 12, color: c.text.secondary },
   holdingMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   holdingRight:  { alignItems: 'flex-end' },
@@ -865,6 +1067,17 @@ const makeStyles = (c) => ({
     marginTop: 8,
   },
   primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  secondaryButton: {
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    borderColor: c.border.strong,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 10,
+    alignSelf: 'stretch',
+  },
+  secondaryButtonText: { color: c.text.primary, fontSize: 15, fontWeight: '700' },
 
   dangerButton: {
     backgroundColor: 'transparent',

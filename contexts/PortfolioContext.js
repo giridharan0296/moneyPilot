@@ -26,10 +26,34 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STORAGE_KEYS } from '../constants';
 import {
   applyQuotesToHoldings,
+  baseSymbol,
   fetchLiveQuotes,
 } from '../lib/fundamentals';
+import { reconcileHoldingMetrics } from '../lib/portfolioHoldings';
 
 const PortfolioContext = createContext(null);
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function normalizeHolding(holding) {
+  return reconcileHoldingMetrics({
+    ...holding,
+    quantity: finiteNumber(holding?.quantity),
+    avgCost: finiteNumber(holding?.avgCost),
+    investedValue: holding?.investedValue != null
+      ? finiteNumber(holding.investedValue)
+      : finiteNumber(holding?.avgCost) * finiteNumber(holding?.quantity),
+    currentPrice: finiteNumber(holding?.currentPrice),
+    currentValue: finiteNumber(holding?.currentValue),
+  });
+}
+
+function holdingKey(holding) {
+  return `${holding?.broker || 'opening'}:${String(holding?.symbol || '').trim().toUpperCase()}`;
+}
 
 export function PortfolioProvider({ children }) {
   // Each holding: { broker, symbol, quantity, avgCost, currentPrice,
@@ -46,7 +70,10 @@ export function PortfolioProvider({ children }) {
           AsyncStorage.getItem(STORAGE_KEYS.portfolio_holdings),
           AsyncStorage.getItem(STORAGE_KEYS.portfolio_prices_updated_at),
         ]);
-        if (raw) setHoldings(JSON.parse(raw));
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          setHoldings(Array.isArray(parsed) ? parsed.map(normalizeHolding) : []);
+        }
         if (pricesRaw) setPricesUpdatedAt(pricesRaw);
       } catch (e) {
         console.warn('Failed to load portfolio holdings:', e);
@@ -82,11 +109,71 @@ export function PortfolioProvider({ children }) {
   // other brokers is preserved. `importedAt` is set once per import.
   const importFromBroker = useCallback((broker, items) => {
     const importedAt = new Date().toISOString();
-    const stamped = items.map((h) => ({ ...h, broker, importedAt }));
+    const stamped = items.map((h) => normalizeHolding({
+      ...h,
+      broker,
+      importedAt,
+      source: 'import',
+      importedCurrentPrice: h.currentPrice,
+      importedCurrentValue: h.currentValue,
+      importedPnl: h.pnl,
+    }));
     setHoldings((prev) => [
-      ...prev.filter((h) => h.broker !== broker),
+      ...prev.filter((h) => h.broker !== broker || h.source === 'opening'),
       ...stamped,
     ]);
+  }, []);
+
+  const addOpeningPosition = useCallback((data) => {
+    const quantity = finiteNumber(data?.quantity);
+    const avgCost = finiteNumber(data?.avgCost);
+    const currentPrice = finiteNumber(data?.currentPrice) || avgCost;
+    const symbol = String(data?.symbol ?? '').trim().toUpperCase();
+    const broker = String(data?.broker ?? '').trim();
+    if (!broker || !symbol || quantity <= 0 || avgCost < 0 || currentPrice <= 0) {
+      return { ok: false, reason: 'invalid_position' };
+    }
+    const openingDate = data?.openingDate || new Date().toISOString();
+    const position = normalizeHolding({
+      id: data?.id || `opening_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      broker,
+      symbol,
+      name: String(data?.name ?? symbol).trim() || symbol,
+      quantity,
+      avgCost,
+      investedValue: quantity * avgCost,
+      currentPrice,
+      currentValue: quantity * currentPrice,
+      pnl: quantity * (currentPrice - avgCost),
+      source: 'opening',
+      openingDate,
+      importedAt: openingDate,
+    });
+    setHoldings((prev) => [
+      ...prev.filter((holding) => holding.source !== 'opening' || holding.id !== position.id),
+      position,
+    ]);
+    return { ok: true, position };
+  }, []);
+
+  const removeOpeningPosition = useCallback((id) => {
+    if (!id) return;
+    setHoldings((prev) => prev.filter((holding) => holding.id !== id));
+  }, []);
+
+  const removeOpeningPositionsForInstrument = useCallback((broker, symbol) => {
+    const target = baseSymbol(symbol) || String(symbol ?? '').trim().toUpperCase();
+    if (!broker || !target) return;
+    setHoldings((prev) => prev.filter((holding) => {
+      if (holding.source !== 'opening') return true;
+      if (holding.broker !== broker) return true;
+      const key = baseSymbol(holding.symbol) || String(holding.symbol ?? '').trim().toUpperCase();
+      return key !== target;
+    }));
+  }, []);
+
+  const clearOpeningPositions = useCallback(() => {
+    setHoldings((prev) => prev.filter((holding) => holding.source !== 'opening'));
   }, []);
 
   const clearBroker = useCallback((broker) => {
@@ -108,7 +195,7 @@ export function PortfolioProvider({ children }) {
       return { updated: 0, resolved: 0, failed: [], fetchedAt: null };
     }
     const result = await fetchLiveQuotes(symbols);
-    const { holdings: next, updated } = applyQuotesToHoldings(
+    const { holdings: next, updated, skipped = [] } = applyQuotesToHoldings(
       holdings,
       result.quotes,
       result.fetchedAt,
@@ -119,6 +206,7 @@ export function PortfolioProvider({ children }) {
       updated,
       resolved: result.resolved,
       failed: result.failed,
+      skipped,
       fetchedAt: result.fetchedAt,
     };
   }, [holdings]);
@@ -151,7 +239,7 @@ export function PortfolioProvider({ children }) {
   const restoreState = useCallback((payload) => {
     if (!payload) return;
     if (payload.holdings === undefined) return;
-    setHoldings(Array.isArray(payload.holdings) ? payload.holdings : []);
+    setHoldings(Array.isArray(payload.holdings) ? payload.holdings.map(normalizeHolding) : []);
     if (payload.pricesUpdatedAt !== undefined) {
       setPricesUpdatedAt(payload.pricesUpdatedAt || null);
     }
@@ -159,9 +247,21 @@ export function PortfolioProvider({ children }) {
 
   // Derived data — memoized so screens can subscribe without recomputing.
   const summary = useMemo(() => {
-    const totalValue = holdings.reduce((s, h) => s + (h.currentValue || 0), 0);
-    const totalCost  = holdings.reduce((s, h) => s + (h.avgCost || 0) * (h.quantity || 0), 0);
-    const totalPnL   = holdings.reduce((s, h) => s + (h.pnl || 0), 0);
+    // A broker import is a current snapshot and supersedes an opening row
+    // for the same broker+symbol. Keep the opening row persisted so it is
+    // available again if the broker snapshot is later cleared.
+    const snapshotKeys = new Set(
+      holdings.filter((holding) => holding.source !== 'opening').map(holdingKey),
+    );
+    const activeHoldings = holdings.filter(
+      (holding) => holding.source !== 'opening' || !snapshotKeys.has(holdingKey(holding)),
+    );
+    const totalValue = activeHoldings.reduce((s, h) => s + finiteNumber(h.currentValue), 0);
+    const totalCost = activeHoldings.reduce(
+      (s, h) => s + finiteNumber(h.investedValue),
+      0,
+    );
+    const totalPnL = totalValue - totalCost;
     const pnlPct     = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
 
     // Per-broker breakdown for the summary card AND for reconciliation
@@ -172,7 +272,7 @@ export function PortfolioProvider({ children }) {
     // We deliberately compare against COST (not current market VALUE)
     // because market value drifts daily and would trigger false alarms.
     const byBroker = {};
-    for (const h of holdings) {
+    for (const h of activeHoldings) {
       if (!byBroker[h.broker]) {
         byBroker[h.broker] = {
           broker: h.broker,
@@ -180,20 +280,26 @@ export function PortfolioProvider({ children }) {
           value: 0,
           cost: 0,
           pnl: 0,
+          openingCost: 0,
+          openingCount: 0,
           importedAt: h.importedAt,
         };
       }
       byBroker[h.broker].count += 1;
-      byBroker[h.broker].value += h.currentValue || 0;
-      byBroker[h.broker].cost  += (h.avgCost || 0) * (h.quantity || 0);
-      byBroker[h.broker].pnl   += h.pnl || 0;
+      byBroker[h.broker].value += finiteNumber(h.currentValue);
+      byBroker[h.broker].cost += finiteNumber(h.investedValue);
+      byBroker[h.broker].pnl += finiteNumber(h.currentValue) - finiteNumber(h.investedValue);
+      if (h.source === 'opening') {
+        byBroker[h.broker].openingCost += finiteNumber(h.investedValue);
+        byBroker[h.broker].openingCount += 1;
+      }
     }
     return {
       totalValue,
       totalCost,
       totalPnL,
       pnlPct,
-      count: holdings.length,
+      count: activeHoldings.length,
       byBroker: Object.values(byBroker),
       pricesUpdatedAt,
     };
@@ -206,6 +312,10 @@ export function PortfolioProvider({ children }) {
       summary,
       pricesUpdatedAt,
       importFromBroker,
+      addOpeningPosition,
+      removeOpeningPosition,
+      removeOpeningPositionsForInstrument,
+      clearOpeningPositions,
       clearBroker,
       clearAll,
       restoreState,
@@ -217,6 +327,10 @@ export function PortfolioProvider({ children }) {
       summary,
       pricesUpdatedAt,
       importFromBroker,
+      addOpeningPosition,
+      removeOpeningPosition,
+      removeOpeningPositionsForInstrument,
+      clearOpeningPositions,
       clearBroker,
       clearAll,
       restoreState,

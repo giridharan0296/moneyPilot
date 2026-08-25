@@ -42,9 +42,16 @@ import {
   LOAN_METHODS,
   computeEmiAmount,
   computeFirstEmiSplit,
+  enumerateEmiDueDates,
   firstScheduledEmiDate,
   formatMoney,
+  interestProfileDescription,
+  resolveInterestProfile,
+  splitPrincipalInterestAtDate,
 } from '../lib/loans';
+import { isOnOrAfterAccountOpeningDate } from '../lib/accountBalances';
+import { StatusBadge } from './UiPrimitives';
+import QuickAddPickerItem from './QuickAddPickerItem';
 
 const DIRECTIONS = [
   { id: 'owed_by_me', label: 'I owe (borrower)',    icon: 'download' },
@@ -58,6 +65,10 @@ const FIRST_INTEREST_PERIODS = [
 ];
 
 const FIRST_INTEREST_BASES = [360, 365];
+const FIRST_INTEREST_ROUNDING = [
+  { id: 'nearest', label: 'Nearest rupee' },
+  { id: 'up', label: 'Round up' },
+];
 
 export default function LoanForm({
   initialValues,
@@ -96,11 +107,17 @@ export default function LoanForm({
   const [emiAmount, setEmiAmount] = useState(
     initialValues?.emiAmount ? String(initialValues.emiAmount) : '',
   );
+  const [firstEmiAmount, setFirstEmiAmount] = useState(
+    initialValues?.firstEmiAmount ? String(initialValues.firstEmiAmount) : '',
+  );
   const [firstInterestPeriod, setFirstInterestPeriod] = useState(
     initialValues?.firstInterestPeriod ?? 'month_end',
   );
   const [firstInterestBasis, setFirstInterestBasis] = useState(
     Number(initialValues?.firstInterestBasis) === 360 ? 360 : 365,
+  );
+  const [firstInterestRounding, setFirstInterestRounding] = useState(
+    initialValues?.firstInterestRounding === 'up' ? 'up' : 'nearest',
   );
   const [emiDayOfMonth, setEmiDayOfMonth] = useState(
     String(initialValues?.emiDayOfMonth ?? 1),
@@ -108,6 +125,14 @@ export default function LoanForm({
   const [disburseDate, setDisburseDate] = useState(
     initialValues?.disburseDate ? new Date(initialValues.disburseDate) : new Date(),
   );
+  const [firstEmiDate, setFirstEmiDate] = useState(() => (
+    initialValues?.firstEmiDate
+      ? new Date(initialValues.firstEmiDate)
+      : firstScheduledEmiDate(
+        initialValues?.disburseDate ? new Date(initialValues.disburseDate) : new Date(),
+        initialValues?.emiDayOfMonth ?? 1,
+      )
+  ));
   const [disbursementAccountId, setDisbursementAccountId] = useState(
     initialValues?.disbursementAccountId ?? accounts[0]?.id ?? null,
   );
@@ -128,6 +153,8 @@ export default function LoanForm({
   }, [accounts, disbursementAccountId, initialValues?.disbursementAccountId, isEdit]);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showFirstEmiDatePicker, setShowFirstEmiDatePicker] = useState(false);
+  const [firstEmiDateTouched, setFirstEmiDateTouched] = useState(Boolean(initialValues?.firstEmiDate));
   const [emiTouched, setEmiTouched] = useState(false); // once user edits, stop auto-recomputing
   // "Tap Save again to confirm" latch for absurdly-high rates (LO-H4).
   // Stores the exact rate value the user has already acknowledged, so
@@ -147,33 +174,123 @@ export default function LoanForm({
     });
   }, [principal, ratePct, method, tenureMonths]);
 
+  const usesSbiInterest = useMemo(
+    () => resolveInterestProfile({ lenderName, interestProfile: null }) === 'sbi',
+    [lenderName],
+  );
+
   const computedFirstEmiSplit = useMemo(() => {
     const regularEmi = Number(emiAmount) || computedEmi;
-    const firstDate = firstScheduledEmiDate(disburseDate, emiDayOfMonth);
+    const firstDate = firstEmiDate;
     if (!firstDate || regularEmi <= 0) return null;
     return computeFirstEmiSplit({
       principal: Number(principal) || 0,
       ratePct: ratePct === '' ? null : Number(ratePct),
       method,
       emiAmount: regularEmi,
+      firstEmiAmount: Number(firstEmiAmount) > 0 ? Number(firstEmiAmount) : null,
       disburseDate: disburseDate.toISOString(),
       firstInterestPeriod,
       firstInterestBasis,
+      firstInterestRounding,
+      lenderName: lenderName.trim(),
     }, firstDate);
   }, [
     computedEmi,
     disburseDate,
     emiAmount,
+    firstEmiAmount,
     emiDayOfMonth,
     firstInterestBasis,
     firstInterestPeriod,
+    firstInterestRounding,
+    lenderName,
     method,
     principal,
     ratePct,
+    firstEmiDate,
+  ]);
+
+  useEffect(() => {
+    if (isEdit || firstEmiDateTouched) return;
+    const next = firstScheduledEmiDate(disburseDate, emiDayOfMonth);
+    if (next) setFirstEmiDate(next);
+  }, [disburseDate, emiDayOfMonth, firstEmiDateTouched, isEdit]);
+
+  const selectedAccount = useMemo(
+    () => accounts.find((account) => account.id === disbursementAccountId) ?? null,
+    [accounts, disbursementAccountId],
+  );
+  const principalCreditBlocked = direction === 'owed_by_me'
+    && creditPrincipalToAccount
+    && selectedAccount
+    && !isOnOrAfterAccountOpeningDate(selectedAccount, disburseDate);
+
+  const trackingPreview = useMemo(() => {
+    if (isEdit || !firstEmiDate) return null;
+    const regularEmi = Number(emiAmount) || computedEmi;
+    const P = Number(principal) || 0;
+    if (P <= 0 || regularEmi <= 0) return null;
+    const dates = enumerateEmiDueDates({
+      disburseDate,
+      firstEmiDate,
+      emiDayOfMonth,
+      throughDate: new Date(),
+      tenureMonths: Number(tenureMonths) > 0 ? Number(tenureMonths) : 600,
+    });
+    const provisional = {
+      principal: P,
+      currentOutstanding: P,
+      ratePct: ratePct === '' ? null : Number(ratePct),
+      method,
+      emiAmount: regularEmi,
+      firstEmiAmount: Number(firstEmiAmount) > 0 ? Number(firstEmiAmount) : null,
+      disburseDate: disburseDate.toISOString(),
+      firstEmiDate: firstEmiDate.toISOString(),
+      firstInterestPeriod,
+      firstInterestBasis,
+      firstInterestRounding,
+      events: [{
+        kind: 'disburse',
+        date: disburseDate.toISOString(),
+        amount: P,
+        principal: P,
+        initialRatePct: ratePct === '' ? null : Number(ratePct),
+      }],
+    };
+    let outstanding = P;
+    const processedDates = [];
+    for (let index = 0; index < dates.length; index += 1) {
+      const date = dates[index];
+      const paymentAmount = index === 0 && Number(firstEmiAmount) > 0
+        ? Number(firstEmiAmount)
+        : regularEmi;
+      const split = splitPrincipalInterestAtDate(provisional, date, paymentAmount);
+      const paidPrincipal = Math.min(Math.max(0, Number(split.principal) || 0), outstanding);
+      provisional.events.push({ kind: 'emi', date, amount: paymentAmount, principal: paidPrincipal, interest: Math.max(0, paymentAmount - paidPrincipal) });
+      outstanding = Math.max(0, outstanding - paidPrincipal);
+      provisional.currentOutstanding = outstanding;
+      processedDates.push(date);
+      if (outstanding <= 0) break;
+    }
+    const historical = processedDates.filter((date) => !isOnOrAfterAccountOpeningDate(selectedAccount, date)).length;
+    return {
+      total: processedDates.length,
+      historical,
+      affectingAccount: processedDates.length - historical,
+      outstanding,
+    };
+  }, [
+    computedEmi, disburseDate, emiAmount, emiDayOfMonth, firstEmiAmount, firstEmiDate,
+    firstInterestBasis, firstInterestPeriod, firstInterestRounding, isEdit, method, principal,
+    ratePct, selectedAccount, tenureMonths,
   ]);
 
   const changeKind = (nextKindId) => {
     setKind(nextKindId);
+    // Selecting an existing type cancels the in-progress custom type editor.
+    setAddingCustomKind(false);
+    setCustomKindLabel('');
     const nextMeta = findLoanKind(nextKindId);
     if (nextMeta) {
       // Only auto-flip direction if the current one doesn't fit the new kind.
@@ -202,6 +319,14 @@ export default function LoanForm({
     const day = Number(emiDayOfMonth);
     if (!(day >= 1 && day <= 31)) {
       Alert.alert('EMI day', 'Enter a day between 1 and 31.');
+      return;
+    }
+    const disburseDay = new Date(disburseDate.getFullYear(), disburseDate.getMonth(), disburseDate.getDate());
+    const firstEmiDay = firstEmiDate
+      ? new Date(firstEmiDate.getFullYear(), firstEmiDate.getMonth(), firstEmiDate.getDate())
+      : null;
+    if (!firstEmiDay || !isFinite(firstEmiDay.getTime()) || firstEmiDay < disburseDay) {
+      Alert.alert('First EMI date', 'Choose the actual first EMI date on or after the disbursement date.');
       return;
     }
     // LO-H4: validate ratePct at the form boundary. Empty is fine
@@ -282,10 +407,13 @@ export default function LoanForm({
       method,
       tenureMonths: Number(tenureMonths) || 0,
       emiAmount: emiAmount === '' ? computedEmi : Number(emiAmount),
+      firstEmiAmount: Number(firstEmiAmount) > 0 ? Number(firstEmiAmount) : null,
       firstInterestPeriod,
       firstInterestBasis,
+      firstInterestRounding,
       emiDayOfMonth: day,
       disburseDate: disburseDate.toISOString(),
+      firstEmiDate: firstEmiDate?.toISOString() ?? null,
       disbursementAccountId: resolvedDisbursementAccountId,
       creditPrincipalToAccount: creditPrincipalToAccount && !!resolvedDisbursementAccountId,
     };
@@ -299,6 +427,16 @@ export default function LoanForm({
     if (Platform.OS !== 'ios') setShowDatePicker(false);
     if (event?.type === 'dismissed') return;
     if (selected) setDisburseDate(selected);
+  };
+
+  const handleFirstEmiDateChange = (event, selected) => {
+    if (Platform.OS !== 'ios') setShowFirstEmiDatePicker(false);
+    if (event?.type === 'dismissed') return;
+    if (selected) {
+      setFirstEmiDate(selected);
+      setFirstEmiDateTouched(true);
+      setEmiDayOfMonth(String(selected.getDate()));
+    }
   };
 
   return (
@@ -439,6 +577,12 @@ export default function LoanForm({
         placeholder={direction === 'owed_by_me' ? 'e.g. HDFC Bank' : 'e.g. Rahul'}
         placeholderTextColor="#9ca3af"
       />
+      {usesSbiInterest && method !== 'flat' && (
+        <Text style={styles.hint}>
+          {interestProfileDescription({ lenderName, interestProfile: 'sbi' })}
+          {' '}Use the date SBI credited prepayments (especially if paid on a weekend/holiday). For penny-perfect EMI interest, enter the interest amount from your YONO/statement when logging the EMI.
+        </Text>
+      )}
 
       <Text style={styles.label}>Principal amount</Text>
       {!isEdit ? (
@@ -559,6 +703,21 @@ export default function LoanForm({
         Day of every month your EMI is due (1–28 recommended). Example: 5 = 5th of each month.
       </Text>
 
+      <Text style={styles.label}>Actual first EMI amount (optional)</Text>
+      <AmountCalculatorButton value={firstEmiAmount} onChangeText={setFirstEmiAmount}>
+        <TextInput
+          style={styles.input}
+          value={firstEmiAmount}
+          onChangeText={setFirstEmiAmount}
+          keyboardType="numeric"
+          placeholder="Use the amount debited by the lender"
+          placeholderTextColor="#9ca3af"
+        />
+      </AmountCalculatorButton>
+      <Text style={styles.hint}>
+        Use this when the first debit differs due to a short or broken period. Later EMIs use the regular amount above.
+      </Text>
+
       {method !== 'flat' && (
         <>
           <Text style={styles.label}>First interest calculation</Text>
@@ -599,6 +758,26 @@ export default function LoanForm({
                     >
                       <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
                         Actual/{basis}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.label}>Interest rounding</Text>
+              <View style={styles.chipRow}>
+                {FIRST_INTEREST_ROUNDING.map((option) => {
+                  const selected = firstInterestRounding === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      onPress={() => setFirstInterestRounding(option.id)}
+                      style={[
+                        styles.chip,
+                        selected && { backgroundColor: accent, borderColor: accent },
+                      ]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                        {option.label}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -647,6 +826,8 @@ export default function LoanForm({
       )}
 
       <Text style={styles.label}>Cash account used</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+      <View style={{ flex: 1 }}>
       <GroupedAccountPicker
         accounts={accounts}
         accountGroups={accountGroups}
@@ -654,6 +835,73 @@ export default function LoanForm({
         onSelect={setDisbursementAccountId}
         accent={accent}
       />
+      </View>
+      <QuickAddPickerItem kind="account" accent={accent} onCreated={(item) => setDisbursementAccountId(item.id)} />
+      </View>
+
+      {!isEdit && (
+        <View style={styles.trackingCard}>
+          <View style={styles.trackingTitleRow}>
+            <View style={[styles.trackingIcon, { backgroundColor: accent + '18' }]}>
+              <AppIcon name="calendar" size={18} color={accent} strokeWidth={2.2} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.trackingTitle}>Loan tracking start</Text>
+              <Text style={styles.trackingSubtitle}>Preview before the loan and past EMIs are recorded</Text>
+            </View>
+          </View>
+
+          <View style={styles.trackingRow}>
+            <Text style={styles.trackingLabel}>Account opening date</Text>
+            <Text style={styles.trackingValue}>
+              {selectedAccount?.openingBalanceDate
+                ? formatChipDate(new Date(selectedAccount.openingBalanceDate))
+                : 'Not set · all EMIs affect account'}
+            </Text>
+          </View>
+
+          <Text style={styles.trackingFieldLabel}>Actual first EMI date</Text>
+          <TouchableOpacity
+            onPress={() => setShowFirstEmiDatePicker(true)}
+            activeOpacity={0.7}
+            style={styles.dateChip}
+          >
+            <Text style={styles.dateChipText}>{firstEmiDate ? formatChipDate(firstEmiDate) : 'Select date'}</Text>
+            <Text style={styles.dateChipHint}>tap to change</Text>
+          </TouchableOpacity>
+          {showFirstEmiDatePicker && (
+            <DateTimePicker
+              value={firstEmiDate ?? disburseDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              minimumDate={disburseDate}
+              onChange={handleFirstEmiDateChange}
+            />
+          )}
+
+          {trackingPreview ? (
+            <View style={styles.trackingSummary}>
+              <View style={styles.trackingMetric}>
+                <StatusBadge status="historical" />
+                <Text style={styles.trackingMetricValue}>{trackingPreview.historical} EMI{trackingPreview.historical === 1 ? '' : 's'}</Text>
+                <Text style={styles.trackingMetricHint}>Loan balance only</Text>
+              </View>
+              <View style={styles.trackingDivider} />
+              <View style={styles.trackingMetric}>
+                <Text style={styles.accountImpactLabel}>Affects account</Text>
+                <Text style={styles.trackingMetricValue}>{trackingPreview.affectingAccount} EMI{trackingPreview.affectingAccount === 1 ? '' : 's'}</Text>
+                <Text style={styles.trackingMetricHint}>Account and reports</Text>
+              </View>
+              <View style={styles.outstandingPreview}>
+                <Text style={styles.outstandingLabel}>Estimated outstanding after {trackingPreview.total} paid EMI{trackingPreview.total === 1 ? '' : 's'}</Text>
+                <Text style={[styles.outstandingValue, { color: accent }]}>{formatMoney(trackingPreview.outstanding)}</Text>
+              </View>
+            </View>
+          ) : (
+            <Text style={styles.trackingEmpty}>Enter principal and EMI details to calculate the tracking preview.</Text>
+          )}
+        </View>
+      )}
       {direction === 'owed_by_me' && (
         <>
           <Text style={styles.label}>Send principal to this account?</Text>
@@ -686,6 +934,11 @@ export default function LoanForm({
           <Text style={styles.hint}>
             Turn this on only if the loan amount actually landed in this account. Leave it off for loans that were already spent, like some older gold loans.
           </Text>
+          {principalCreditBlocked ? (
+            <Text style={styles.creditWarning}>
+              This loan date is before the account opening-balance date, so crediting it would count the money twice. Change the date/account or select loan-only.
+            </Text>
+          ) : null}
         </>
       )}
       <Text style={styles.hint}>
@@ -822,6 +1075,7 @@ const makeStyles = (c) => ({
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   hint: { fontSize: 11, color: c.text.secondary, marginTop: 4, fontStyle: 'italic' },
+  creditWarning: { fontSize: 11, lineHeight: 16, color: c.accent.expense, marginTop: 7, fontWeight: '700' },
 
   input: {
     backgroundColor: c.bg.surfaceAlt, borderRadius: 10,
@@ -867,6 +1121,29 @@ const makeStyles = (c) => ({
   },
   dateChipText: { fontSize: 15, fontWeight: '600', color: c.text.primary },
   dateChipHint: { fontSize: 11, color: c.text.secondary },
+
+  trackingCard: {
+    marginTop: 16, padding: 14, borderRadius: 14,
+    backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle,
+  },
+  trackingTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  trackingIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  trackingTitle: { color: c.text.primary, fontSize: 15, fontWeight: '800' },
+  trackingSubtitle: { color: c.text.secondary, fontSize: 11, lineHeight: 15, marginTop: 2 },
+  trackingRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.border.subtle },
+  trackingLabel: { color: c.text.secondary, fontSize: 12, fontWeight: '600' },
+  trackingValue: { color: c.text.primary, fontSize: 12, fontWeight: '800', textAlign: 'right' },
+  trackingFieldLabel: { color: c.text.secondary, fontSize: 11, fontWeight: '800', marginTop: 4, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 },
+  trackingSummary: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', borderTopWidth: 1, borderTopColor: c.border.subtle, paddingTop: 12 },
+  trackingMetric: { flex: 1, minWidth: 120, gap: 4 },
+  trackingDivider: { width: 1, backgroundColor: c.border.subtle, marginHorizontal: 10 },
+  trackingMetricValue: { color: c.text.primary, fontSize: 16, fontWeight: '900' },
+  trackingMetricHint: { color: c.text.muted, fontSize: 10 },
+  accountImpactLabel: { alignSelf: 'flex-start', color: c.accent.primary, backgroundColor: c.accent.primary + '18', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11, fontWeight: '800' },
+  outstandingPreview: { width: '100%', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.border.subtle, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  outstandingLabel: { flex: 1, color: c.text.secondary, fontSize: 11, lineHeight: 15 },
+  outstandingValue: { fontSize: 19, fontWeight: '900' },
+  trackingEmpty: { color: c.text.muted, fontSize: 11, lineHeight: 16, marginTop: 8 },
 
   buttonRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
   submitBtn: {

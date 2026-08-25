@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 
 import CalculatorField from '../components/CalculatorField';
+import CalculatorScenarioManager from '../components/CalculatorScenarioManager';
+import { STORAGE_KEYS } from '../constants';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { projectSWP, sustainableMonthlyWithdrawal, yearsUntilDepletion } from '../lib/swp';
 
@@ -15,6 +17,8 @@ export default function SWPCalculatorScreen() {
   const [returnPct, setReturnPct] = useState('8');
   const [years, setYears] = useState('20');
   const [stepUp, setStepUp] = useState('0');
+  const [inflation, setInflation] = useState('6');
+  const [targetCorpus, setTargetCorpus] = useState('0');
 
   const result = useMemo(() => {
     const inputs = {
@@ -23,6 +27,7 @@ export default function SWPCalculatorScreen() {
       expectedReturnPct: Number(returnPct),
       years: Number(years),
       annualWithdrawalStepUpPct: Number(stepUp) || 0,
+      targetFinalCorpus: Number(targetCorpus) || 0,
     };
     if (!inputs.corpus || inputs.corpus <= 0 || inputs.monthlyWithdrawal < 0 || inputs.years <= 0) return null;
     const projected = projectSWP(inputs);
@@ -31,8 +36,21 @@ export default function SWPCalculatorScreen() {
       sustainable: sustainableMonthlyWithdrawal(inputs),
       lasts: yearsUntilDepletion(inputs),
       months: Math.round(inputs.years * 12),
+      realFinalCorpus: projected.finalCorpus / Math.pow(1 + (Number(inflation) || 0) / 100, inputs.years),
+      investmentGrowth: projected.finalCorpus + projected.totalWithdrawn - inputs.corpus,
+      targetFinalCorpus: inputs.targetFinalCorpus,
     };
-  }, [corpus, withdrawal, returnPct, years, stepUp]);
+  }, [corpus, withdrawal, returnPct, years, stepUp, inflation, targetCorpus]);
+
+  const loadScenario = (saved) => {
+    setCorpus(saved.corpus ?? '');
+    setWithdrawal(saved.withdrawal ?? '');
+    setReturnPct(saved.returnPct ?? '');
+    setYears(saved.years ?? '');
+    setStepUp(saved.stepUp ?? '0');
+    setInflation(saved.inflation ?? '0');
+    setTargetCorpus(saved.targetCorpus ?? '0');
+  };
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -42,7 +60,9 @@ export default function SWPCalculatorScreen() {
         <CalculatorField label="Monthly withdrawal" value={withdrawal} onChangeText={setWithdrawal} prefix="₹" placeholder="10000" />
         <CalculatorField label="Expected return (per year)" value={returnPct} onChangeText={setReturnPct} suffix="%" placeholder="8" />
         <CalculatorField label="Income duration" value={years} onChangeText={setYears} suffix="years" placeholder="20" />
-        <CalculatorField label="Annual withdrawal increase" value={stepUp} onChangeText={setStepUp} suffix="%" placeholder="0" />
+        <CalculatorField label="Annual withdrawal increase (inflation)" value={stepUp} onChangeText={setStepUp} suffix="%" placeholder="0" />
+        <CalculatorField label="Expected inflation" value={inflation} onChangeText={setInflation} suffix="%" placeholder="6" />
+        <CalculatorField label="Desired corpus at end" value={targetCorpus} onChangeText={setTargetCorpus} prefix="₹" placeholder="0" />
 
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>CORPUS AFTER {result?.months ?? '—'} MONTHS</Text>
@@ -55,10 +75,34 @@ export default function SWPCalculatorScreen() {
         </View>
 
         <View style={styles.details}>
+          <Row label="Investment growth earned" value={result ? money(result.investmentGrowth) : '—'} />
+          <Row label="Ending corpus in today's money" value={result ? money(result.realFinalCorpus) : '—'} />
+          {result?.targetFinalCorpus > 0 ? (
+            <Row
+              label="Desired ending corpus"
+              value={money(result.targetFinalCorpus)}
+              color={result.finalCorpus >= result.targetFinalCorpus ? colors.accent.income : colors.accent.expense}
+            />
+          ) : null}
           <Row label="Total income withdrawn" value={result ? money(result.totalWithdrawn) : '—'} />
           <Row label={`Sustainable monthly income for ${years || '—'} years`} value={result ? money(result.sustainable) : '—'} color={colors.accent.income} />
           <Row label="At this withdrawal rate" value={result?.lasts === Infinity ? 'Lasts 100+ years' : result ? `Lasts ~${result.lasts.toFixed(1)} years` : '—'} color={result?.depletedAtMonth != null ? colors.accent.expense : colors.accent.income} />
         </View>
+        <Text style={styles.disclaimer}>
+          Projection assumes a constant return and withdrawals at the start of each month. Taxes, exit loads, and market volatility are not included.
+        </Text>
+        {result ? (
+          <CalculatorScenarioManager
+            storageKey={STORAGE_KEYS.swp_scenarios}
+            inputs={{ corpus, withdrawal, returnPct, years, stepUp, inflation, targetCorpus }}
+            metrics={[
+              { label: 'Monthly income', value: money(Number(withdrawal)) },
+              { label: 'Ending corpus', value: money(result.finalCorpus) },
+              { label: 'Sustainable', value: money(result.sustainable) },
+            ]}
+            onLoad={loadScenario}
+          />
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -82,4 +126,5 @@ const makeStyles = (c) => ({
   row: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border.subtle },
   rowLabel: { fontSize: 13, color: c.text.secondary },
   rowValue: { fontSize: 16, fontWeight: '800', color: c.text.primary, marginTop: 3 },
+  disclaimer: { marginTop: 16, fontSize: 11, lineHeight: 16, color: c.text.muted, textAlign: 'center' },
 });

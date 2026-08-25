@@ -1,24 +1,10 @@
-// ----------------------------------------------------------------------------
-// SearchScreen — global search + filters across all transaction types.
-//
-// Layout:
-//   ┌──────────────────────────────────────────┐
-//   │ 🔍 [Search notes, amounts, categories…]  │  (search bar)
-//   └──────────────────────────────────────────┘
-//   [ Filters ▾ ] toggles a filter drawer (type / tag / account / date /
-//   amount range). All filter state lives inside this screen; the search
-//   library function is pure.
-//
-//   ┌──────────────────────────────────────────┐
-//   │  Result card                              │
-//   │  (tap to jump to the source screen for   │
-//   │   inline edit — Expense/Income/Invest)   │
-//   └──────────────────────────────────────────┘
-// ----------------------------------------------------------------------------
+// Advanced transaction search (expense / income / investment) with filters.
+// Embedded in ActivityTimelineScreen — not a standalone route.
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
+  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -26,11 +12,13 @@ import {
   View,
 } from 'react-native';
 
-import { useSettings }     from '../contexts/SettingsContext';
+import DateTimePicker from './DatePicker';
+import AppIcon from './AppIcon';
+import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
-import searchTransactions  from '../lib/searchTransactions';
-import AppIcon             from '../components/AppIcon';
+import searchTransactions from '../lib/searchTransactions';
+import { financialYearRange, financialYearStartYear } from '../lib/financialYear';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
@@ -38,26 +26,89 @@ import {
 } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
 
-// Human-friendly names for the type filter chips.
 const TYPE_META = {
-  expense:    { label: 'Expenses',    icon: 'credit-card',  color: '#dc2626' },
-  income:     { label: 'Income',      icon: 'wallet',       color: '#059669' },
-  investment: { label: 'Investments', icon: 'bar-chart-2',  color: '#6366f1' },
+  expense: { label: 'Expenses', icon: 'credit-card', color: '#dc2626' },
+  income: { label: 'Income', icon: 'wallet', color: '#059669' },
+  investment: { label: 'Investments', icon: 'bar-chart-2', color: '#6366f1' },
 };
 
-export default function SearchScreen({ navigation }) {
+const DATE_PRESETS = [
+  {
+    id: 'month',
+    label: 'This month',
+    range: () => {
+      const now = new Date();
+      return {
+        from: new Date(now.getFullYear(), now.getMonth(), 1),
+        to: new Date(now.getFullYear(), now.getMonth() + 1, 0),
+      };
+    },
+  },
+  {
+    id: '30d',
+    label: 'Last 30 days',
+    range: () => {
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - 30);
+      return { from, to };
+    },
+  },
+  {
+    id: 'fy',
+    label: 'This FY',
+    range: () => {
+      const startYear = financialYearStartYear();
+      const { start, end } = financialYearRange(startYear);
+      return { from: start, to: end };
+    },
+  },
+];
+
+function sanitizeAmountInput(raw) {
+  let value = String(raw ?? '').replace(/,/g, '').trim();
+  value = value.replace(/[^\d.]/g, '');
+  const dot = value.indexOf('.');
+  if (dot >= 0) {
+    value = `${value.slice(0, dot + 1)}${value.slice(dot + 1).replace(/\./g, '')}`;
+  }
+  return value;
+}
+
+function formatFilterDate(d) {
+  return d.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+export default function ActivitySearchPane({
+  navigation,
+  initialAccountIds = null,
+  lockAccountFilter = false,
+  searchPlaceholder,
+  scopeHint,
+}) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
-  const {
-    expenses, income, investments, allTags,
-  } = useTransactions();
+  const { expenses, income, investments, allTags } = useTransactions();
+
+  const lockedAccountKey = lockAccountFilter && initialAccountIds?.length
+    ? initialAccountIds.join('|')
+    : '';
 
   const [query, setQuery] = useState('');
-  // Debounced mirror of `query` — feeds into `results` so we don't
-  // rescan (and re-sort by createdAt) the entire tx history on every
-  // keystroke. 200ms is a comfortable typing pace; ~4 keystrokes/s
-  // collapse to one recompute.
   const [debouncedQuery, setDebouncedQuery] = useState('');
   useEffect(() => {
     if (query === debouncedQuery) return;
@@ -67,25 +118,40 @@ export default function SearchScreen({ navigation }) {
 
   const [types, setTypes] = useState(['expense', 'income', 'investment']);
   const [tagFilter, setTagFilter] = useState([]);
-  const [accountIds, setAccountIds] = useState([]);
+  const [accountIds, setAccountIds] = useState(
+    () => (initialAccountIds?.length ? [...initialAccountIds] : []),
+  );
+
+  useEffect(() => {
+    if (lockAccountFilter && initialAccountIds?.length) {
+      setAccountIds([...initialAccountIds]);
+    }
+  }, [lockAccountFilter, lockedAccountKey, initialAccountIds]);
+  const [dateFrom, setDateFrom] = useState(null);
+  const [dateTo, setDateTo] = useState(null);
+  const [amountMinText, setAmountMinText] = useState('');
+  const [amountMaxText, setAmountMaxText] = useState('');
+  const [datePickerTarget, setDatePickerTarget] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
 
+  const amountMin = useMemo(() => {
+    const n = Number(amountMinText);
+    return amountMinText.trim() && Number.isFinite(n) ? n : null;
+  }, [amountMinText]);
+
+  const amountMax = useMemo(() => {
+    const n = Number(amountMaxText);
+    return amountMaxText.trim() && Number.isFinite(n) ? n : null;
+  }, [amountMaxText]);
+
   const toggleType = (t) =>
-    setTypes((prev) =>
-      prev.includes(t)
-        ? prev.filter((x) => x !== t)
-        : [...prev, t],
-    );
+    setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   const toggleTag = (t) =>
-    setTagFilter((prev) =>
-      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t],
-    );
+    setTagFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   const toggleAccount = (id) =>
-    setAccountIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+    setAccountIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const results = useMemo(
     () =>
@@ -94,23 +160,80 @@ export default function SearchScreen({ navigation }) {
         types,
         tagFilter,
         accountIds,
+        amountMin,
+        amountMax,
+        dateFrom,
+        dateTo,
         transactions: { expense: expenses, income, investment: investments },
         categories,
         accounts,
       }),
-    [debouncedQuery, types, tagFilter, accountIds, expenses, income, investments, categories, accounts],
+    [
+      debouncedQuery,
+      types,
+      tagFilter,
+      accountIds,
+      amountMin,
+      amountMax,
+      dateFrom,
+      dateTo,
+      expenses,
+      income,
+      investments,
+      categories,
+      accounts,
+    ],
   );
 
   const activeFilterCount =
     (types.length < 3 ? 1 : 0) +
     (tagFilter.length > 0 ? 1 : 0) +
-    (accountIds.length > 0 ? 1 : 0);
+    (accountIds.length > 0 ? 1 : 0) +
+    (dateFrom || dateTo ? 1 : 0) +
+    (amountMin != null || amountMax != null ? 1 : 0);
 
   const clearAll = () => {
     setQuery('');
     setTypes(['expense', 'income', 'investment']);
     setTagFilter([]);
-    setAccountIds([]);
+    setAccountIds(lockAccountFilter && initialAccountIds?.length ? [...initialAccountIds] : []);
+    setDateFrom(null);
+    setDateTo(null);
+    setAmountMinText('');
+    setAmountMaxText('');
+  };
+
+  const applyDatePreset = (preset) => {
+    const { from, to } = preset.range();
+    setDateFrom(from);
+    setDateTo(to);
+  };
+
+  const handleDatePickerChange = (event, selectedDate) => {
+    setDatePickerTarget(null);
+    if (event.type === 'dismissed' || !selectedDate) return;
+    if (datePickerTarget === 'from') {
+      setDateFrom(selectedDate);
+      if (dateTo && selectedDate > dateTo) setDateTo(selectedDate);
+    } else if (datePickerTarget === 'to') {
+      setDateTo(selectedDate);
+      if (dateFrom && selectedDate < dateFrom) setDateFrom(selectedDate);
+    }
+  };
+
+  const openResult = (tx, type) => {
+    if (type === 'investment') {
+      navigation.getParent()?.navigate('Invest', {
+        screen: 'InvestmentsHome',
+        params: { focusId: tx.id },
+        initial: false,
+      });
+      return;
+    }
+    navigation.getParent()?.navigate('Transactions', {
+      initialTab: type,
+      focusId: tx.id,
+    });
   };
 
   const renderRow = ({ item }) => {
@@ -129,44 +252,22 @@ export default function SearchScreen({ navigation }) {
       <TouchableOpacity
         style={styles.resultCard}
         activeOpacity={0.7}
-        onPress={() => {
-          // Jump to the type's list screen AND focus this specific row.
-          // The destination TransactionsList picks up `focusId` from route
-          // params, scrolls the matching row into view, and highlights it
-          // briefly. Without focusId the user was dumped at the top with
-          // no filter, which made long histories effectively un-searchable.
-          //
-          // After the 6-tab restructure, Income and Expense are no longer
-          // sibling bottom tabs — they live INSIDE the "Transactions" tab
-          // as top-tabs. We navigate to that parent and pass `initialTab`
-          // so the Transactions screen boots into the right side, then
-          // hands `focusId` down to the corresponding TransactionsList.
-          // Investment transactions still live in the standalone Invest
-          // stack, so that path is unchanged.
-          if (type === 'investment') {
-            navigation.navigate('Invest', {
-              screen: 'InvestmentsHome',
-              params: { focusId: tx.id },
-              initial: false,
-            });
-          } else {
-            navigation.navigate('Transactions', {
-              initialTab: type,      // 'income' or 'expense'
-              focusId: tx.id,
-            });
-          }
-        }}
+        onPress={() => openResult(tx, type)}
       >
-        <View
-          style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]}
-        />
+        <View style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]} />
         <View style={styles.resultBody}>
           <View style={styles.resultTop}>
             <Text style={styles.resultEmoji}>{cat?.emoji ?? '📌'}</Text>
-            <Text style={styles.resultCategory} numberOfLines={1}>
-              {cat?.label ?? 'Unknown'}
-              {sub ? `  ·  ${sub.emoji} ${sub.label}` : ''}
-            </Text>
+            <View style={styles.resultLabelCol}>
+              <Text style={styles.resultCategory}>
+                {cat?.label ?? 'Unknown'}
+              </Text>
+              {sub ? (
+                <Text style={styles.resultSubCategory}>
+                  {sub.emoji} {sub.label}
+                </Text>
+              ) : null}
+            </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={[styles.resultAmount, { color: meta?.color ?? '#111' }]}>
                 {rowIsForeign
@@ -181,9 +282,10 @@ export default function SearchScreen({ navigation }) {
             </View>
           </View>
           {tx.note ? (
-            <Text style={styles.resultNote} numberOfLines={2}>
-              {tx.note}
-            </Text>
+            <Text style={styles.resultNote} numberOfLines={2}>{tx.note}</Text>
+          ) : null}
+          {tx.instrumentName ? (
+            <Text style={styles.resultNote} numberOfLines={1}>{tx.instrumentName}</Text>
           ) : null}
           {tx.tags && tx.tags.length > 0 && (
             <View style={styles.tagRow}>
@@ -206,7 +308,10 @@ export default function SearchScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <View style={styles.pane}>
+      {scopeHint ? (
+        <Text style={styles.scopeHint}>{scopeHint}</Text>
+      ) : null}
       <View style={styles.searchBar}>
         <View style={styles.searchIcon}>
           <AppIcon name="search" size={16} color={themeColors.text.secondary} strokeWidth={2} />
@@ -214,7 +319,7 @@ export default function SearchScreen({ navigation }) {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Search notes, categories, amounts…"
+          placeholder={searchPlaceholder ?? 'Search notes, categories, amounts…'}
           placeholderTextColor={themeColors.text.muted}
           style={styles.searchInput}
           autoCapitalize="none"
@@ -249,7 +354,6 @@ export default function SearchScreen({ navigation }) {
           contentContainerStyle={styles.filterContent}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Type */}
           <Text style={styles.filterLabel}>Type</Text>
           <View style={styles.chipRow}>
             {(['expense', 'income', 'investment']).map((t) => {
@@ -271,12 +375,7 @@ export default function SearchScreen({ navigation }) {
                     color={active ? '#fff' : meta.color}
                     strokeWidth={2.2}
                   />
-                  <Text
-                    style={[
-                      styles.filterChipText,
-                      active && { color: '#fff' },
-                    ]}
-                  >
+                  <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
                     {meta.label}
                   </Text>
                 </TouchableOpacity>
@@ -284,7 +383,6 @@ export default function SearchScreen({ navigation }) {
             })}
           </View>
 
-          {/* Tags */}
           {allTags.length > 0 && (
             <>
               <Text style={styles.filterLabel}>Tags (must match all)</Text>
@@ -303,12 +401,7 @@ export default function SearchScreen({ navigation }) {
                         },
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.filterChipText,
-                          active && { color: '#fff' },
-                        ]}
-                      >
+                      <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
                         #{t}
                       </Text>
                     </TouchableOpacity>
@@ -318,8 +411,7 @@ export default function SearchScreen({ navigation }) {
             </>
           )}
 
-          {/* Accounts */}
-          {accounts.length > 0 && (
+          {!lockAccountFilter && accounts.length > 0 && (
             <>
               <Text style={styles.filterLabel}>Account</Text>
               <View style={styles.chipRow}>
@@ -331,18 +423,10 @@ export default function SearchScreen({ navigation }) {
                       onPress={() => toggleAccount(a.id)}
                       style={[
                         styles.filterChip,
-                        active && {
-                          backgroundColor: a.color,
-                          borderColor: a.color,
-                        },
+                        active && { backgroundColor: a.color, borderColor: a.color },
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.filterChipText,
-                          active && { color: '#fff' },
-                        ]}
-                      >
+                      <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
                         {a.emoji} {a.label}
                       </Text>
                     </TouchableOpacity>
@@ -351,6 +435,95 @@ export default function SearchScreen({ navigation }) {
               </View>
             </>
           )}
+
+          <Text style={styles.filterLabel}>Date range</Text>
+          <View style={styles.chipRow}>
+            {DATE_PRESETS.map((preset) => (
+              <TouchableOpacity
+                key={preset.id}
+                onPress={() => applyDatePreset(preset)}
+                style={styles.filterChip}
+              >
+                <Text style={styles.filterChipText}>{preset.label}</Text>
+              </TouchableOpacity>
+            ))}
+            {(dateFrom || dateTo) ? (
+              <TouchableOpacity
+                onPress={() => {
+                  setDateFrom(null);
+                  setDateTo(null);
+                }}
+                style={[styles.filterChip, styles.filterChipMuted]}
+              >
+                <Text style={styles.filterChipText}>Clear dates</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <View style={styles.dateRow}>
+            <TouchableOpacity
+              style={styles.dateChip}
+              onPress={() => setDatePickerTarget('from')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dateChipLabel}>FROM</Text>
+              <Text style={styles.dateChipValue}>
+                {dateFrom ? formatFilterDate(dateFrom) : 'Any'}
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.dateDash}>→</Text>
+            <TouchableOpacity
+              style={styles.dateChip}
+              onPress={() => setDatePickerTarget('to')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dateChipLabel}>TO</Text>
+              <Text style={styles.dateChipValue}>
+                {dateTo ? formatFilterDate(dateTo) : 'Any'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {datePickerTarget ? (
+            <DateTimePicker
+              value={
+                datePickerTarget === 'from'
+                  ? (dateFrom ?? new Date())
+                  : (dateTo ?? dateFrom ?? new Date())
+              }
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={handleDatePickerChange}
+            />
+          ) : null}
+
+          <Text style={styles.filterLabel}>Amount range ({baseCurrency})</Text>
+          <View style={styles.amountRow}>
+            <View style={styles.amountField}>
+              <Text style={styles.amountFieldLabel}>Min</Text>
+              <TextInput
+                value={amountMinText}
+                onChangeText={(v) => setAmountMinText(sanitizeAmountInput(v))}
+                placeholder="Any"
+                placeholderTextColor={themeColors.text.muted}
+                keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+                style={styles.amountInput}
+              />
+            </View>
+            <Text style={styles.dateDash}>–</Text>
+            <View style={styles.amountField}>
+              <Text style={styles.amountFieldLabel}>Max</Text>
+              <TextInput
+                value={amountMaxText}
+                onChangeText={(v) => setAmountMaxText(sanitizeAmountInput(v))}
+                placeholder="Any"
+                placeholderTextColor={themeColors.text.muted}
+                keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+                style={styles.amountInput}
+              />
+            </View>
+          </View>
+          <Text style={styles.filterHint}>
+            Filters match the row amount. Use search text for a specific number (e.g. 500).
+          </Text>
         </ScrollView>
       )}
 
@@ -360,7 +533,7 @@ export default function SearchScreen({ navigation }) {
         renderItem={renderRow}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={
+        ListEmptyComponent={(
           <View style={styles.empty}>
             <View style={styles.emptyIconWrap}>
               <AppIcon
@@ -376,23 +549,22 @@ export default function SearchScreen({ navigation }) {
                 : 'No matches. Try a different word or clear filters.'}
             </Text>
           </View>
-        }
+        )}
       />
     </View>
   );
 }
 
-function formatDate(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-}
-
 const makeStyles = (c) => ({
-  screen: { flex: 1, backgroundColor: c.bg.canvas },
+  pane: { flex: 1, backgroundColor: c.bg.canvas },
+
+  scopeHint: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    fontSize: 12,
+    fontWeight: '600',
+    color: c.text.secondary,
+  },
 
   searchBar: {
     flexDirection: 'row',
@@ -400,7 +572,7 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surface,
     borderRadius: radii.md,
     marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: 4,
     borderWidth: 1,
@@ -443,7 +615,7 @@ const makeStyles = (c) => ({
   },
 
   filterDrawer: {
-    maxHeight: 260,
+    maxHeight: 420,
     backgroundColor: c.bg.surface,
     marginHorizontal: spacing.lg,
     marginTop: spacing.sm,
@@ -486,10 +658,79 @@ const makeStyles = (c) => ({
     fontWeight: '600',
     color: c.text.secondary,
   },
+  filterChipMuted: {
+    borderStyle: 'dashed',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  dateChip: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  dateChipLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.text.muted,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  dateChipValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: c.text.primary,
+  },
+  dateDash: {
+    fontSize: 14,
+    color: c.text.muted,
+    fontWeight: '600',
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  amountField: {
+    flex: 1,
+    gap: 4,
+  },
+  amountFieldLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.text.muted,
+    letterSpacing: 0.5,
+  },
+  amountInput: {
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    fontSize: 15,
+    color: c.text.primary,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  filterHint: {
+    fontSize: 11,
+    color: c.text.muted,
+    lineHeight: 16,
+    marginBottom: spacing.sm,
+  },
 
   list: {
     padding: spacing.lg,
     gap: spacing.sm,
+    flexGrow: 1,
   },
   resultCard: {
     flexDirection: 'row',
@@ -501,13 +742,18 @@ const makeStyles = (c) => ({
   },
   resultBar: { width: 4 },
   resultBody: { flex: 1, padding: spacing.md, gap: 4 },
-  resultTop: { flexDirection: 'row', alignItems: 'center' },
-  resultEmoji: { fontSize: 18, marginRight: spacing.sm },
+  resultTop: { flexDirection: 'row', alignItems: 'flex-start' },
+  resultEmoji: { fontSize: 18, marginRight: spacing.sm, marginTop: 1 },
+  resultLabelCol: { flex: 1, minWidth: 0, gap: 2 },
   resultCategory: {
-    flex: 1,
     fontSize: 14,
     fontWeight: '700',
     color: c.text.primary,
+  },
+  resultSubCategory: {
+    fontSize: 12,
+    color: c.text.secondary,
+    lineHeight: 16,
   },
   resultAmount: {
     fontSize: 15,

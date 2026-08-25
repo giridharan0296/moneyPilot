@@ -23,7 +23,7 @@
 //      Transactions, { initialTab: 'income' | 'expense' | 'transfer', focusId? }
 // ----------------------------------------------------------------------------
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   DeviceEventEmitter,
   Platform,
@@ -47,17 +47,37 @@ export default function TransactionsScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
 
-  const TAB_META = {
+  const TAB_META = useMemo(() => ({
     income:   { label: 'Income',    tint: themeColors.accent.income,  icon: 'wallet' },
     expense:  { label: 'Expense',   tint: themeColors.accent.expense, icon: 'credit-card' },
     transfer: { label: 'Transfers', tint: '#0ea5e9',                  icon: 'arrow-right-left' },
-  };
+  }), [themeColors.accent.income, themeColors.accent.expense]);
 
   const [activeTab, setActiveTab] = useState(
     () => (TAB_KEYS.includes(route?.params?.initialTab)
       ? route.params.initialTab
       : 'expense'),
   );
+
+  // Mount sub-panes lazily — only the active tab on first open. Previously
+  // Income + Expense + Transfers all mounted together (each with chart +
+  // list), which made the bottom-tab tap feel sluggish.
+  const [mountedTabs, setMountedTabs] = useState(
+    () => new Set([
+      TAB_KEYS.includes(route?.params?.initialTab)
+        ? route.params.initialTab
+        : 'expense',
+    ]),
+  );
+
+  useEffect(() => {
+    setMountedTabs((prev) => {
+      if (prev.has(activeTab)) return prev;
+      const next = new Set(prev);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
 
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -71,7 +91,14 @@ export default function TransactionsScreen({ route }) {
 
   useEffect(() => {
     const t = route?.params?.initialTab;
-    if (TAB_KEYS.includes(t) && t !== activeTab) setActiveTab(t);
+    if (!TAB_KEYS.includes(t)) return;
+    if (t !== activeTab) setActiveTab(t);
+    setMountedTabs((prev) => {
+      if (prev.has(t)) return prev;
+      const next = new Set(prev);
+      next.add(t);
+      return next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route?.params?.initialTab]);
 
@@ -126,6 +153,7 @@ export default function TransactionsScreen({ route }) {
       </View>
 
       <View style={styles.panes}>
+        {mountedTabs.has('income') ? (
         <View
           style={[
             styles.pane,
@@ -141,6 +169,8 @@ export default function TransactionsScreen({ route }) {
             }}
           />
         </View>
+        ) : null}
+        {mountedTabs.has('expense') ? (
         <View
           style={[
             styles.pane,
@@ -156,6 +186,8 @@ export default function TransactionsScreen({ route }) {
             }}
           />
         </View>
+        ) : null}
+        {mountedTabs.has('transfer') ? (
         <View
           style={[
             styles.pane,
@@ -165,6 +197,7 @@ export default function TransactionsScreen({ route }) {
         >
           <TransfersScreen embedded />
         </View>
+        ) : null}
       </View>
 
       {!modalOpen && (

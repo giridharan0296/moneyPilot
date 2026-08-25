@@ -259,6 +259,13 @@ export function RecurringProvider({ children }) {
       lastRunDate:   null,
       active:        data.active !== false,
       createdAt:     new Date().toISOString(),
+      ...(type === 'investment' ? {
+        brokerId: data.brokerId ?? null,
+        instrumentSymbol: data.instrumentSymbol ?? null,
+        instrumentName: data.instrumentName ?? null,
+        instrumentType: data.instrumentType ?? null,
+        investmentUnits: data.investmentUnits ?? null,
+      } : {}),
     };
 
     const now = new Date();

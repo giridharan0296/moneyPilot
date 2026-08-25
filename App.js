@@ -14,13 +14,13 @@
 //           │       ├── ImportHoldings
 //           │       └── NetWorth       (assets + liabilities balance sheet)
 //           ├── Insights       → InsightsStack (nested!)
-//           │       └── Insights        (AI-generated financial coach)
+//           │       └── InsightsHome    (AI-generated financial coach)
 //           └── More           → MoreStack (nested!)
 //                   ├── MoreMenu        (sectioned hub — Analyze / Track
 //                   │                    & rules / Import / Calculators
 //                   │                    / App)
-//                   ├── Reports · CashFlow · Search        (Analyze)
-//                   ├── Budgets · Loans · Goals · Recurring
+//                   ├── Reports · CashFlow · ActivityTimeline  (Analyze)
+//                   ├── Plans · Loans · Recurring
 //                   │   · Transfers → Transactions tab (legacy redirect)
 //                   ├── ImportBankStatement
 //                   │   · ImportTransactions               (Import)
@@ -55,19 +55,21 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { Platform, View } from 'react-native';
 
 import { elevation } from './lib/theme';
+import { stackTabListeners } from './lib/navigationTabReset';
 
 import DashboardScreen        from './screens/DashboardScreen';
 import TransactionsScreen     from './screens/TransactionsScreen';
 import InvestmentsScreen      from './screens/InvestmentsScreen';
 import SettingsHubScreen      from './screens/SettingsHubScreen';
 import AdvancedSettingsScreen from './screens/SettingsScreen';
-import SettingsAccountScreen  from './screens/SettingsAccountScreen';
 import SettingsAppearanceScreen from './screens/SettingsAppearanceScreen';
 import SettingsAccountsDataScreen from './screens/SettingsAccountsDataScreen';
 import SettingsAIScreen       from './screens/SettingsAIScreen';
 import CategoriesScreen       from './screens/CategoriesScreen';
 import AccountsScreen         from './screens/AccountsScreen';
 import AccountActivityScreen  from './screens/AccountActivityScreen';
+import DataHealthScreen       from './screens/DataHealthScreen';
+import ActivityTimelineScreen from './screens/ActivityTimelineScreen';
 import BrokersScreen          from './screens/BrokersScreen';
 // v4 restructure — MoreMenuScreen absorbs the old Analysis + Tools menus
 // into a single sectioned hub. ToolsMenuScreen + AnalysisMenuScreen were
@@ -80,16 +82,16 @@ import SIPCalculatorScreen       from './screens/SIPCalculatorScreen';
 import ImportTransactionsScreen  from './screens/ImportTransactionsScreen';
 import ImportBankStatementScreen from './screens/ImportBankStatementScreen';
 import RecurringTransactionsScreen from './screens/RecurringTransactionsScreen';
-import BudgetScreen              from './screens/BudgetScreen';
-import TransfersRedirectScreen    from './screens/TransfersRedirectScreen';
-import SearchScreen              from './screens/SearchScreen';
+import PlansScreen               from './screens/PlansScreen';
+import TransfersRedirectScreen   from './screens/TransfersRedirectScreen';
 import ReportsScreen             from './screens/ReportsScreen';
-import GoalsScreen               from './screens/GoalsScreen';
+import InsurancePoliciesScreen   from './screens/InsurancePoliciesScreen';
 import TaxCalculatorScreen       from './screens/TaxCalculatorScreen';
 import CashFlowScreen            from './screens/CashFlowScreen';
 import FireCalculatorScreen      from './screens/FireCalculatorScreen';
 import SWPCalculatorScreen       from './screens/SWPCalculatorScreen';
 import MISCalculatorScreen       from './screens/MISCalculatorScreen';
+import GratuityCalculatorScreen  from './screens/GratuityCalculatorScreen';
 import FundamentalAnalysisScreen from './screens/FundamentalAnalysisScreen';
 import StockMarketScreen         from './screens/StockMarketScreen';
 import StockHistoryScreen        from './screens/StockHistoryScreen';
@@ -121,6 +123,7 @@ import { AndroidDateTimePickerProvider } from './contexts/AndroidDateTimePickerC
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { GoalsProvider }        from './contexts/GoalsContext';
+import { InsurancePoliciesProvider } from './contexts/InsurancePoliciesContext';
 import { AllocationProvider }   from './contexts/AllocationContext';
 import { AiInsightsProvider }   from './contexts/AiInsightsContext';
 
@@ -224,6 +227,8 @@ const HEADER_TINTS = {
   Loans:         '#dc2626',            // red
   LoanDetail:    '#dc2626',            // red — inherits Loans identity
   Goals:         '#059669',            // emerald
+  PlanChooser:   '#6366f1',            // indigo — budget vs goal wizard
+  Insurance:     '#0d9488',            // teal
   Recurring:     '#f59e0b',            // amber
   Transfers:     '#0ea5e9',            // cyan
   // (Import)
@@ -237,6 +242,7 @@ const HEADER_TINTS = {
   FireCalculator:'#ef4444',            // red-orange
   SWPCalculator: '#10b981',            // monthly income / withdrawals
   MISCalculator: '#0d9488',            // fixed-income monthly interest
+  GratuityCalculator: '#059669',        // employment benefit
   FundamentalAnalysis: '#7c3aed',      // violet — stock research
   StockMarket: '#0f766e',              // teal — live market overview
   StockHistory: '#0891b2',             // cyan — price history
@@ -314,7 +320,7 @@ function InsightsStack() {
   return (
     <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold)}>
       <Stack.Screen
-        name="Insights"
+        name="InsightsHome"
         component={InsightsScreen}
         options={{ headerTitle: hdr('sparkles', 'AI Insights', HEADER_TINTS.Insights) }}
       />
@@ -340,6 +346,16 @@ function MoreStack() {
 
       {/* ---- Analyze (was AnalysisStack) ---- */}
       <Stack.Screen
+        name="DataHealth"
+        component={DataHealthScreen}
+        options={{ headerTitle: hdr('activity', 'Data Health', '#059669') }}
+      />
+      <Stack.Screen
+        name="ActivityTimeline"
+        component={ActivityTimelineScreen}
+        options={{ headerTitle: hdr('activity', 'Activity & search', '#0ea5e9') }}
+      />
+      <Stack.Screen
         name="Reports"
         component={ReportsScreen}
         options={{ headerTitle: hdr('bar-chart-2', 'Reports', HEADER_TINTS.Reports) }}
@@ -351,15 +367,28 @@ function MoreStack() {
       />
       <Stack.Screen
         name="Search"
-        component={SearchScreen}
-        options={{ headerTitle: hdr('search', 'Search', HEADER_TINTS.Search) }}
+        component={ActivityTimelineScreen}
+        initialParams={{ mode: 'search' }}
+        options={{ headerTitle: hdr('search', 'Activity & search', '#0ea5e9') }}
       />
 
       {/* ---- Track & rules (was ToolsStack) ---- */}
       <Stack.Screen
+        name="Plans"
+        component={PlansScreen}
+        options={{ headerTitle: hdr('compass', 'Plans', '#6366f1') }}
+      />
+      <Stack.Screen
+        name="PlanChooser"
+        component={PlansScreen}
+        initialParams={{ promptCreate: true }}
+        options={{ headerTitle: hdr('compass', 'Plans', '#6366f1') }}
+      />
+      <Stack.Screen
         name="Budgets"
-        component={BudgetScreen}
-        options={{ headerTitle: hdr('target', 'Budgets', HEADER_TINTS.Budgets) }}
+        component={PlansScreen}
+        initialParams={{ tab: 'budgets' }}
+        options={{ headerTitle: hdr('target', 'Plans', '#6366f1') }}
       />
       <Stack.Screen
         name="Loans"
@@ -373,8 +402,14 @@ function MoreStack() {
       />
       <Stack.Screen
         name="Goals"
-        component={GoalsScreen}
-        options={{ headerTitle: hdr('flag', 'Goals', HEADER_TINTS.Goals) }}
+        component={PlansScreen}
+        initialParams={{ tab: 'goals' }}
+        options={{ headerTitle: hdr('flag', 'Plans', '#6366f1') }}
+      />
+      <Stack.Screen
+        name="InsurancePolicies"
+        component={InsurancePoliciesScreen}
+        options={{ headerTitle: hdr('shield', 'Insurance', HEADER_TINTS.Insurance) }}
       />
       <Stack.Screen
         name="RecurringTransactions"
@@ -436,6 +471,11 @@ function MoreStack() {
         options={{ headerTitle: hdr('wallet', 'MIS Calculator', HEADER_TINTS.MISCalculator) }}
       />
       <Stack.Screen
+        name="GratuityCalculator"
+        component={GratuityCalculatorScreen}
+        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator', HEADER_TINTS.GratuityCalculator) }}
+      />
+      <Stack.Screen
         name="FundamentalAnalysis"
         component={FundamentalAnalysisScreen}
         options={{ headerTitle: hdr('search', 'Fundamentals', HEADER_TINTS.FundamentalAnalysis) }}
@@ -474,11 +514,6 @@ function MoreStack() {
         name="Settings"
         component={SettingsHubScreen}
         options={{ headerTitle: hdr('settings', 'Settings', HEADER_TINTS.Settings) }}
-      />
-      <Stack.Screen
-        name={'SettingsAccount'}
-        component={SettingsAccountScreen}
-        options={{ headerTitle: hdr('user', 'Account', '#2563eb') }}
       />
       <Stack.Screen
         name={'SettingsAppearance'}
@@ -592,6 +627,7 @@ function ThemedApp() {
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <Tab.Navigator
           screenOptions={{
+            lazy: true,
             // Global default — every tab OVERRIDES `tabBarActiveTintColor`
             // in its own `options` below so the icon + label light up in
             // that tab's signature colour on focus. This global value only
@@ -661,6 +697,7 @@ function ThemedApp() {
           <Tab.Screen
             name="Invest"
             component={InvestmentsStack}
+            listeners={stackTabListeners('InvestmentsHome')}
             options={{
               headerShown: false,
               tabBarLabel: 'Invest',
@@ -691,6 +728,7 @@ function ThemedApp() {
           <Tab.Screen
             name="More"
             component={MoreStack}
+            listeners={stackTabListeners('MoreMenu')}
             options={{
               headerShown: false,
               tabBarLabel: 'More',
@@ -715,6 +753,7 @@ export default function App() {
           <SettingsProvider>
           <TransactionsProvider>
             <RecurringProvider>
+              <InsurancePoliciesProvider>
               <BudgetProvider>
                 <PortfolioProvider>
                   <NetWorthProvider>
@@ -742,6 +781,7 @@ export default function App() {
                   </NetWorthProvider>
                 </PortfolioProvider>
               </BudgetProvider>
+              </InsurancePoliciesProvider>
             </RecurringProvider>
           </TransactionsProvider>
           </SettingsProvider>

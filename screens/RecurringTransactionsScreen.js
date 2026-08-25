@@ -12,7 +12,8 @@
 // This screen is purely for CRUD-ing the rules themselves.
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
+import { useRoute } from '@react-navigation/native';
 import {
   Alert,
   ScrollView,
@@ -25,7 +26,9 @@ import {
 import RecurringForm from '../components/RecurringForm';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
+import { StatusBadge } from '../components/UiPrimitives';
 import { useRecurring } from '../contexts/RecurringContext';
+import { useInsurancePolicies } from '../contexts/InsurancePoliciesContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
@@ -42,6 +45,7 @@ const TYPE_META = {
 };
 
 export default function RecurringTransactionsScreen({ navigation }) {
+  const route = useRoute();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const {
@@ -54,6 +58,7 @@ export default function RecurringTransactionsScreen({ navigation }) {
     getRuleGeneratedTransactions,
     deleteRuleGeneratedTransactions,
   } = useRecurring();
+  const { linkRecurringRule } = useInsurancePolicies();
   const { findCategory, findAccount, baseCurrency } = useSettings();
   const { showToast, showUndoableToast } = useToast();
 
@@ -65,6 +70,21 @@ export default function RecurringTransactionsScreen({ navigation }) {
   // so the user never sees two forms fighting for the same section.
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [recurringTemplate, setRecurringTemplate] = useState(null);
+  const [linkPolicyId, setLinkPolicyId] = useState(null);
+
+  useEffect(() => {
+    if (!route.params?.create) return;
+    setEditingId(null);
+    setRecurringTemplate(route.params.template ?? null);
+    setLinkPolicyId(route.params.linkPolicyId ?? null);
+    setCreating(true);
+    navigation.setParams({
+      create: undefined,
+      template: undefined,
+      linkPolicyId: undefined,
+    });
+  }, [route.params?.create, route.params?.template, route.params?.linkPolicyId, navigation]);
 
   // Header "+" — same affordance as Accounts / Categories / Budgets.
   useLayoutEffect(() => {
@@ -101,14 +121,22 @@ export default function RecurringTransactionsScreen({ navigation }) {
   for (const r of rules) grouped[r.type]?.push(r);
 
   const handleAdd = (values) => {
+    const policyId = linkPolicyId;
     const rule = addRule(values);
     if (rule) {
+      if (policyId) {
+        linkRecurringRule(policyId, rule.id);
+        setLinkPolicyId(null);
+      }
       setCreating(false);
+      setRecurringTemplate(null);
       const count = Number(rule.generatedCount) || 0;
       showToast(
         count > 0
           ? `Rule added · ${count} past transaction${count === 1 ? '' : 's'} created`
-          : 'Recurring rule added',
+          : policyId
+            ? 'Recurring rule linked to policy'
+            : 'Recurring rule added',
         { variant: 'success', duration: 2400 },
       );
     }
@@ -197,9 +225,15 @@ export default function RecurringTransactionsScreen({ navigation }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>New recurring rule</Text>
           <RecurringForm
+            key={recurringTemplate ? 'from-template' : 'blank-recurring'}
+            initialValues={recurringTemplate ?? undefined}
             submitLabel="Add rule"
             onSubmit={handleAdd}
-            onCancel={() => setCreating(false)}
+            onCancel={() => {
+              setCreating(false);
+              setRecurringTemplate(null);
+              setLinkPolicyId(null);
+            }}
           />
         </View>
       )}
@@ -314,7 +348,7 @@ function RuleRow({
             {meta.prefix}{formatMoneyCurrency(rule.amount, baseCurrency)}
           </Text>
         </View>
-        <Text style={styles.rowSub} numberOfLines={1}>
+        <Text style={styles.rowSub} numberOfLines={2}>
           {cat?.label ?? 'Unknown'}
           {sub ? ` · ${sub.emoji} ${sub.label}` : ''}
           {acc ? `  ·  ${acc.emoji} ${acc.label}` : ''}
@@ -329,6 +363,7 @@ function RuleRow({
                 : 'Ended'
               : 'Paused'}
           </Text>
+          {rule.active && upcoming ? <StatusBadge status="upcoming" /> : null}
         </View>
       </View>
 

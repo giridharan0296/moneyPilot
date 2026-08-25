@@ -7,6 +7,7 @@ export default function HomeSectionsToolbar({
   sectionCount = 5,
   onExpandAll,
   onCollapseAll,
+  onCustomize,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -20,6 +21,16 @@ export default function HomeSectionsToolbar({
         </Text>
       </View>
       <View style={styles.actions}>
+        <TouchableOpacity
+          onPress={onCustomize}
+          style={[styles.actionBtn, styles.customizeBtn]}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel="Customize Dashboard"
+        >
+          <AppIcon name="settings" size={14} color={themeColors.accent.primary} strokeWidth={2.2} />
+          <Text style={styles.actionText}>Customize</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={onExpandAll}
           style={styles.actionBtn}
@@ -48,6 +59,7 @@ export default function HomeSectionsToolbar({
 const makeStyles = (c) => ({
   bar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: 12,
@@ -57,7 +69,7 @@ const makeStyles = (c) => ({
     borderBottomWidth: 1,
     borderBottomColor: c.border.subtle,
   },
-  lead: { flex: 1, minWidth: 0 },
+  lead: { flex: 1, minWidth: 140 },
   label: {
     fontSize: 13,
     fontWeight: '800',
@@ -71,10 +83,15 @@ const makeStyles = (c) => ({
     fontWeight: '600',
   },
   actions: {
+    flex: 1,
+    minWidth: 230,
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
     gap: 6,
   },
+  customizeBtn: { backgroundColor: c.accent.primary + '10' },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',

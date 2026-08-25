@@ -15,15 +15,15 @@ import AppButton from './AppButton';
 import AppIcon from './AppIcon';
 import DateTimePicker from './DatePicker';
 import { useAndroidDateTimePicker } from '../contexts/AndroidDateTimePickerContext';
-import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { useTheme, useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { capAtNow, formatFieldTimestamp } from '../lib/formatTimestamp';
 import { motion } from '../lib/motion';
 import { elevation, radii, spacing } from '../lib/theme';
 
 /**
  * Themed date/datetime field.
- * - iOS / web: bottom sheet with spinner / datetime input + Cancel / Done
- * - Android: system date → time dialogs (must NOT live inside a Modal)
+ * - iOS / web: bottom sheet with native spinner / datetime input + Cancel / Done
+ * - Android: system date → time dialogs at app root (works inside modals)
  */
 export default function DateTimeField({
   label = 'Timestamp',
@@ -36,6 +36,7 @@ export default function DateTimeField({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const { isDark } = useTheme();
   const maxDateRef = useRef(maximumDate ?? new Date());
   if (maximumDate) maxDateRef.current = maximumDate;
 
@@ -130,6 +131,7 @@ export default function DateTimeField({
     setDraft(value ?? new Date());
     setSheetOpen(true);
   };
+
   const iosPickerMode = mode === 'date' ? 'date' : 'datetime';
 
   return (
@@ -143,7 +145,7 @@ export default function DateTimeField({
         accessibilityLabel={`${label}: ${displayText}`}
       >
         <View style={styles.chipInner}>
-          <AppIcon name="calendar" size={16} color={themeColors.text.primary} strokeWidth={2} />
+          <AppIcon name="calendar" size={16} color={themeColors.accent.primary} strokeWidth={2} />
           <Text style={styles.chipText}>{displayText}</Text>
         </View>
         <Text style={styles.chipHint}>{hint}</Text>
@@ -182,6 +184,9 @@ export default function DateTimeField({
                     display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     maximumDate={maxDateRef.current}
                     minimumDate={minimumDate}
+                    themeVariant={isDark ? 'dark' : 'light'}
+                    accentColor={themeColors.accent.primary}
+                    textColor={themeColors.text.primary}
                     onChange={(event, selectedDate) => {
                       if (event?.type === 'dismissed') return;
                       if (selectedDate) {
@@ -258,6 +263,8 @@ const makeStyles = (c) => ({
     borderTopRightRadius: radii['2xl'],
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderColor: c.border.subtle,
     ...elevation.floating,
   },
   handle: {
@@ -287,6 +294,11 @@ const makeStyles = (c) => ({
   pickerWrap: {
     alignItems: 'center',
     marginBottom: spacing.sm,
+    backgroundColor: c.bg.surfaceAlt,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
   },
   nowBtn: {
     alignSelf: 'center',

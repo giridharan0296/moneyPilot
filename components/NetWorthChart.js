@@ -19,7 +19,7 @@
 //   - Selected range has no data but history exists → invite user to widen.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import Svg, { Circle, Line, Path, Polyline, Text as SvgText } from 'react-native-svg';
 
@@ -43,6 +43,10 @@ export default function NetWorthChart({
 }) {
   const styles = useThemedStyles(makeStyles);
   const [rangeId, setRangeId] = useState(defaultRangeId);
+
+  useEffect(() => {
+    setRangeId(defaultRangeId);
+  }, [defaultRangeId]);
 
   // Recompute the visible series whenever history or the selected range
   // changes. Cheap — history length is capped by MAX_POINTS in the helper.

@@ -29,6 +29,7 @@ import {
 import AmountCalculatorButton from './AmountCalculatorButton';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import QuickAddPickerItem from './QuickAddPickerItem';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import {
@@ -37,6 +38,7 @@ import {
   NTH_WEEK_CHOICES,
   WEEKDAYS,
 } from '../lib/recurring';
+import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 
 const TYPES = [
   { id: 'expense',    label: 'Expense',    icon: 'credit-card',  color: '#dc2626' },
@@ -224,11 +226,7 @@ export default function RecurringForm({
           No {type} categories — add one in Settings.
         </Text>
       ) : (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-        >
+        <View style={styles.chipRow}>
           {typeCategories.map((c) => {
             const selected = c.id === categoryId;
             return (
@@ -252,64 +250,79 @@ export default function RecurringForm({
               </TouchableOpacity>
             );
           })}
-        </ScrollView>
+          <QuickAddPickerItem kind="category" type={type} accent={accent} onCreated={(item) => changeCategory(item.id)} />
+        </View>
       )}
+      {categories.length === 0 ? <QuickAddPickerItem
+        kind="category"
+        type={type}
+        accent={accent}
+        onCreated={(item) => changeCategory(item.id)}
+      /> : null}
 
-      {subCategories.length > 0 && (
+      {selectedCategory && (
         <>
           <Text style={styles.label}>Sub-category (optional)</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-          >
-            <TouchableOpacity
-              onPress={() => setSubCategoryId(null)}
-              activeOpacity={0.7}
-              style={[
-                styles.subChip,
-                !subCategoryId && { backgroundColor: accent, borderColor: accent },
-              ]}
-            >
-              <Text
+          {subCategories.length > 0 ? (
+            <View style={styles.chipRow}>
+              <TouchableOpacity
+                onPress={() => setSubCategoryId(null)}
+                activeOpacity={0.7}
                 style={[
-                  styles.subChipText,
-                  !subCategoryId && styles.chipTextSelected,
+                  styles.subChip,
+                  !subCategoryId && { backgroundColor: accent, borderColor: accent },
                 ]}
               >
-                None
-              </Text>
-            </TouchableOpacity>
-            {subCategories.map((s) => {
-              const selected = s.id === subCategoryId;
-              return (
-                <TouchableOpacity
-                  key={s.id}
-                  onPress={() =>
-                    setSubCategoryId((prev) => (prev === s.id ? null : s.id))
-                  }
-                  activeOpacity={0.7}
+                <Text
                   style={[
-                    styles.subChip,
-                    selected && { backgroundColor: accent, borderColor: accent },
+                    styles.subChipText,
+                    !subCategoryId && styles.chipTextSelected,
                   ]}
                 >
-                  <Text
+                  None
+                </Text>
+              </TouchableOpacity>
+              {subCategories.map((s) => {
+                const selected = s.id === subCategoryId;
+                return (
+                  <TouchableOpacity
+                    key={s.id}
+                    onPress={() =>
+                      setSubCategoryId((prev) => (prev === s.id ? null : s.id))
+                    }
+                    activeOpacity={0.7}
                     style={[
-                      styles.subChipText,
-                      selected && styles.chipTextSelected,
+                      styles.subChip,
+                      selected && { backgroundColor: accent, borderColor: accent },
                     ]}
                   >
-                    {s.emoji} {s.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      style={[
+                        styles.subChipText,
+                        selected && styles.chipTextSelected,
+                      ]}
+                    >
+                      {s.emoji} {formatSubCategoryLabel(s.label)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <QuickAddPickerItem kind="subcategory" type={type} parentId={categoryId} accent={accent} onCreated={(item) => setSubCategoryId(item.id)} />
+            </View>
+          ) : null}
+          {subCategories.length === 0 ? <QuickAddPickerItem
+            kind="subcategory"
+            type={type}
+            parentId={categoryId}
+            accent={accent}
+            onCreated={(item) => setSubCategoryId(item.id)}
+          /> : null}
         </>
       )}
 
       <Text style={styles.label}>Account</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+      <View style={{ flex: 1 }}>
       <GroupedAccountPicker
         accounts={accounts}
         accountGroups={accountGroups}
@@ -317,6 +330,9 @@ export default function RecurringForm({
         onSelect={setAccountId}
         accent={accent}
       />
+      </View>
+      <QuickAddPickerItem kind="account" accent={accent} onCreated={(item) => setAccountId(item.id)} />
+      </View>
 
       <Text style={styles.label}>Note (optional)</Text>
       <TextInput
@@ -798,7 +814,7 @@ const makeStyles = (c) => ({
     borderColor: c.border.subtle,
   },
 
-  chipRow: { paddingVertical: 4, gap: 8, flexDirection: 'row' },
+  chipRow: { paddingVertical: 4, gap: 8, flexDirection: 'row', flexWrap: 'wrap' },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -824,8 +840,10 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surfaceAlt,
     borderWidth: 1,
     borderColor: c.border.subtle,
+    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
-  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
+  subChipText: { fontSize: 12, fontWeight: '600', color: c.text.secondary, flexShrink: 0 },
 
   groupHeader: {
     fontSize: 10,

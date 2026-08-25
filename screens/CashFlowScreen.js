@@ -56,7 +56,14 @@ export default function CashFlowScreen({ navigation }) {
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
 
   const autoStart = useMemo(() => {
-    const balances = computeAccountBalances({ accounts, income, expenses, investments, transfers });
+    const balances = computeAccountBalances({
+      accounts,
+      income,
+      expenses,
+      investments,
+      transfers,
+      asOf: new Date().toISOString(),
+    });
     return accounts.reduce((sum, account) => {
       const amount = Number(balances.get(account.id)) || 0;
       return sum + amount * lookupRateOrOne(fxRates, account.currency ?? baseCurrency, baseCurrency);
@@ -350,7 +357,7 @@ function EventRow({ event, prevBalance, baseCurrency }) {
 const makeStyles = (c) => ({
   screen:    { flex: 1, backgroundColor: c.bg.canvas },
   container: {
-    padding: spacing.xl,
+    padding: spacing.lg,
     paddingBottom: 80,
     gap: spacing.md,
   },

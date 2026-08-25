@@ -1021,7 +1021,7 @@ function recommendation(result, themeColors) {
 const makeStyles = (c) => ({
   screen:    { flex: 1, backgroundColor: c.bg.canvas },
   container: {
-    padding: spacing.xl,
+    padding: spacing.lg,
     paddingBottom: 80,
     gap: spacing.md,
   },

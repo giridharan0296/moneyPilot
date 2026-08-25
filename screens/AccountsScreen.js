@@ -35,6 +35,8 @@ import {
 
 import AppIcon from '../components/AppIcon';
 import AmountCalculatorButton from '../components/AmountCalculatorButton';
+import FormScreen from '../components/FormScreen';
+import { StatusBadge } from '../components/UiPrimitives';
 import DateTimePicker from '../components/DatePicker';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
@@ -111,12 +113,10 @@ export default function AccountsScreen({ navigation }) {
   }, [accountGroups, accountsByGroup]);
 
   return (
-    <View style={styles.root}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
+    <FormScreen
+      style={styles.root}
+      contentContainerStyle={styles.scrollContent}
+    >
         <Text style={styles.subtitle}>
           {totals.groups} group{totals.groups === 1 ? '' : 's'} · {totals.accounts}{' '}
           account{totals.accounts === 1 ? '' : 's'}. Swipe an account left to
@@ -168,8 +168,7 @@ export default function AccountsScreen({ navigation }) {
             Tip: swipe an account left to delete it.
           </Text>
         )}
-      </ScrollView>
-    </View>
+    </FormScreen>
   );
 }
 
@@ -198,7 +197,16 @@ function GroupCard({
   const [editingGroup, setEditingGroup] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState(null);
   const accountBalances = useMemo(
-    () => computeAccountBalances({ accounts, income, expenses, investments, transfers }),
+    () => computeAccountBalances({
+      accounts,
+      income,
+      expenses,
+      investments,
+      transfers,
+      // Account cards represent the balance now. Future-dated entries
+      // belong to forecasts and must not change today's available balance.
+      asOf: new Date().toISOString(),
+    }),
     [accounts, income, expenses, investments, transfers],
   );
 
@@ -424,7 +432,6 @@ function SwipeableAccountRow({ account, baseCurrency, currentBalance, onEdit, on
   const isForeign   = accCurrency !== baseCurrency;
   const hasOpeningBalance = account.openingBalanceDate != null;
   const hasReconciliation = account.reconciledAt != null;
-  const reconciliationDelta = (Number(currentBalance) || 0) - (Number(account.reconciliationBalance) || 0);
 
   const translateX = useRef(new Animated.Value(0)).current;
   const openRef    = useRef(false);
@@ -542,26 +549,23 @@ function SwipeableAccountRow({ account, baseCurrency, currentBalance, onEdit, on
                   {accCurrency}
                 </Text>
               </View>
-              {hasOpeningBalance ? (
-                <Text style={styles.openingBalanceText}>
-                  Balance {accCurrency} {(Number(currentBalance) || 0).toLocaleString('en-IN')}
-                  {account.openingBalanceDate
-                    ? ` · as of ${formatShortDate(account.openingBalanceDate)}`
-                    : ''}
-                </Text>
-              ) : null}
-            </View>
-            {hasReconciliation ? (
-              <Text style={[
-                styles.reconciliationText,
-                Math.abs(reconciliationDelta) < 0.01
-                  ? styles.reconciliationMatch
-                  : styles.reconciliationMismatch,
-              ]}>
-                {Math.abs(reconciliationDelta) < 0.01
-                  ? 'Reconciled'
-                  : `Difference ${accCurrency} ${Math.abs(reconciliationDelta).toLocaleString('en-IN')}`}
+              <Text style={styles.currentBalanceText}>
+                Current balance {accCurrency} {(Number(currentBalance) || 0).toLocaleString('en-IN')}
               </Text>
+            </View>
+            {hasOpeningBalance ? (
+              <Text style={styles.openingBalanceText}>
+                Opening balance {accCurrency} {(Number(account.openingBalance) || 0).toLocaleString('en-IN')}
+                {` · ${formatShortDate(account.openingBalanceDate)}`}
+              </Text>
+            ) : null}
+            {hasReconciliation ? (
+              <View style={styles.reconciliationRow}>
+                <StatusBadge status="reconciled" />
+                <Text style={styles.reconciliationDate}>
+                  {formatShortDate(account.reconciledAt)}
+                </Text>
+              </View>
             ) : null}
           </View>
         </TouchableOpacity>
@@ -970,15 +974,16 @@ const makeStyles = (c) => ({
   },
   openingBalanceText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: c.text.secondary,
+    color: c.text.muted,
+    marginTop: 5,
   },
-  reconciliationText: {
+  currentBalanceText: {
     fontSize: 11,
     fontWeight: '700',
+    color: c.text.secondary,
   },
-  reconciliationMatch: { color: c.accent.income },
-  reconciliationMismatch: { color: c.accent.expense },
+  reconciliationRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  reconciliationDate: { color: c.text.muted, fontSize: 11, fontWeight: '600' },
   rowEmoji: { fontSize: 13 },
 
   // Currency pill — always shown; muted when matching base currency.

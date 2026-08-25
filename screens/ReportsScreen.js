@@ -24,12 +24,14 @@ import AppIcon from '../components/AppIcon';
 import { PieBreakdownView } from '../components/CategoryPieChart';
 import DateFilterBar from '../components/DateFilterBar';
 import TrendBarChart from '../components/TrendBarChart';
+import { EmptyState as VisualEmptyState } from '../components/UiPrimitives';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import {
+  flowInvestments,
   groupModeLabel,
   monthlyTotals,
   periodStats,
@@ -91,7 +93,7 @@ function buildFinancialYearStats(startYear, expenses, income, investments, trans
   };
   const fyExpenses = toBaseAmountRows(expenses.filter(inFY), fxRates, baseCurrency);
   const fyIncome = toBaseAmountRows(income.filter(inFY), fxRates, baseCurrency);
-  const fyInvestments = toBaseAmountRows(investments.filter(inFY), fxRates, baseCurrency);
+  const fyInvestments = toBaseAmountRows(flowInvestments(investments.filter(inFY)), fxRates, baseCurrency);
   const fyTransfers = transfers.filter(inFY);
   const fiscalStats = periodStats(fyExpenses, fyIncome, fyInvestments, {
     transfers: fyTransfers,
@@ -152,7 +154,7 @@ export default function ReportsScreen() {
   const filtered = useMemo(() => ({
     expenses:    toBaseAmountRows(filterByRange(expenses),    fxRates, baseCurrency),
     income:      toBaseAmountRows(filterByRange(income),      fxRates, baseCurrency),
-    investments: toBaseAmountRows(filterByRange(investments), fxRates, baseCurrency),
+    investments: toBaseAmountRows(flowInvestments(filterByRange(investments)), fxRates, baseCurrency),
   }), [expenses, income, investments, filterByRange, fxRates, baseCurrency]);
 
   const stats = useMemo(
@@ -342,9 +344,12 @@ export default function ReportsScreen() {
           onToggle={() => toggleSection('broker')}
         >
           {brokerBreakdown.length === 0 ? (
-            <Text style={styles.emptyInline}>
-              No investment transactions in this window.
-            </Text>
+            <VisualEmptyState
+              icon="pie-chart"
+              title="No broker activity"
+              body="Investment transactions in this period will appear here by broker."
+              tint="#6366f1"
+            />
           ) : (
             <PieBreakdownView
               rows={brokerBreakdown}
@@ -368,7 +373,12 @@ export default function ReportsScreen() {
         onToggle={() => toggleSection('top10')}
       >
         {top10.length === 0 ? (
-          <Text style={styles.emptyInline}>Nothing to show yet.</Text>
+          <VisualEmptyState
+            icon="receipt"
+            title="No expenses in this period"
+            body="Change the date range or add an expense to populate this ranking."
+            tint="#dc2626"
+          />
         ) : (
           <View style={{ gap: 4 }}>
             {top10.map((tx, i) => {
@@ -622,7 +632,11 @@ function CategoryBreakdownCard({
       onToggle={onToggle}
     >
       {rows.length === 0 ? (
-        <Text style={styles.emptyInline}>{emptyText}</Text>
+        <VisualEmptyState
+          icon="pie-chart"
+          title={emptyText}
+          body="Change the date range or record a transaction to see this breakdown."
+        />
       ) : (
         <PieBreakdownView
           rows={rows}
@@ -669,7 +683,7 @@ function formatDate(iso) {
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
   container: {
-    padding: spacing.xl,
+    padding: spacing.lg,
     paddingBottom: 60,
     gap: spacing.md,
   },

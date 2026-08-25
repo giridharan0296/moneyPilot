@@ -35,6 +35,7 @@ import {
 } from 'react-native';
 
 import AppIcon from '../components/AppIcon';
+import QuickAddPickerItem from '../components/QuickAddPickerItem';
 import { pickFile } from '../lib/openFile';
 import { parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
 import { parseXLSXRaw } from '../lib/xlsx';
@@ -369,6 +370,7 @@ export default function ImportBankStatementScreen({ navigation }) {
                 You don't have any accounts set up yet. Add one under
                 Settings → Accounts before importing.
               </Text>
+              <QuickAddPickerItem kind="account" onCreated={(item) => setAccountId(item.id)} />
             </View>
           ) : (
             <View style={styles.chipRow}>
@@ -387,6 +389,10 @@ export default function ImportBankStatementScreen({ navigation }) {
                   </TouchableOpacity>
                 );
               })}
+              <QuickAddPickerItem
+                kind="account"
+                onCreated={(item) => setAccountId(item.id)}
+              />
             </View>
           )}
           <Text style={styles.hint}>
@@ -426,6 +432,7 @@ export default function ImportBankStatementScreen({ navigation }) {
           {mapping.debitCol && (
             <CategoryPicker
               label="Expense category (used for Debit rows)"
+              type="expense"
               options={categories.expense ?? []}
               selected={expenseCategoryId}
               onSelect={setExpenseCategoryId}
@@ -434,6 +441,7 @@ export default function ImportBankStatementScreen({ navigation }) {
           {mapping.creditCol && (
             <CategoryPicker
               label="Income category (used for Credit rows)"
+              type="income"
               options={categories.income ?? []}
               selected={incomeCategoryId}
               onSelect={setIncomeCategoryId}
@@ -578,7 +586,7 @@ function ColumnPicker({ field, headers, selected, onSelect }) {
   );
 }
 
-function CategoryPicker({ label, options, selected, onSelect }) {
+function CategoryPicker({ label, type, options, selected, onSelect }) {
   const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.mapBlock}>
@@ -598,6 +606,11 @@ function CategoryPicker({ label, options, selected, onSelect }) {
             </TouchableOpacity>
           );
         })}
+        <QuickAddPickerItem
+          kind="category"
+          type={type}
+          onCreated={(item) => onSelect(item.id)}
+        />
       </View>
     </View>
   );

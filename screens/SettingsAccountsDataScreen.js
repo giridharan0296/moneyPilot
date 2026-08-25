@@ -1,10 +1,13 @@
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Text, TouchableOpacity, View } from 'react-native';
 
+import FormScreen from '../components/FormScreen';
 import AppIcon from '../components/AppIcon';
+import { SectionHeader } from '../components/UiPrimitives';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { radii, spacing } from '../lib/theme';
 import { CurrencySection } from './SettingsScreen';
+import GoogleAccountSection from './SettingsAccountScreen';
 
 export default function SettingsAccountsDataScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
@@ -46,10 +49,17 @@ export default function SettingsAccountsDataScreen({ navigation }) {
   ];
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
+    <FormScreen style={styles.screen} contentContainerStyle={styles.container}>
       <Text style={styles.heading}>Accounts & data</Text>
-      <Text style={styles.subtitle}>Manage the master data used by transaction forms and balances.</Text>
+      <Text style={styles.subtitle}>Identity, financial accounts, and currency.</Text>
 
+      <GoogleAccountSection />
+
+      <SectionHeader
+        icon="wallet"
+        title="Financial data"
+        tint="#0ea5e9"
+      />
       <View style={styles.list}>
         {cards.map((item) => (
           <TouchableOpacity
@@ -78,7 +88,7 @@ export default function SettingsAccountsDataScreen({ navigation }) {
         onSetRate={setFxRate}
         onDeleteRate={deleteFxRate}
       />
-    </ScrollView>
+    </FormScreen>
   );
 }
 

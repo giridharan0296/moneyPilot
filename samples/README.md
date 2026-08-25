@@ -6,7 +6,7 @@ the format, test the importer, or as a starting template for your own data.
 | File | Rows | Purpose |
 |---|---|---|
 | `transactions_expenses_sample.csv` | 15 | Rent, groceries, fuel, bills, shopping, restaurant, subscriptions |
-| `transactions_income_sample.csv` | 8 | Salary, freelance, dividend, refund, gift, cashback |
+| `transactions_income_sample.csv` | 8 | Employment, business, investment income, refund, gift, cashback |
 | `transactions_investments_sample.csv` | 8 | MF SIPs, stocks, FD, ELSS, SGB, crypto |
 
 ---
@@ -55,9 +55,11 @@ fallback.
 
 Default categories used:
 - **Expenses**: Food, Transport, Shopping, Bills, Health, Fun, Other
-- **Income**: Salary, Freelance, Investments, Gift, Refund, Other
-- **Investments**: Stocks, Mutual Funds, Crypto, Gold, Fixed Deposit,
-  Real Estate, Other
+- **Income**: Employment Income, Business Income, Investment Income, Rental
+  Income, Pension & Benefits, Gift, Refund, Other
+- **Investments**: Stocks, Mutual Funds, Crypto, Precious Metals, Bank
+  Deposits, Real Estate, ETFs, Bonds & Fixed Income, Government Savings,
+  Retirement, Derivatives, Insurance Investments, Alternative Investments
 
 ---
 

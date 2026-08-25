@@ -16,6 +16,10 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 import AppIcon from './AppIcon';
 import AmountCalculatorButton from './AmountCalculatorButton';
+import QuickAddPickerItem from './QuickAddPickerItem';
+import TagInput from './TagInput';
+import { useTransactions } from '../contexts/TransactionsContext';
+import { useTransfers } from '../contexts/TransfersContext';
 
 // ----------------------------------------------------------------------------
 // TransferForm — kind-aware form for adding OR editing a Transfer.
@@ -47,6 +51,7 @@ export default function TransferForm({
   accountGroups = [],
   assets = [],
   liabilities = [],
+  loans = [],
   submitLabel,
   onSubmit,
   onCancel,
@@ -54,6 +59,8 @@ export default function TransferForm({
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { baseCurrency } = useSettings();
+  const { allTags } = useTransactions();
+  const { transfers } = useTransfers();
   const isEdit = !!initialValues;
 
   // In edit mode the kind is locked to whatever the transfer already has.
@@ -74,6 +81,9 @@ export default function TransferForm({
     initialValues?.targetAccountId ?? null,
   );
   const [note, setNote] = useState(initialValues?.note ?? '');
+  const [tags, setTags] = useState(
+    Array.isArray(initialValues?.tags) ? initialValues.tags : [],
+  );
   const [date, setDate] = useState(
     initialValues?.createdAt ? new Date(initialValues.createdAt) : new Date(),
   );
@@ -96,6 +106,28 @@ export default function TransferForm({
   );
 
   const [error, setError] = useState(null);
+  const tagInputRef = useRef(null);
+  const tagSuggestions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const bump = (tag) => {
+      const label = String(tag ?? '').trim();
+      if (!label) return;
+      const key = label.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(label);
+    };
+    for (const transfer of transfers) {
+      for (const tag of transfer.tags ?? []) bump(tag);
+    }
+    for (const tag of allTags) bump(tag);
+    return out;
+  }, [allTags, transfers]);
+  const selectedFormalLoan = useMemo(
+    () => loans.find((loan) => loan.linkedLiabilityId === linkedNetWorthId) ?? null,
+    [linkedNetWorthId, loans],
+  );
 
   // On create-mode mount, focus the amount input so the user can just start
   // typing digits after tapping "+ New". Skipped in edit mode because the
@@ -209,6 +241,7 @@ export default function TransferForm({
         : ((kind === 'lend' || kind === 'borrow') ? null : linkedNetWorthId),
       interestAmount: interest,
       note: note.trim(),
+      tags: tagInputRef.current?.getValue?.() ?? tags,
       createdAt: date.toISOString(),
     });
   };
@@ -403,21 +436,17 @@ export default function TransferForm({
         <>
           <View style={styles.formalLoanHint}>
             <Text style={styles.formalLoanHintTitle}>
-              Formal loan? Skip this form.
+              {selectedFormalLoan ? `Tracking ${selectedFormalLoan.name}` : 'Formal loans are supported'}
             </Text>
             <Text style={styles.formalLoanHintBody}>
-              For bank EMIs, use{' '}
-              <Text style={styles.formalLoanHintEmphasis}>
-                Tools → Loans
-              </Text>
-              . It auto-computes the principal / interest split from the
-              amortisation schedule, tracks rate changes, and keeps the
-              outstanding in sync with the lender's real balance. This
-              free-text field below is meant for informal debts where you
-              already know the split (e.g. friends & family loans).
+              {selectedFormalLoan
+                ? 'This payment will appear in the loan timeline. Principal and interest are calculated from its schedule.'
+                : 'Select a liability linked to a formal loan to update its timeline automatically. For informal debts, enter the interest split below.'}
             </Text>
           </View>
 
+          {!selectedFormalLoan ? (
+          <>
           <Text style={styles.label}>Interest portion (optional, ₹)</Text>
           <AmountCalculatorButton value={interestAmount} onChangeText={setInterestAmount}>
             <TextInput
@@ -433,6 +462,8 @@ export default function TransferForm({
             Interest is logged as an expense under Bills → Loan Interest. The
             principal portion reduces the liability only.
           </Text>
+          </>
+          ) : null}
         </>
       )}
 
@@ -446,6 +477,7 @@ export default function TransferForm({
         onSelect={setAccountId}
         accentColor={meta.color}
       />
+      <QuickAddPickerItem kind="account" accent={meta.color} onCreated={(item) => setAccountId(item.id)} />
 
       {isOwnAccountTransfer && (
         <>
@@ -459,6 +491,7 @@ export default function TransferForm({
             onSelect={setTargetAccountId}
             accentColor={meta.color}
           />
+          <QuickAddPickerItem kind="account" accent={meta.color} onCreated={(item) => setTargetAccountId(item.id)} />
         </>
       )}
 
@@ -477,6 +510,15 @@ export default function TransferForm({
         placeholder="e.g. Cash handed over on 18 Jul, no interest"
         placeholderTextColor={themeColors.text.muted}
         multiline
+      />
+
+      <Text style={styles.label}>Tags (optional)</Text>
+      <TagInput
+        ref={tagInputRef}
+        value={tags}
+        onChange={setTags}
+        suggestions={tagSuggestions}
+        placeholder="e.g. family, emergency, reimbursable"
       />
 
       {error && <Text style={styles.error}>{error}</Text>}

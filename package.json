@@ -17,8 +17,10 @@
     "screenshots:marketing:dark": "node scripts/capture-marketing-screenshots.mjs --dark"
   },
   "dependencies": {
+    "@expo-google-fonts/cascadia-code": "^0.4.1",
     "@expo-google-fonts/dm-sans": "^0.4.2",
     "@expo-google-fonts/ibm-plex-sans": "^0.4.1",
+    "@expo-google-fonts/lora": "^0.4.2",
     "@expo-google-fonts/nunito": "^0.4.2",
     "@expo-google-fonts/source-serif-4": "^0.4.1",
     "@expo-google-fonts/space-grotesk": "^0.4.1",
@@ -44,6 +46,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-speech-recognition": "3.0.1",
+    "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-web-browser": "~15.0.11",
     "pdfjs-dist": "^3.11.174",

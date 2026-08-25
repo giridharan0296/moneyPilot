@@ -5,6 +5,7 @@ import { FONT_OPTIONS } from '../constants';
 import { useAllocation } from '../contexts/AllocationContext';
 import { useBudgets } from '../contexts/BudgetContext';
 import { useGoals } from '../contexts/GoalsContext';
+import { useInsurancePolicies } from '../contexts/InsurancePoliciesContext';
 import { useLoans } from '../contexts/LoansContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
@@ -29,6 +30,7 @@ export function useDemoRestore() {
   const { restoreState: restoreBudgets } = useBudgets();
   const { restoreState: restoreTransfers } = useTransfers();
   const { restoreState: restoreGoals } = useGoals();
+  const { restoreState: restoreInsurancePolicies } = useInsurancePolicies();
   const { restoreState: restoreAllocation } = useAllocation();
   const { restoreState: restoreLoans } = useLoans();
   const { setThemeMode, setFontId } = useTheme();
@@ -66,6 +68,9 @@ export function useDemoRestore() {
     runSection('budgets', () => restoreBudgets({ budgets: d.budgets ?? [] }));
     runSection('transfers', () => restoreTransfers({ transfers: d.transfers ?? [] }));
     runSection('goals', () => restoreGoals({ goals: d.goals ?? [] }));
+    runSection('insurancePolicies', () => restoreInsurancePolicies({
+      insurancePolicies: d.insurancePolicies ?? [],
+    }));
     runSection('allocation', () => restoreAllocation({ allocationTargets: d.allocationTargets ?? [] }));
     runSection('loans', () => restoreLoans({
       loans: d.loans ?? [],
@@ -99,6 +104,7 @@ export function useDemoRestore() {
     restoreAllocation,
     restoreBudgets,
     restoreGoals,
+    restoreInsurancePolicies,
     restoreLoans,
     restoreNetWorth,
     restorePortfolio,

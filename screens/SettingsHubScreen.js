@@ -6,10 +6,10 @@ import { spacing } from '../lib/theme';
 
 const SETTINGS_AREAS = [
   {
-    route: 'SettingsAccount',
-    icon: 'user',
-    title: 'Account',
-    description: 'Optional Google sign-in for identity and future cloud sync.',
+    route: 'GuidedOnboarding',
+    icon: 'sparkles',
+    title: 'Guided onboarding',
+    description: 'Replay the quick tour of accounts, transactions, and reports.',
     tint: '#2563eb',
   },
   {
@@ -23,7 +23,7 @@ const SETTINGS_AREAS = [
     route: 'SettingsAccountsData',
     icon: 'wallet',
     title: 'Accounts & data',
-    description: 'Categories, accounts, brokers, currency, and exchange rates.',
+    description: 'Google sign-in, financial accounts, categories, brokers, and currency.',
     tint: '#0ea5e9',
   },
   {
@@ -61,7 +61,13 @@ export default function SettingsHubScreen({ navigation }) {
             description={item.description}
             tint={item.tint}
             bordered
-            onPress={() => navigation.navigate(item.route)}
+            onPress={() => {
+              if (item.route === 'GuidedOnboarding') {
+                navigation.getParent()?.navigate('Dashboard', { startOnboarding: Date.now() });
+                return;
+              }
+              navigation.navigate(item.route);
+            }}
             accessibilityHint={item.description}
           />
         ))}

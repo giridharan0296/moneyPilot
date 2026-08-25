@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TransactionForm from './TransactionForm';
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
@@ -38,6 +39,8 @@ export default function EditTransactionModal({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const insets = useSafeAreaInsets();
+  const headerOffset = insets.top + 56;
   if (!item) return null;
 
   const initialValues = {
@@ -59,6 +62,7 @@ export default function EditTransactionModal({
     instrumentName: item.instrumentName ?? null,
     instrumentType: item.instrumentType ?? null,
     investmentUnits: item.investmentUnits ?? null,
+    openingPosition: item.openingPosition ?? null,
     chitSchemeId: item.chitSchemeId ?? null,
     chitSchemeName: item.chitSchemeName ?? null,
     chitMetalPurity: item.chitMetalPurity ?? null,
@@ -111,6 +115,7 @@ export default function EditTransactionModal({
         instrumentName: values.instrumentName ?? null,
         instrumentType: values.instrumentType ?? null,
         investmentUnits: values.investmentUnits ?? null,
+        openingPosition: values.openingPosition ?? null,
       } : {}),
       ...(type === 'income' ? {
         payslipBasic: values.payslipBasic ?? null,
@@ -147,6 +152,7 @@ export default function EditTransactionModal({
       <KeyboardAvoidingView
         style={styles.root}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerOffset : 0}
       >
         <View style={styles.header}>
           {/* Back button — arrow-left icon + "Back" label. Matches
@@ -184,6 +190,7 @@ export default function EditTransactionModal({
           contentContainerStyle={styles.body}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          automaticallyAdjustKeyboardInsets
         >
           <TransactionForm
             categories={categories}

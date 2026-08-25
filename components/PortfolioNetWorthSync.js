@@ -11,6 +11,8 @@ import { fetchLiveQuotes } from '../lib/fundamentals';
 import {
   aggregateHoldingsBySymbol,
   buildDisplayHoldings,
+  holdingCostBasis,
+  holdingMarketValue,
   symbolsNeedingQuotes,
 } from '../lib/portfolioHoldings';
 import {
@@ -30,6 +32,7 @@ export default function PortfolioNetWorthSync() {
     addAsset,
     updateAsset,
     deleteAsset,
+    isPortfolioSymbolHidden,
   } = useNetWorth();
 
   const [quotes, setQuotes] = useState({});
@@ -38,8 +41,8 @@ export default function PortfolioNetWorthSync() {
   const ready = portfolioReady && txReady && settingsReady && nwReady;
 
   const symbolsToQuote = useMemo(
-    () => symbolsNeedingQuotes(holdings, investments),
-    [holdings, investments],
+    () => symbolsNeedingQuotes(holdings, investments, { isSymbolHidden: isPortfolioSymbolHidden }),
+    [holdings, investments, isPortfolioSymbolHidden],
   );
 
   useEffect(() => {
@@ -64,7 +67,9 @@ export default function PortfolioNetWorthSync() {
   useEffect(() => {
     if (!ready) return;
 
-    const display = buildDisplayHoldings(holdings, investments, quotes);
+    const display = buildDisplayHoldings(holdings, investments, quotes, {
+      isSymbolHidden: isPortfolioSymbolHidden,
+    });
     const aggregated = aggregateHoldingsBySymbol(display);
     const metaMap = buildSymbolMetaMap(investments);
     const activeSymbols = new Set();
@@ -72,6 +77,10 @@ export default function PortfolioNetWorthSync() {
     const syncedAssets = assets.filter((a) => a.linkedPortfolioSync);
     const bySymbol = new Map();
     for (const asset of syncedAssets) {
+      if (asset.portfolioSymbol && isPortfolioSymbolHidden(asset.portfolioSymbol)) {
+        deleteAsset(asset.id);
+        continue;
+      }
       if (asset.portfolioSymbol) {
         if (bySymbol.has(asset.portfolioSymbol)) {
           deleteAsset(asset.id);
@@ -82,8 +91,12 @@ export default function PortfolioNetWorthSync() {
     }
 
     for (const holding of aggregated) {
-      const value = Math.max(0, Math.round(Number(holding.currentValue) || 0));
-      if (value <= 0) continue;
+      if (isPortfolioSymbolHidden(holding.portfolioSymbol)) continue;
+
+      const marketValue = Math.max(0, Math.round(holdingMarketValue(holding)));
+      const costBasis = Math.max(0, Math.round(holdingCostBasis(holding)));
+      const value = marketValue > 0 ? marketValue : costBasis;
+      if (value <= 0 || (Number(holding.quantity) || 0) <= 0) continue;
 
       activeSymbols.add(holding.portfolioSymbol);
       const kind = resolvePortfolioInstrumentKind(holding.symbol, metaMap);
@@ -105,6 +118,7 @@ export default function PortfolioNetWorthSync() {
 
     for (const asset of syncedAssets) {
       const key = asset.portfolioSymbol;
+      if (key && isPortfolioSymbolHidden(key)) continue;
       if (!key || !activeSymbols.has(key)) {
         deleteAsset(asset.id);
       }
@@ -119,6 +133,7 @@ export default function PortfolioNetWorthSync() {
     addAsset,
     updateAsset,
     deleteAsset,
+    isPortfolioSymbolHidden,
   ]);
 
   return null;

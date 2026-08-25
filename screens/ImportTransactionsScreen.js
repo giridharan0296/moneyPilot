@@ -30,6 +30,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles } from '../contexts/ThemeContext';
 import AppIcon from '../components/AppIcon';
+import QuickAddPickerItem from '../components/QuickAddPickerItem';
 
 // Fields we ask the user to map. `required` toggles the red asterisk and
 // step-4 fallback behavior.
@@ -504,7 +505,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                       );
                     })}
                   </View>
-                  {fbSubs.length > 0 && (
+                  {fb.categoryId && (
                     <>
                       <Text style={styles.mapLabel}>Fallback sub-category ({t.label}, optional)</Text>
                       <View style={styles.chipRow}>
@@ -562,10 +563,15 @@ export default function ImportTransactionsScreen({ navigation }) {
                   </TouchableOpacity>
                 );
               })}
+              <QuickAddPickerItem
+                kind="category"
+                type={type}
+                onCreated={(item) => setFallbackCategoryId(item.id)}
+              />
             </View>
           )}
 
-          {fallbackSubOptions.length > 0 && (
+          {fallbackCategoryId && (
             <>
               <Text style={styles.mapLabel}>Fallback sub-category (optional)</Text>
               <View style={styles.chipRow}>
@@ -594,6 +600,12 @@ export default function ImportTransactionsScreen({ navigation }) {
                     </TouchableOpacity>
                   );
                 })}
+                <QuickAddPickerItem
+                  kind="subcategory"
+                  type={type}
+                  parentId={fallbackCategoryId}
+                  onCreated={(item) => setFallbackSubCategoryId(item.id)}
+                />
               </View>
             </>
           )}
@@ -621,6 +633,10 @@ export default function ImportTransactionsScreen({ navigation }) {
                   </TouchableOpacity>
                 );
               })}
+              <QuickAddPickerItem
+                kind="account"
+                onCreated={(item) => setFallbackAccountId(item.id)}
+              />
             </View>
           )}
 

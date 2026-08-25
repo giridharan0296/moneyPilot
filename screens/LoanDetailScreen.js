@@ -43,6 +43,7 @@ import LoanForm from '../components/LoanForm';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
 import AmountCalculatorButton from '../components/AmountCalculatorButton';
+import { InfoCallout, StatusBadge } from '../components/UiPrimitives';
 import { useLoans } from '../contexts/LoansContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
@@ -60,8 +61,11 @@ import {
   formatMoney,
   formatMoneyDetail,
   formatSchedule,
+  interestProfileDescription,
+  resolveInterestProfile,
 } from '../lib/loans';
 import { radii, spacing } from '../lib/theme';
+import { isOnOrAfterAccountOpeningDate } from '../lib/accountBalances';
 
 // Vector-icon meta for each ledger event kind. `icon` names refer to
 // entries in components/AppIcon.js. `color` doubles as the event's
@@ -197,12 +201,16 @@ export default function LoanDetailScreen({ route, navigation }) {
       : 600;
     const dueDates = enumerateEmiDueDates({
       disburseDate: createdLoan.disburseDate,
+      firstEmiDate: createdLoan.firstEmiDate,
       emiDayOfMonth: createdLoan.emiDayOfMonth,
       throughDate: new Date(),
       tenureMonths: tenureCap,
       firstEmiOffsetMonths: 1,
     });
     const emi = Number(createdLoan.emiAmount) || 0;
+    const firstEmi = Number(createdLoan.firstEmiAmount) > 0
+      ? Number(createdLoan.firstEmiAmount)
+      : emi;
     if (dueDates.length === 0) {
       showToast('Loan added', { variant: 'success', duration: 1500 });
       return;
@@ -217,9 +225,11 @@ export default function LoanDetailScreen({ route, navigation }) {
 
     const title = 'Record past EMIs?';
     const firstSplit = computeFirstEmiSplit(createdLoan, dueDates[0]);
-    const amountDescription = dueDates.length > 1 && firstSplit?.days > 0
-      ? `${formatMoney(emi)} each (${formatMoney(firstSplit.interest)} interest on first EMI for ${firstSplit.days} days)`
-      : formatMoney(emi);
+    const amountDescription = firstEmi !== emi
+      ? `${formatMoney(firstEmi)} first, then ${formatMoney(emi)}`
+      : dueDates.length > 1 && firstSplit?.days > 0
+        ? `${formatMoney(emi)} each (${formatMoney(firstSplit.interest)} interest on first EMI for ${firstSplit.days} days)`
+        : formatMoney(emi);
     const message =
       `This loan started earlier. Record ${dueDates.length} paid EMI${dueDates.length === 1 ? '' : 's'} (${amountDescription}) through today?\n\nThis updates loan outstanding, timeline, and interest expense entries.`;
 
@@ -357,8 +367,9 @@ export default function LoanDetailScreen({ route, navigation }) {
   const estimatedEnd = loan.status !== 'closed' ? computePayoffProjection(loan) : null;
   const emiEventCount = (loan.events || []).filter((e) => e.kind === 'emi').length;
   const pendingBackfillDates = loan.status !== 'closed' && emiEventCount === 0
-    ? enumerateEmiDueDates({
+      ? enumerateEmiDueDates({
         disburseDate: loan.disburseDate,
+        firstEmiDate: loan.firstEmiDate,
         emiDayOfMonth: loan.emiDayOfMonth,
         throughDate: new Date(),
         // Blank tenure used to hide backfill entirely — use a cap so
@@ -368,19 +379,27 @@ export default function LoanDetailScreen({ route, navigation }) {
       })
     : [];
   const canBackfillEmis = pendingBackfillDates.length > 0 && (Number(loan.emiAmount) || 0) > 0;
-  const firstDueDate = firstScheduledEmiDate(loan.disburseDate, loan.emiDayOfMonth);
+  const firstDueDate = loan.firstEmiDate
+    ? new Date(loan.firstEmiDate)
+    : firstScheduledEmiDate(loan.disburseDate, loan.emiDayOfMonth);
   const firstEmiSplit = firstDueDate ? computeFirstEmiSplit(loan, firstDueDate) : null;
   const firstInterestLabel = loan.firstInterestPeriod === 'emi_date'
-    ? `Until first EMI date · Actual/${loan.firstInterestBasis}`
+    ? `Until first EMI date · Actual/${loan.firstInterestBasis} · ${loan.firstInterestRounding === 'up' ? 'round up' : 'nearest rupee'}`
     : loan.firstInterestPeriod === 'month_end'
-      ? `Until month-end · Actual/${loan.firstInterestBasis}`
+      ? `Until month-end · Actual/${loan.firstInterestBasis} · ${loan.firstInterestRounding === 'up' ? 'round up' : 'nearest rupee'}`
       : 'Standard monthly';
+  const usesSbiInterest = resolveInterestProfile(loan) === 'sbi';
 
   const handleBackfillEmis = async () => {
     const title = 'Record past EMIs?';
-    const amountDescription = pendingBackfillDates.length > 1 && firstEmiSplit?.days > 0
-      ? `${formatMoney(loan.emiAmount)} each (${formatMoney(firstEmiSplit.interest)} interest on first EMI for ${firstEmiSplit.days} days)`
-      : formatMoney(loan.emiAmount);
+    const firstEmiAmount = Number(loan.firstEmiAmount) > 0
+      ? Number(loan.firstEmiAmount)
+      : Number(loan.emiAmount);
+    const amountDescription = firstEmiAmount !== Number(loan.emiAmount)
+      ? `${formatMoney(firstEmiAmount)} first, then ${formatMoney(loan.emiAmount)}`
+      : pendingBackfillDates.length > 1 && firstEmiSplit?.days > 0
+        ? `${formatMoney(loan.emiAmount)} each (${formatMoney(firstEmiSplit.interest)} interest on first EMI for ${firstEmiSplit.days} days)`
+        : formatMoney(loan.emiAmount);
     const message =
       `Record ${pendingBackfillDates.length} paid EMI${pendingBackfillDates.length === 1 ? '' : 's'} (${amountDescription}) through today?\n\nUse this only if you have not logged those EMIs yet.`;
 
@@ -456,7 +475,13 @@ export default function LoanDetailScreen({ route, navigation }) {
           <Text style={styles.cardTitle}>Details</Text>
           <DetailRow label="Principal" value={formatMoney(loan.principal)} />
           <DetailRow label="Current schedule" value={formatSchedule(loan) || '—'} />
+          {Number(loan.firstEmiAmount) > 0 && Number(loan.firstEmiAmount) !== Number(loan.emiAmount) && (
+            <DetailRow label="Actual first EMI" value={formatMoney(loan.firstEmiAmount)} />
+          )}
           <DetailRow label={'First interest'} value={firstInterestLabel} />
+          {usesSbiInterest && loan.method !== 'flat' && (
+            <DetailRow label="Interest engine" value={interestProfileDescription(loan)} />
+          )}
           {firstEmiSplit?.days > 0 && (
             <DetailRow
               label="First EMI interest"
@@ -621,10 +646,22 @@ export default function LoanDetailScreen({ route, navigation }) {
         {/* Timeline */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Timeline ({sortedEvents.length} events)</Text>
+          <InfoCallout
+            icon="info"
+            title="How entries affect your numbers"
+            body="Historical EMIs still reduce the loan. Only payments on or after the account opening date affect account balances and reports."
+            compact
+          />
           {sortedEvents.map((evt) => (
             <EventRow
               key={evt.id}
               event={evt}
+              historical={(() => {
+                if (!['emi', 'prepay'].includes(evt.kind)) return false;
+                const accountId = evt.accountId ?? loan.disbursementAccountId;
+                const account = accounts.find((item) => item.id === accountId);
+                return !!account && !isOnOrAfterAccountOpeningDate(account, evt.date);
+              })()}
               onDelete={() => {
                 Alert.alert(
                   'Delete this event?',
@@ -655,6 +692,7 @@ export default function LoanDetailScreen({ route, navigation }) {
         title="Log EMI paid"
         submitLabel="Save EMI"
         accent="#059669"
+        allowStatementInterest={loan.method !== 'flat'}
         placeholder={(() => {
           const nextAmount = Number(loan.emiAmount) || 0;
           return nextAmount > 0 ? String(Math.round(nextAmount)) : '';
@@ -662,8 +700,8 @@ export default function LoanDetailScreen({ route, navigation }) {
         accounts={accounts}
         defaultAccountId={loan.disbursementAccountId}
         onClose={() => setEmiModal(false)}
-        onSubmit={({ amount, date, note, accountId }) => {
-          const res = logEmi(loan.id, { amount, date, note, accountId });
+        onSubmit={({ amount, date, note, accountId, statementInterest }) => {
+          const res = logEmi(loan.id, { amount, date, note, accountId, statementInterest });
           if (!res.ok) {
             Alert.alert('Could not log EMI', errorMessage(res.reason));
             return;
@@ -681,14 +719,17 @@ export default function LoanDetailScreen({ route, navigation }) {
         maxAmount={loan.currentOutstanding}
         defaultEmi={loan.emiAmount}
         initialAmount={plannedPrepayAmount}
+        showInterestCreditDate={usesSbiInterest}
         accounts={accounts}
         defaultAccountId={loan.disbursementAccountId}
         onClose={() => {
           setPlannedPrepayAmount(null);
           setPrepayModal(false);
         }}
-        onSubmit={({ amount, date, note, adjustmentMode, accountId }) => {
-          const res = logPrepayment(loan.id, { amount, date, note, adjustmentMode, accountId });
+        onSubmit={({ amount, date, note, adjustmentMode, accountId, interestCreditDate }) => {
+          const res = logPrepayment(loan.id, {
+            amount, date, note, adjustmentMode, accountId, interestCreditDate,
+          });
           if (!res.ok) {
             Alert.alert('Could not log prepayment', errorMessage(res.reason));
             return;
@@ -809,7 +850,7 @@ function ActionBtn({ label, icon, onPress, danger }) {
   );
 }
 
-function EventRow({ event, onDelete }) {
+function EventRow({ event, historical, onDelete }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const meta = EVENT_META[event.kind] ?? EVENT_META.emi;
@@ -823,6 +864,9 @@ function EventRow({ event, onDelete }) {
             {meta.label} · {formatDate(event.date)}
           </Text>
         </View>
+        {historical ? (
+          <StatusBadge status="historical" />
+        ) : null}
         {event.amount > 0 && (
           <Text style={styles.eventSub}>
             {formatMoneyDetail(event.amount)}
@@ -891,12 +935,13 @@ function adjustmentSummary(event) {
 // Reusable amount + date + note modal used for both Log EMI and Prepay.
 function AmountModal({
   visible, title, submitLabel, accent, placeholder, maxAmount, accounts = [],
-  defaultAccountId, onSubmit, onClose,
+  defaultAccountId, allowStatementInterest = false, onSubmit, onClose,
 }) {
   const styles = useThemedStyles(makeStyles);
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date());
   const [note, setNote] = useState('');
+  const [statementInterest, setStatementInterest] = useState('');
   const [showPicker, setShowPicker] = useState(false);
   const fallbackAccountId = accounts[0]?.id ?? null;
   const [accountId, setAccountId] = useState(defaultAccountId ?? fallbackAccountId);
@@ -909,6 +954,7 @@ function AmountModal({
       setAmount('');
       setDate(new Date());
       setNote('');
+      setStatementInterest('');
       setShowPicker(false);
       setAccountId(defaultAccountId ?? fallbackAccountId);
     }
@@ -928,7 +974,20 @@ function AmountModal({
       Alert.alert('Select account', 'Choose the account used to make this repayment.');
       return;
     }
-    onSubmit({ amount: amt, date: date.toISOString(), note, accountId });
+    const statedInterest = allowStatementInterest && statementInterest.trim() !== ''
+      ? Number(statementInterest)
+      : null;
+    if (statedInterest != null && (!isFinite(statedInterest) || statedInterest < 0 || statedInterest > amt)) {
+      Alert.alert('Invalid interest', 'Statement interest must be between 0 and the EMI amount.');
+      return;
+    }
+    onSubmit({
+      amount: amt,
+      date: date.toISOString(),
+      note,
+      accountId,
+      statementInterest: statedInterest,
+    });
   };
 
   return (
@@ -983,6 +1042,23 @@ function AmountModal({
               />
             )}
 
+            {allowStatementInterest && (
+              <>
+                <Text style={styles.modalLabel}>Interest from statement (optional)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={statementInterest}
+                  onChangeText={setStatementInterest}
+                  keyboardType="numeric"
+                  placeholder="e.g. 20439"
+                  placeholderTextColor="#9ca3af"
+                />
+                <Text style={styles.modalHint}>
+                  Enter the interest portion from YONO/statement for a rupee-perfect match with SBI.
+                </Text>
+              </>
+            )}
+
             <Text style={styles.modalLabel}>Note (optional)</Text>
             <TextInput
               style={styles.modalInput}
@@ -1008,13 +1084,15 @@ function AmountModal({
 
 // Prepay modal — same body as AmountModal but with an adjustmentMode chip
 // row so the user records whether the bank shortens tenure or reduces EMI.
-function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts = [], defaultAccountId, onSubmit, onClose }) {
+function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts = [], defaultAccountId, showInterestCreditDate = false, onSubmit, onClose }) {
   const styles = useThemedStyles(makeStyles);
   const [amount, setAmount] = useState('');
   const [date, setDate]     = useState(new Date());
   const [note, setNote]     = useState('');
   const [adjustmentMode, setAdjustmentMode] = useState('keep_emi');
+  const [interestCreditDate, setInterestCreditDate] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
+  const [showCreditPicker, setShowCreditPicker] = useState(false);
   const fallbackAccountId = accounts[0]?.id ?? null;
   const [accountId, setAccountId] = useState(defaultAccountId ?? fallbackAccountId);
 
@@ -1024,7 +1102,9 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts =
       setDate(new Date());
       setNote(initialAmount ? 'Monthly tenure-reduction plan' : '');
       setAdjustmentMode('keep_emi'); // default matches most retail lender behaviour
+      setInterestCreditDate(null);
       setShowPicker(false);
+      setShowCreditPicker(false);
       setAccountId(defaultAccountId ?? fallbackAccountId);
     }
   }, [visible, initialAmount, defaultAccountId, fallbackAccountId]);
@@ -1043,7 +1123,14 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts =
       Alert.alert('Select account', 'Choose the account used to make this prepayment.');
       return;
     }
-    onSubmit({ amount: amt, date: date.toISOString(), note, adjustmentMode, accountId });
+    onSubmit({
+      amount: amt,
+      date: date.toISOString(),
+      note,
+      adjustmentMode,
+      accountId,
+      interestCreditDate: interestCreditDate ? interestCreditDate.toISOString() : null,
+    });
   };
 
   return (
@@ -1123,6 +1210,35 @@ function PrepayModal({ visible, maxAmount, defaultEmi, initialAmount, accounts =
                   if (selected) setDate(selected);
                 }}
               />
+            )}
+
+            {showInterestCreditDate && (
+              <>
+                <Text style={styles.modalLabel}>Bank credit date (optional)</Text>
+                <TouchableOpacity
+                  onPress={() => { Keyboard.dismiss(); setShowCreditPicker(true); }}
+                  style={styles.modalDateBtn}
+                >
+                  <Text style={styles.modalDateText}>
+                    {interestCreditDate
+                      ? formatDate(interestCreditDate.toISOString())
+                      : 'Same as payment date + 1 day'}
+                  </Text>
+                  <Text style={styles.modalHint}>tap to set when SBI credited the prepay</Text>
+                </TouchableOpacity>
+                {(showCreditPicker || Platform.OS === 'web') && (
+                  <DateTimePicker
+                    value={interestCreditDate || date}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(evt, selected) => {
+                      if (Platform.OS !== 'ios') setShowCreditPicker(false);
+                      if (evt?.type === 'dismissed') return;
+                      if (selected) setInterestCreditDate(selected);
+                    }}
+                  />
+                )}
+              </>
             )}
 
             <Text style={styles.modalLabel}>Note (optional)</Text>
@@ -1534,6 +1650,10 @@ function errorMessage(reason) {
     invalid_name:        'Give the loan a name.',
     invalid_rate:        'Enter a valid non-negative rate.',
     invalid_date:        'The disburse date must be on or before every recorded EMI / prepayment / rate-change event.',
+    principal_credit_account_required: 'Choose the account that received the loan principal.',
+    principal_credit_before_account_opening: 'The loan date is before this account’s opening-balance date. Change the loan date, choose another account, or select “No, keep it as loan-only” to avoid counting money twice.',
+    principal_credit_liability_failed: 'The loan liability could not be created, so the account was not credited.',
+    principal_credit_transfer_failed: 'The loan could not be credited to the selected account. No loan was created; please try again.',
     loan_already_closed: 'This loan is already closed.',
     over_prepay:         'Prepayment exceeds the current outstanding.',
     not_found:           'Loan not found.',
@@ -1544,7 +1664,7 @@ function errorMessage(reason) {
 
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
-  container: { padding: spacing.xl, paddingBottom: 40 },
+  container: { padding: spacing.lg, paddingBottom: 40 },
 
   hero: {
     backgroundColor: c.bg.surface,
