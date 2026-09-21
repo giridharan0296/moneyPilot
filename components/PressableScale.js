@@ -14,13 +14,16 @@ const OUTER_LAYOUT_KEYS = new Set([
   'alignSelf',
 ]);
 
-function outerLayoutStyle(contentStyle) {
-  const flat = StyleSheet.flatten(contentStyle) ?? {};
+function splitLayoutStyle(contentStyle) {
+  const flat = { ...(StyleSheet.flatten(contentStyle) ?? {}) };
   const layout = {};
   for (const key of OUTER_LAYOUT_KEYS) {
-    if (flat[key] != null) layout[key] = flat[key];
+    if (flat[key] != null) {
+      layout[key] = flat[key];
+      delete flat[key];
+    }
   }
-  return layout;
+  return { layout, inner: flat };
 }
 
 /**
@@ -44,7 +47,7 @@ export default function PressableScale({
   testID,
 }) {
   const scale = useRef(new Animated.Value(1)).current;
-  const flatContent = StyleSheet.flatten(contentStyle);
+  const { layout, inner } = splitLayoutStyle(contentStyle);
 
   const animateTo = (value) => {
     Animated.spring(scale, {
@@ -81,10 +84,10 @@ export default function PressableScale({
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       accessibilityState={accessibilityState}
-      style={[outerLayoutStyle(contentStyle), style]}
+      style={[layout, style]}
     >
       <Animated.View
-        style={[flatContent, { transform: [{ scale }] }]}
+        style={[inner, { transform: [{ scale }] }]}
       >
         {children}
       </Animated.View>

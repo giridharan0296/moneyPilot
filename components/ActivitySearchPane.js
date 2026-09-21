@@ -25,6 +25,7 @@ import {
   isForeign,
 } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 
 const TYPE_META = {
   expense: { label: 'Expenses', icon: 'credit-card', color: '#dc2626' },
@@ -230,7 +231,7 @@ export default function ActivitySearchPane({
       });
       return;
     }
-    navigation.getParent()?.navigate('Transactions', {
+    openTransactionsTab(navigation.getParent() ?? navigation, {
       initialTab: type,
       focusId: tx.id,
     });
@@ -271,12 +272,12 @@ export default function ActivitySearchPane({
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={[styles.resultAmount, { color: meta?.color ?? '#111' }]}>
                 {rowIsForeign
-                  ? formatMoneyCurrency(tx.amount, rowCurrency, { decimals: 0 })
-                  : formatMoneyCurrency(tx.amount, baseCurrency, { decimals: 0 })}
+                  ? formatMoneyCurrency(tx.amount, rowCurrency)
+                  : formatMoneyCurrency(tx.amount, baseCurrency)}
               </Text>
               {rowIsForeign && (
                 <Text style={styles.resultAmountSub}>
-                  ≈ {formatMoneyCurrency(rowBaseAmount, baseCurrency, { decimals: 0 })}
+                  ≈ {formatMoneyCurrency(rowBaseAmount, baseCurrency)}
                 </Text>
               )}
             </View>

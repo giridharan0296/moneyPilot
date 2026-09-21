@@ -60,11 +60,11 @@ export default function BudgetProgressBar({
       {!compact && (
         <View style={styles.row}>
           <Text style={[styles.spent, { color: barColor }]}>
-            {formatMoneyCurrency(spent, baseCurrency, { decimals: 0 })}
+            {formatMoneyCurrency(spent, baseCurrency)}
           </Text>
           <Text style={styles.of}>
             {' / '}
-            {formatMoneyCurrency(amount, baseCurrency, { decimals: 0 })}
+            {formatMoneyCurrency(amount, baseCurrency)}
           </Text>
           <View style={styles.grow} />
           <Text style={[styles.percent, { color: barColor }]}>

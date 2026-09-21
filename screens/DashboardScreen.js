@@ -49,6 +49,7 @@ import {
 } from '../lib/currency';
 import { computeAccountBalances } from '../lib/accountBalances';
 import { computeLoansLendingSummary } from '../lib/loansLendingSummary';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 import { KIND_META, kindLabel, transferSubtitle } from '../lib/transfers';
 import { useDemoRestore } from '../hooks/useDemoRestore';
 import { DEMO_RESTORE_MESSAGE_SHORT } from '../lib/demoRestore';
@@ -506,7 +507,7 @@ export default function DashboardScreen({ route }) {
   );
 
   const monthClosePeek = useMemo(() => {
-    const saved = formatMoneyCurrency(monthClose.saved, baseCurrency, { decimals: 0 });
+    const saved = formatMoneyCurrency(monthClose.saved, baseCurrency);
     const rate = monthClose.savingsRate != null ? `${monthClose.savingsRate.toFixed(0)}% saved` : 'No income yet';
     return `Saved ${saved} · ${rate} · ${monthClose.daysLeft === 0 ? 'last day' : `${monthClose.daysLeft}d left`}`;
   }, [monthClose, baseCurrency]);
@@ -516,7 +517,7 @@ export default function DashboardScreen({ route }) {
     if (momSpending && (momSpending.thisSum > 0 || momSpending.prevSum > 0)) {
       parts.push(`${momSpending.delta > 0 ? '+' : ''}${momSpending.percent.toFixed(0)}% vs last month`);
     }
-    parts.push(`${formatMoneyCurrency(totalExpenses, baseCurrency, { decimals: 0 })} spent · ${rangeLabel}`);
+    parts.push(`${formatMoneyCurrency(totalExpenses, baseCurrency)} spent · ${rangeLabel}`);
     if (topExpenseCategories[0]) {
       parts.push(`Top: ${topExpenseCategories[0].emoji} ${topExpenseCategories[0].label}`);
     }
@@ -527,7 +528,7 @@ export default function DashboardScreen({ route }) {
     if (upcomingBills.length === 0) return 'Set up rent, salary, or SIP rules';
     const due = billsDueToday > 0 ? `${billsDueToday} due today · ` : '';
     const total = upcomingBillsTotal > 0
-      ? formatMoneyCurrency(upcomingBillsTotal, baseCurrency, { decimals: 0 })
+      ? formatMoneyCurrency(upcomingBillsTotal, baseCurrency)
       : `${upcomingBills.length} upcoming`;
     return `${due}${total} in next 14 days`;
   }, [upcomingBills.length, billsDueToday, upcomingBillsTotal, baseCurrency]);
@@ -633,7 +634,7 @@ export default function DashboardScreen({ route }) {
   const planningPeek = useMemo(() => {
     const parts = [];
     if (netWorth.assets.length > 0 || netWorth.liabilities.length > 0) {
-      parts.push(`NW ${formatMoneyCurrency(Math.abs(netWorth.summary.netWorth), baseCurrency, { decimals: 0 })}`);
+      parts.push(`NW ${formatMoneyCurrency(Math.abs(netWorth.summary.netWorth), baseCurrency)}`);
     }
     if (heroGoal) {
       parts.push(`${heroGoal.goal.emoji} ${(heroGoal.percent * 100).toFixed(0)}% of goal`);
@@ -644,7 +645,7 @@ export default function DashboardScreen({ route }) {
       parts.push(`${budgetSummary.safe}/${budgetSummary.total} budgets OK`);
     }
     if (showLoansLendingStrip) {
-      parts.push(`Owed to you ${formatMoneyCurrency(transfersSummary.owedToYou, baseCurrency, { decimals: 0 })}`);
+      parts.push(`Owed to you ${formatMoneyCurrency(transfersSummary.owedToYou, baseCurrency)}`);
     }
     return parts.length > 0 ? parts.join(' · ') : 'Goals, net worth, budgets, and lending';
   }, [
@@ -677,7 +678,7 @@ export default function DashboardScreen({ route }) {
     if (type === 'investment') {
       navigation.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
     } else {
-      navigation.navigate('Transactions', { initialTab: type });
+      openTransactionsTab(navigation, { initialTab: type });
     }
     setTimeout(() => {
       DeviceEventEmitter.emit('transactions:openAdd', { type });
@@ -834,6 +835,7 @@ export default function DashboardScreen({ route }) {
         monthClose.income > 0
         || monthClose.expense > 0
         || monthClose.repayment > 0
+        || monthClose.credit > 0
         || monthClose.invested > 0
       ) && (
         <DashboardSection
@@ -896,6 +898,9 @@ export default function DashboardScreen({ route }) {
           {monthClose.invested > 0 ? (
             <Text style={styles.monthCloseSub}>
               Invested {formatMoneyCurrency(monthClose.invested, baseCurrency)} this month (deducted from Saved)
+              {monthClose.credit > 0
+                ? ` · Loan credited ${formatMoneyCurrency(monthClose.credit, baseCurrency)}`
+                : ''}
               {monthClose.budget
                 ? ` · Budget “${monthClose.budget.label}” ${Math.round(monthClose.budget.percent)}% (${monthClose.budget.status})`
                 : ''}
@@ -1388,13 +1393,13 @@ export default function DashboardScreen({ route }) {
       {showLoansLendingStrip && (
         <NavCard
           onPress={() =>
-            navigation.navigate('Transactions', { initialTab: 'transfer' })
+            openTransactionsTab(navigation, { initialTab: 'loan' })
           }
           style={styles.sectionBlockFlat}
         >
           <View style={styles.transfersHeader}>
             <View style={styles.transfersTitleRow}>
-              <AppIcon name="arrow-right-left" size={14} color={primaryColor} strokeWidth={2.2} />
+              <AppIcon name="landmark" size={14} color={primaryColor} strokeWidth={2.2} />
               <Text style={styles.transfersTitle}>Loans &amp; lending</Text>
             </View>
             <AppIcon name="chevron-right" size={18} color={themeColors.text.muted} strokeWidth={2.2} />
@@ -1655,7 +1660,7 @@ function TransferActivityRow({ transfer, accounts, baseCurrency }) {
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         <Text style={[styles.activityAmount, { color: cashColor }]}>
-          {cashPrefix}{formatMoneyCurrency(transfer.amount, baseCurrency, { decimals: 0 })}
+          {cashPrefix}{formatMoneyCurrency(transfer.amount, baseCurrency)}
         </Text>
       </View>
     </View>

@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
+  Animated,
   DeviceEventEmitter,
-  FlatList,
+  PanResponder,
   Platform,
-  Pressable,
   ScrollView,
+  SectionList,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import CategoryPieChart, { PieLegendList } from './CategoryPieChart';
 import DateFilterBar from './DateFilterBar';
+import TransactionDayHeader from './TransactionDayHeader';
 import EditTransactionModal from './EditTransactionModal';
 import AddTransactionModal from './AddTransactionModal';
 import VoicePlayer from './VoicePlayer';
@@ -33,6 +35,8 @@ import {
   isForeign,
 } from '../lib/currency';
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
+import { findItemInDaySections, groupItemsByDay } from '../lib/transactionDayGroups';
+import { sortByCreatedAtDesc } from '../lib/transactionSort';
 import { buildRecurringRuleInput } from '../lib/recurring';
 import { formatChitGrams, GOLD_CHIT_SUB_ID, isClosedGoldChitTx } from '../lib/goldChit';
 import {
@@ -66,7 +70,7 @@ function hasOtherInvestmentLogs(items, { excludeId, broker, symbolKey }) {
 // ----------------------------------------------------------------------------
 // TransactionsList — the reusable "list of transactions of one type" screen.
 // Wraps: DateFilterBar, total card, chart, add form, and the actual list.
-// Row tap opens the edit modal; ✕ still deletes with confirmation.
+// Row tap opens the edit modal; swipe left reveals Delete (with confirm).
 //
 // Transaction data comes from TransactionsContext (single source of truth
 // across Dashboard / Expenses / Income / Investments / Import). This screen
@@ -92,6 +96,10 @@ const UNKNOWN_CATEGORY_BASE = {
   emoji: '📌',
 };
 
+const SWIPE_ACTION_WIDTH = 80;
+const SWIPE_THRESHOLD = 8;
+const SWIPE_ANGLE_BIAS = 1.5;
+
 export default function TransactionsList({
   type,
   amountPrefix = '-',
@@ -115,7 +123,7 @@ export default function TransactionsList({
         : themeColors.accent.investment
   );
   const resolvedAccentColor = accentColor ?? resolvedAmountColor;
-  const { addOpeningPosition, removeOpeningPosition, removeOpeningPositionsForInstrument, clearOpeningPositions } = usePortfolio();
+  const { addOpeningPosition, removeOpeningPosition, removeOpeningPositionsForInstrument } = usePortfolio();
   const { unhidePortfolioSymbol } = useNetWorth();
   const t = {
     totalLabel: 'TOTAL',
@@ -126,8 +134,6 @@ export default function TransactionsList({
     emptyIcon: 'edit-3',
     emptyTitle: 'Nothing here yet.',
     emptySub: 'Tap + to add your first entry.',
-    clearAllTitle: 'Clear all?',
-    clearAllMessage: 'This cannot be undone.',
     ...copy,
   };
 
@@ -176,7 +182,6 @@ export default function TransactionsList({
     addTransaction,
     updateTransaction,
     deleteTransaction,
-    clearTransactions,
   } = useTransactions();
   const { showToast, showUndoableToast } = useToast();
   const { addRule } = useRecurring();
@@ -275,10 +280,15 @@ export default function TransactionsList({
     if (type === 'investment') {
       list = list.filter((tx) => !isClosedGoldChitTx(tx));
     }
-    return [...list].sort(
-      (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0),
-    );
+    return sortByCreatedAtDesc(list);
   }, [dateFilteredItems, type, brokerFilter]);
+
+  const daySections = useMemo(
+    () => groupItemsByDay(filteredItems, {
+      sumAmount: (item) => baseAmountOf(item, fxRates, baseCurrency, 'amount'),
+    }),
+    [filteredItems, fxRates, baseCurrency],
+  );
 
   // ---- Derived ----
   // Sum in BASE CURRENCY. Foreign-currency rows contribute their frozen
@@ -619,8 +629,8 @@ export default function TransactionsList({
 
   const handleDeleteEdit = () => {
     if (!editing) return;
-    // Edit-modal delete flows through the same undoable path as the row
-    // ✕ button — captured before the modal closes so `editing` is stable.
+    // Edit-modal delete flows through the same undoable path as swipe
+    // delete — captured before the modal closes so `editing` is stable.
     softDeleteWithUndo(editing);
   };
 
@@ -710,26 +720,19 @@ export default function TransactionsList({
   );
 
   const handleQuickDelete = useCallback(
-    (id) => {
-      const target = items.find((it) => it.id === id);
-      softDeleteWithUndo(target);
+    async (item) => {
+      if (!item) return;
+      const label = buildDeleteLabel(item, categories, unknownCategory);
+      const ok = await confirm({
+        title: 'Delete this entry?',
+        message: `${label}\n\nThis can be undone for a few seconds after deleting.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (ok) softDeleteWithUndo(item);
     },
-    [items, softDeleteWithUndo],
+    [categories, confirm, softDeleteWithUndo, unknownCategory],
   );
-
-  const handleClearAll = async () => {
-    if (items.length === 0) return;
-    const ok = await confirm({
-      title: t.clearAllTitle,
-      message: t.clearAllMessage,
-      confirmLabel: 'Clear',
-      destructive: true,
-    });
-    if (ok) {
-      if (type === 'investment') clearOpeningPositions();
-      clearTransactions(type);
-    }
-  };
 
   // ---- Render helpers ----
   const renderRow = ({ item }) => {
@@ -750,98 +753,87 @@ export default function TransactionsList({
     const rowIsForeign = isForeign(rowCurrency, baseCurrency);
     const rowBaseAmount = baseAmountOf(item, fxRates, baseCurrency, 'amount');
     return (
-      <PressableScale
+      <SwipeableTransactionRow
         onPress={() => setEditing(item)}
-        haptic
-        scaleTo={0.985}
-        contentStyle={[styles.row, highlighted && styles.rowHighlighted]}
+        onDelete={() => handleQuickDelete(item)}
+        deleteLabel={`Delete ${cat.label} ${formatMoneyCurrency(item.amount, rowCurrency)}`}
+        highlighted={highlighted}
       >
-        <Text style={styles.rowEmoji}>{cat.emoji}</Text>
-        <View style={styles.rowMiddle}>
-          <Text style={styles.rowCategory}>{cat.label}</Text>
-          {sub && (
-            <Text style={styles.rowSubCategory}>
-              {sub.emoji} {formatSubCategoryLabel(sub.label)}
-            </Text>
-          )}
-          {item.note ? (
-            <Text style={styles.rowNote} numberOfLines={1}>
-              {item.note}
-            </Text>
-          ) : type === 'investment' && item.instrumentName ? (
-            <Text style={styles.rowNote} numberOfLines={1}>
-              {item.instrumentName}
-            </Text>
-          ) : null}
-          {item.tags && item.tags.length > 0 && (
-            <View style={styles.rowTagsRow}>
-              {item.tags.slice(0, 4).map((t) => (
-                <View key={t} style={styles.rowTag}>
-                  <Text style={styles.rowTagText}>#{t}</Text>
-                </View>
-              ))}
-              {item.tags.length > 4 && (
-                <Text style={styles.rowTagOverflow}>+{item.tags.length - 4}</Text>
-              )}
-            </View>
-          )}
-          <View style={styles.rowMetaRow}>
-            <Text style={styles.rowDate}>{formatDate(item.createdAt)}</Text>
-            {acc && (
-              <Text style={[styles.rowAccount, { color: acc.color }]}>
-                · {acc.emoji} {acc.label}
+          <Text style={styles.rowEmoji}>{cat.emoji}</Text>
+          <View style={styles.rowMiddle}>
+            <Text style={styles.rowCategory}>{cat.label}</Text>
+            {sub && (
+              <Text style={styles.rowSubCategory}>
+                {sub.emoji} {formatSubCategoryLabel(sub.label)}
               </Text>
             )}
-            {/* Investment-only: show a small "→ Broker" badge when
-                a broker was picked. Keeps the row's mental model
-                consistent: "from ACCOUNT → to BROKER". Silently
-                omitted for legacy rows without a brokerId. */}
-            {type === 'investment' && item.brokerId && (() => {
-              const broker = brokers.find((b) => b.id === item.brokerId);
-              if (!broker) return null;
-              return (
-                <Text style={[styles.rowAccount, { color: broker.color }]}>
-                  {' → '}{broker.emoji} {broker.label}
-                </Text>
-              );
-            })()}
-            {Platform.OS !== 'web' && item.voiceNote?.file && (
-              <View style={styles.rowVoiceWrap}>
-                <Text style={styles.rowMetaDot}>·</Text>
-                <VoicePlayer voiceNote={item.voiceNote} compact />
+            {item.note ? (
+              <Text style={styles.rowNote} numberOfLines={1}>
+                {item.note}
+              </Text>
+            ) : type === 'investment' && item.instrumentName ? (
+              <Text style={styles.rowNote} numberOfLines={1}>
+                {item.instrumentName}
+              </Text>
+            ) : null}
+            {item.tags && item.tags.length > 0 && (
+              <View style={styles.rowTagsRow}>
+                {item.tags.slice(0, 4).map((t) => (
+                  <View key={t} style={styles.rowTag}>
+                    <Text style={styles.rowTagText}>#{t}</Text>
+                  </View>
+                ))}
+                {item.tags.length > 4 && (
+                  <Text style={styles.rowTagOverflow}>+{item.tags.length - 4}</Text>
+                )}
               </View>
             )}
+            <View style={styles.rowMetaRow}>
+              {acc && (
+                <Text style={[styles.rowAccount, { color: acc.color }]}>
+                  {acc.emoji} {acc.label}
+                </Text>
+              )}
+              {/* Investment-only: show a small "→ Broker" badge when
+                  a broker was picked. Keeps the row's mental model
+                  consistent: "from ACCOUNT → to BROKER". Silently
+                  omitted for legacy rows without a brokerId. */}
+              {type === 'investment' && item.brokerId && (() => {
+                const broker = brokers.find((b) => b.id === item.brokerId);
+                if (!broker) return null;
+                return (
+                  <Text style={[styles.rowAccount, { color: broker.color }]}>
+                    {' → '}{broker.emoji} {broker.label}
+                  </Text>
+                );
+              })()}
+              {Platform.OS !== 'web' && item.voiceNote?.file && (
+                <View style={styles.rowVoiceWrap}>
+                  {acc ? <Text style={styles.rowMetaDot}>·</Text> : null}
+                  <VoicePlayer voiceNote={item.voiceNote} compact />
+                </View>
+              )}
+            </View>
           </View>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.rowAmount, { color: resolvedAmountColor }]}>
-            {amountPrefix}
-            {rowIsForeign
-              ? formatMoneyCurrency(item.amount, rowCurrency)
-              : formatMoney(item.amount)}
-          </Text>
-          {rowIsForeign && (
-            <Text style={styles.rowAmountSub}>
-              ≈ {amountPrefix}{formatMoneyCurrency(rowBaseAmount, baseCurrency)}
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.rowAmount, { color: resolvedAmountColor }]}>
+              {amountPrefix}
+              {rowIsForeign
+                ? formatMoneyCurrency(item.amount, rowCurrency)
+                : formatMoney(item.amount)}
             </Text>
-          )}
-          {item.subCategoryId === GOLD_CHIT_SUB_ID && item.chitWeightGrams > 0 && (
-            <Text style={styles.rowChitGrams}>
-              +{formatChitGrams(item.chitWeightGrams, 2)}
-            </Text>
-          )}
-        </View>
-        <TouchableOpacity
-          onPress={() => handleQuickDelete(item.id)}
-          style={styles.deleteBtn}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel={`Delete ${cat.label} ${formatMoneyCurrency(item.amount, rowCurrency)}`}
-          accessibilityHint="Deletes this entry with a 5-second undo"
-        >
-          <AppIcon name="x" size={14} color={themeColors.text.secondary} strokeWidth={2.4} />
-        </TouchableOpacity>
-      </PressableScale>
+            {rowIsForeign && (
+              <Text style={styles.rowAmountSub}>
+                ≈ {amountPrefix}{formatMoneyCurrency(rowBaseAmount, baseCurrency)}
+              </Text>
+            )}
+            {item.subCategoryId === GOLD_CHIT_SUB_ID && item.chitWeightGrams > 0 && (
+              <Text style={styles.rowChitGrams}>
+                +{formatChitGrams(item.chitWeightGrams, 2)}
+              </Text>
+            )}
+          </View>
+      </SwipeableTransactionRow>
     );
   };
 
@@ -850,38 +842,43 @@ export default function TransactionsList({
   // on Android and web. Each modal owns its own KAV instead.
   return (
     <View style={styles.root}>
-      <FlatList
+      <SectionList
         ref={listRef}
-        data={filteredItems}
+        sections={daySections}
         keyExtractor={(item) => item.id}
         renderItem={renderRow}
+        renderSectionHeader={({ section }) => (
+          <TransactionDayHeader
+            title={section.title}
+            subtitle={section.subtitle}
+            total={section.total}
+            baseCurrency={baseCurrency}
+            totalColor={resolvedAmountColor}
+          />
+        )}
+        stickySectionHeadersEnabled
         contentContainerStyle={styles.listContent}
-        // If a focused row is offscreen, `scrollToIndex` fires immediately.
-        // `onScrollToIndexFailed` handles the case where FlatList hasn't
-        // rendered enough rows yet — we retry after the estimated layout
-        // interval, which almost always resolves it on the second tick.
-        onScrollToIndexFailed={(info) => {
+        onScrollToLocationFailed={(info) => {
           setTimeout(() => {
-            if (listRef.current && filteredItems.length > 0) {
-              listRef.current.scrollToOffset({
-                offset: info.averageItemLength * info.index,
-                animated: true,
-              });
-            }
+            listRef.current?.scrollToLocation({
+              sectionIndex: info.sectionIndex,
+              itemIndex: Math.min(info.index, info.highestMeasuredFrameIndex),
+              animated: true,
+              viewPosition: 0.3,
+            });
           }, 250);
         }}
         onContentSizeChange={() => {
           if (!focusId || focusedRef.current) return;
-          const idx = filteredItems.findIndex((it) => it.id === focusId);
-          if (idx < 0) return;
+          const loc = findItemInDaySections(daySections, focusId);
+          if (!loc) return;
           focusedRef.current = true;
-          // Small delay lets the header/chart mount so the target row's
-          // absolute offset is stable when we scroll to it.
           setTimeout(() => {
-            listRef.current?.scrollToIndex({
-              index: idx,
+            listRef.current?.scrollToLocation({
+              sectionIndex: loc.sectionIndex,
+              itemIndex: loc.itemIndex,
               animated: true,
-              viewPosition: 0.3, // land the row ~⅓ down from the top
+              viewPosition: 0.3,
             });
           }, 60);
         }}
@@ -943,14 +940,9 @@ export default function TransactionsList({
 
             <View style={styles.listHeader}>
               <Text style={styles.listHeaderTitle}>Recent</Text>
-              {items.length > 0 && (
-                <TouchableOpacity onPress={handleClearAll}>
-                  <Text style={styles.clearAll}>Clear all</Text>
-                </TouchableOpacity>
-              )}
             </View>
             {items.length > 0 && (
-              <Text style={styles.tapHint}>Tap a row to edit</Text>
+              <Text style={styles.tapHint}>Tap a row to edit · swipe left to delete</Text>
             )}
           </>
         }
@@ -1027,6 +1019,105 @@ export default function TransactionsList({
           onAdd={handleAdd}
         />
       )}
+    </View>
+  );
+}
+
+// SwipeableTransactionRow — same PanResponder pattern as accounts /
+// categories so we don't need react-native-gesture-handler. Swipe left
+// reveals a delete pill; tap Delete (or confirm after) removes the row.
+function SwipeableTransactionRow({ children, onPress, onDelete, deleteLabel, highlighted }) {
+  const styles = useThemedStyles(makeStyles);
+  const translateX = useRef(new Animated.Value(0)).current;
+  const openRef = useRef(false);
+
+  const snapClosed = () => {
+    openRef.current = false;
+    Animated.spring(translateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      speed: 20,
+      bounciness: 6,
+    }).start();
+  };
+
+  const snapOpen = () => {
+    openRef.current = true;
+    Animated.spring(translateX, {
+      toValue: -SWIPE_ACTION_WIDTH,
+      useNativeDriver: true,
+      speed: 20,
+      bounciness: 6,
+    }).start();
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > SWIPE_THRESHOLD
+        && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_ANGLE_BIAS,
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        Math.abs(g.dx) > SWIPE_THRESHOLD
+        && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_ANGLE_BIAS,
+      onPanResponderMove: (_, g) => {
+        const base = openRef.current ? -SWIPE_ACTION_WIDTH : 0;
+        const next = Math.max(
+          -SWIPE_ACTION_WIDTH * 1.5,
+          Math.min(0, base + g.dx),
+        );
+        translateX.setValue(next);
+      },
+      onPanResponderRelease: (_, g) => {
+        const base = openRef.current ? -SWIPE_ACTION_WIDTH : 0;
+        const final = base + g.dx;
+        if (final < -SWIPE_ACTION_WIDTH * 0.4 || g.vx < -0.5) {
+          snapOpen();
+        } else {
+          snapClosed();
+        }
+      },
+      onPanResponderTerminate: snapClosed,
+    }),
+  ).current;
+
+  return (
+    <View style={styles.rowWrap}>
+      <View style={styles.deleteBehind}>
+        <TouchableOpacity
+          style={styles.deleteBehindTap}
+          onPress={() => {
+            snapClosed();
+            onDelete();
+          }}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={deleteLabel}
+        >
+          <AppIcon name="trash-2" size={18} color="#fff" strokeWidth={2.2} />
+          <Text style={styles.deleteBehindText}>Delete</Text>
+        </TouchableOpacity>
+      </View>
+      <Animated.View
+        style={[styles.rowSurface, { transform: [{ translateX }] }]}
+        {...panResponder.panHandlers}
+      >
+        <PressableScale
+          onPress={() => {
+            if (openRef.current) {
+              snapClosed();
+              return;
+            }
+            onPress?.();
+          }}
+          haptic
+          scaleTo={0.985}
+          contentStyle={[styles.row, highlighted && styles.rowHighlighted]}
+        >
+          {children}
+        </PressableScale>
+      </Animated.View>
     </View>
   );
 }
@@ -1255,16 +1346,45 @@ const makeStyles = (c) => ({
     marginBottom: spacing.xs,
   },
   listHeaderTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
-  clearAll: { fontSize: 12, color: c.accent.expense, fontWeight: '600' },
   tapHint: { fontSize: 11, color: c.text.muted, marginBottom: spacing.sm },
 
+  rowWrap: {
+    marginBottom: spacing.sm,
+    borderRadius: radii.xl,
+    overflow: 'hidden',
+  },
+  deleteBehind: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: SWIPE_ACTION_WIDTH,
+    backgroundColor: '#dc2626',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteBehindTap: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 3,
+  },
+  deleteBehindText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  rowSurface: {
+    backgroundColor: c.bg.surface,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
     padding: spacing.md,
-    marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: c.border.subtle,
     ...elevation.card,
@@ -1309,29 +1429,18 @@ const makeStyles = (c) => ({
   rowAccount: { fontSize: 11, fontWeight: '600', marginLeft: spacing.xs },
   rowMetaDot: { fontSize: 11, color: c.text.muted, marginHorizontal: spacing.xs },
   rowVoiceWrap: { flexDirection: 'row', alignItems: 'center' },
-  rowAmount:    { fontSize: 15, fontWeight: '700', marginRight: spacing.sm },
+  rowAmount:    { fontSize: 15, fontWeight: '700' },
   rowAmountSub: {
     fontSize: 11,
     color: c.text.secondary,
     fontStyle: 'italic',
-    marginRight: spacing.sm,
     marginTop: 2,
   },
   rowChitGrams: {
     fontSize: 11,
     fontWeight: '800',
     color: c.accent.gold,
-    marginRight: spacing.sm,
     marginTop: 2,
-  },
-
-  deleteBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.pill,
-    backgroundColor: c.bg.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   emptyState: { alignItems: 'center', marginTop: spacing['2xl'] },
   emptyIconWrap: { marginBottom: spacing.sm, opacity: 0.85 },

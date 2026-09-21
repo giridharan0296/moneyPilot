@@ -64,8 +64,6 @@ export default function InvestmentsScreen({ navigation, route }) {
           emptyIcon: 'bar-chart-2',
           emptyTitle: 'No investments logged yet.',
           emptySub: 'Tap + below to log your first contribution.',
-          clearAllTitle: 'Clear all investments?',
-          clearAllMessage: 'This cannot be undone.',
         }}
       />
 

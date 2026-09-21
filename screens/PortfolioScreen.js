@@ -4,7 +4,7 @@
 // Layout:
 //   - Big summary card (total current value, P&L, Refresh for live quotes)
 //   - Per-broker cards (Zerodha, Groww, ...) with count + value + last import
-//   - Full holdings list, sorted by current value desc
+//   - Full holdings list, sorted by entry date desc (newest first)
 //   - Empty state with an Import button
 //
 // Quantity / avgCost only change via re-import. Live refresh rewrites
@@ -35,6 +35,8 @@ import {
   computePortfolioSummary,
   holdingPortfolioSymbol,
   symbolsNeedingQuotes,
+  buildHoldingEntryTimeMap,
+  compareHoldingsByEntryDesc,
 } from '../lib/portfolioHoldings';
 import AppIcon from '../components/AppIcon';
 import ScreenHelpIntro from '../components/ScreenHelpIntro';
@@ -43,8 +45,10 @@ import { HELP_PORTFOLIO } from '../lib/helpContent';
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
-  const rounded = Math.round(n).toLocaleString('en-IN');
-  return '₹ ' + rounded;
+  return '₹ ' + Number(n).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatPrice(n) {
@@ -183,10 +187,19 @@ export default function PortfolioScreen({ navigation }) {
     return [...grouped.values()].sort((a, b) => b.value - a.value);
   }, [displayHoldings]);
 
-  // Sort so the biggest positions show up first.
+  // Newest logged/import entry first, then by value.
+  const entryTimeMap = useMemo(
+    () => buildHoldingEntryTimeMap(investments, displayHoldings),
+    [investments, displayHoldings],
+  );
   const sortedHoldings = useMemo(
-    () => [...displayHoldings].sort((a, b) => b.currentValue - a.currentValue),
-    [displayHoldings],
+    () => [...displayHoldings].sort((a, b) => compareHoldingsByEntryDesc(
+      a,
+      b,
+      entryTimeMap,
+      (x, y) => (Number(y.currentValue) || 0) - (Number(x.currentValue) || 0),
+    )),
+    [displayHoldings, entryTimeMap],
   );
 
   // Actual SWP payouts only. Dividends, interest, and other investment
@@ -549,6 +562,20 @@ export default function PortfolioScreen({ navigation }) {
         <AppIcon name="target" size={20} color="#6366f1" strokeWidth={2.2} />
       </TouchableOpacity>
 
+      <TouchableOpacity
+        style={[styles.balanceBanner, styles.marketBanner]}
+        onPress={() => navigation.navigate('MarketAllocation')}
+        activeOpacity={0.85}
+      >
+        <View style={styles.balanceBannerBody}>
+          <Text style={styles.balanceBannerTitle}>Market allocation</Text>
+          <Text style={styles.balanceBannerSub}>
+            Stocks · MF · ETFs — holding % within each class
+          </Text>
+        </View>
+        <AppIcon name="bar-chart-2" size={20} color="#0891b2" strokeWidth={2.2} />
+      </TouchableOpacity>
+
       {/* Actual SWP payouts. Log payouts as Income → Investments → SWP Payout;
           do not use negative
           investment entries because investments represent cash contributed. */}
@@ -876,10 +903,14 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surface,
     borderRadius: 14,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: c.border.subtle,
     gap: 12,
+  },
+  marketBanner: {
+    marginBottom: 16,
+    borderColor: '#0891b240',
   },
   balanceBannerBody: { flex: 1 },
   balanceBannerTitle: {

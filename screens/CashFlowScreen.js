@@ -29,12 +29,13 @@ import {
 import CashFlowChart from '../components/CashFlowChart';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
+import { useLoans } from '../contexts/LoansContext';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
-import { projectCashFlow } from '../lib/cashFlow';
+import { estimateTypicalLifestyle, projectCashFlow } from '../lib/cashFlow';
 import { computeAccountBalances } from '../lib/accountBalances';
 import { lookupRateOrOne } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
@@ -51,6 +52,7 @@ export default function CashFlowScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { rules } = useRecurring();
+  const { loans } = useLoans();
   const { income, expenses, investments } = useTransactions();
   const { transfers } = useTransfers();
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
@@ -72,13 +74,15 @@ export default function CashFlowScreen({ navigation }) {
   const projectedRules = useMemo(() => rules.map((rule) => {
     const account = accounts.find((item) => item.id === rule.accountId);
     const currency = rule.currency ?? account?.currency ?? baseCurrency;
-    const amount = rule.amountInBase != null
-      ? Number(rule.amountInBase) || 0
+    const storedBase = Number(rule.amountInBase);
+    const amount = Number.isFinite(storedBase) && storedBase > 0
+      ? storedBase
       : (Number(rule.amount) || 0) * lookupRateOrOne(fxRates, currency, baseCurrency);
     return { ...rule, amount };
   }), [rules, accounts, fxRates, baseCurrency]);
   const [startBalanceText, setStartBalanceText] = useState('');
   const [horizonDays, setHorizonDays] = useState(90);
+  const [includeTypical, setIncludeTypical] = useState(true);
 
   // Effective starting balance: user's override if valid, else the
   // auto-computed liquid-assets total.
@@ -100,6 +104,20 @@ export default function CashFlowScreen({ navigation }) {
     return map;
   }, [categories]);
 
+  const typical = useMemo(
+    () => estimateTypicalLifestyle({
+      expenses,
+      investments,
+      income,
+      recurringRules: projectedRules,
+      loans,
+      horizonDays,
+      fxRates,
+      baseCurrency,
+    }),
+    [expenses, investments, income, projectedRules, loans, horizonDays, fxRates, baseCurrency],
+  );
+
   const result = useMemo(
     () => projectCashFlow({
       startBalance:   effectiveStart,
@@ -107,8 +125,13 @@ export default function CashFlowScreen({ navigation }) {
       today:          new Date(),
       horizonDays,
       categoriesById,
+      includeTypicalSpend: includeTypical && typical.hasSignal,
+      typicalExpenseDaily: typical.expenseDaily,
+      typicalInvestmentDaily: typical.investmentDaily,
+      typicalIncomeDaily: typical.incomeDaily,
+      loans,
     }),
-    [effectiveStart, projectedRules, horizonDays, categoriesById],
+    [effectiveStart, projectedRules, horizonDays, categoriesById, includeTypical, typical, loans],
   );
 
   const { events, series, summary } = result;
@@ -116,6 +139,7 @@ export default function CashFlowScreen({ navigation }) {
   const useAutoStart = () => setStartBalanceText('');
 
   const hasRules = rules.some((r) => r.active !== false);
+  const hasIncomeRule = rules.some((r) => r.active !== false && r.type === 'income');
 
   return (
     <ScrollView
@@ -130,8 +154,13 @@ export default function CashFlowScreen({ navigation }) {
             <Text style={styles.cardTitle}>Starting balance</Text>
             <HelpSheet
               title="Cash flow forecast"
-              summary="This forecast projects your cash balance from the starting balance and active recurring rules."
-              items={['It is a planning view and does not create transactions.', 'Override the starting balance to test a different scenario.']}
+              summary="Recurring rules and formal loan EMIs are the calendar. Typical flow is leftover income, expense, and investment from the last 6 months after those hits are removed."
+              items={[
+                'It is a planning view and does not create transactions.',
+                'Active loans you owe add EMI dates unless a matching expense rule already covers them.',
+                'Typical income is last-6-month pay (bonus months ignored), minus salary already on the calendar.',
+                'Override the starting balance to test a different scenario.',
+              ]}
             />
           </View>
           {startBalanceText.trim() !== '' && (
@@ -161,6 +190,29 @@ export default function CashFlowScreen({ navigation }) {
         </Text>
       </View>
 
+      <Text style={styles.sectionLabel}>Forecast includes</Text>
+      <View style={styles.chipRow}>
+        <TouchableOpacity
+          onPress={() => setIncludeTypical(false)}
+          activeOpacity={0.7}
+          style={[styles.modeChip, !includeTypical && styles.chipActive]}
+        >
+          <Text style={[styles.chipText, !includeTypical && styles.chipTextActive]}>Rules only</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setIncludeTypical(true)}
+          activeOpacity={0.7}
+          style={[styles.modeChip, includeTypical && styles.chipActive]}
+        >
+          <Text style={[styles.chipText, includeTypical && styles.chipTextActive]}>Rules + typical</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.typicalHint}>
+        {typical.hasSignal
+          ? `Last 6 months (after calendar hits): income ${formatMoneyCurrency(typical.incomeMonthly, baseCurrency)}/mo, expenses ${formatMoneyCurrency(typical.expenseMonthly, baseCurrency)}, investments ${formatMoneyCurrency(typical.investmentMonthly, baseCurrency)}. About +${formatMoneyCurrency(typical.incomeDaily, baseCurrency)} / −${formatMoneyCurrency(typical.dailyTotal, baseCurrency)} per day.`
+          : 'Not enough leftover activity in the last 6 months to estimate a typical drip. Recurring rules and loan EMIs still apply.'}
+      </Text>
+
       {/* -- Horizon chips --------------------------------------------------- */}
       <Text style={styles.sectionLabel}>Horizon</Text>
       <View style={styles.chipRow}>
@@ -187,12 +239,12 @@ export default function CashFlowScreen({ navigation }) {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Projected balance</Text>
         <Text style={styles.chartCaption}>
-          Starts at {formatMoneyCurrency(effectiveStart, baseCurrency, { decimals: 0 })}, ends at{' '}
+          Starts at {formatMoneyCurrency(effectiveStart, baseCurrency)}, ends at{' '}
           <Text style={{
             color: summary.endBalance < 0 ? themeColors.accent.expense : themeColors.accent.income,
             fontWeight: '800',
           }}>
-            {formatMoneyCurrency(summary.endBalance, baseCurrency, { decimals: 0 })}
+            {formatMoneyCurrency(summary.endBalance, baseCurrency)}
           </Text>
           {' '}after {horizonDays} days.
         </Text>
@@ -211,7 +263,7 @@ export default function CashFlowScreen({ navigation }) {
           <Text style={styles.warnBody}>
             Your balance dips to{' '}
             <Text style={styles.warnStrong}>
-              {formatMoneyCurrency(summary.minBalance, baseCurrency, { decimals: 0 })}
+              {formatMoneyCurrency(summary.minBalance, baseCurrency)}
             </Text>{' '}
             on {summary.minBalanceDate.toDateString()}. Consider deferring a
             SIP or topping up your accounts.
@@ -224,6 +276,13 @@ export default function CashFlowScreen({ navigation }) {
         <SummaryTile label="Income"     value={summary.income}     tint={themeColors.accent.income}     baseCurrency={baseCurrency} />
         <SummaryTile label="Expense"    value={summary.expense}    tint={themeColors.accent.expense}    baseCurrency={baseCurrency} />
       </View>
+      {summary.income === 0 && !(includeTypical && typical.incomeDaily >= 1) && (
+        <Text style={styles.typicalHint}>
+          {hasIncomeRule
+            ? 'No income rule hits this horizon. Check the next-run date on Recurring.'
+            : 'Income stays ₹0 until you add a recurring income rule, or turn on typical if leftover last-6-month pay is enough to drip.'}
+        </Text>
+      )}
       <View style={styles.gridRow}>
         <SummaryTile label="Investment" value={summary.investment} tint={themeColors.accent.investment} baseCurrency={baseCurrency} />
         <SummaryTile
@@ -236,13 +295,12 @@ export default function CashFlowScreen({ navigation }) {
       </View>
 
       {/* -- Empty state or event list -------------------------------------- */}
-      {!hasRules ? (
+      {!hasRules && events.length === 0 && !(includeTypical && typical.hasSignal) ? (
         <View style={styles.emptyCard}>
-          <Text style={styles.emptyTitle}>No recurring rules yet</Text>
+          <Text style={styles.emptyTitle}>No forecast spine yet</Text>
           <Text style={styles.emptyBody}>
-            Add a rule for your salary, rent, SIPs, subscriptions, and other
-            regular hits — the forecast will then project your cash for the
-            next few months.
+            Add a rule for salary, rent, SIPs, or log a loan with an EMI —
+            the forecast will then project your cash for the next few months.
           </Text>
           <TouchableOpacity
             style={styles.emptyCta}
@@ -262,11 +320,43 @@ export default function CashFlowScreen({ navigation }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>
             Upcoming events{' '}
-            <Text style={styles.dim}>({events.length})</Text>
+            <Text style={styles.dim}>
+              ({events.length
+                + (includeTypical && typical.incomeDaily >= 1 ? 1 : 0)
+                + (includeTypical && typical.dailyTotal >= 1 ? 1 : 0)})
+            </Text>
           </Text>
+          {includeTypical && typical.incomeDaily >= 1 && (
+            <EventRow
+              event={{
+                ruleType: 'income',
+                delta: typical.incomeDaily,
+                categoryLabel: `Typical income · +${formatMoneyCurrency(typical.incomeDaily, baseCurrency)}/day`,
+                note: 'Leftover last-6-month income after salary rules — dripped from tomorrow',
+                date: null,
+                balanceAfter: null,
+              }}
+              prevBalance={effectiveStart}
+              baseCurrency={baseCurrency}
+            />
+          )}
+          {includeTypical && typical.dailyTotal >= 1 && (
+            <EventRow
+              event={{
+                ruleType: 'typical',
+                delta: -typical.dailyTotal,
+                categoryLabel: `Typical spend · −${formatMoneyCurrency(typical.dailyTotal, baseCurrency)}/day`,
+                note: 'Leftover last-6-month expenses and investments — dripped from tomorrow',
+                date: null,
+                balanceAfter: null,
+              }}
+              prevBalance={effectiveStart}
+              baseCurrency={baseCurrency}
+            />
+          )}
           {events.length === 0 && (
             <Text style={styles.emptyEvents}>
-              No recurring events fall inside this horizon.
+              No dated rules or EMIs fall inside this horizon.
             </Text>
           )}
           {events.map((e, i) => (
@@ -281,8 +371,9 @@ export default function CashFlowScreen({ navigation }) {
       )}
 
       <Text style={styles.footer}>
-        Projection uses your recurring rules only. One-off expenses and
-        market moves aren't included.
+        {includeTypical && typical.hasSignal
+          ? 'Dated list is recurring rules and loan EMIs. Typical income and spend are leftover last-6-month cash after those rules. Large one-offs are ignored.'
+          : 'Projection uses recurring rules and formal loan EMIs. Turn on typical to add leftover income, expenses, and investments from the last 6 months.'}
       </Text>
     </ScrollView>
   );
@@ -295,8 +386,8 @@ function SummaryTile({ label, value, tint, baseCurrency, signed = false }) {
   const styles = useThemedStyles(makeStyles);
   const abs = Math.abs(value);
   const display = signed
-    ? `${value >= 0 ? '+' : '−'}${formatMoneyCurrency(abs, baseCurrency, { decimals: 0 })}`
-    : formatMoneyCurrency(value, baseCurrency, { decimals: 0 });
+    ? `${value >= 0 ? '+' : '−'}${formatMoneyCurrency(abs, baseCurrency)}`
+    : formatMoneyCurrency(value, baseCurrency);
   return (
     <View style={[styles.tile, { borderLeftColor: tint }]}>
       <Text style={styles.tileLabel}>{label}</Text>
@@ -314,13 +405,23 @@ function EventRow({ event, prevBalance, baseCurrency }) {
   const isNeg = event.delta < 0;
   const tint =
       event.ruleType === 'income'     ? themeColors.accent.income
-    : event.ruleType === 'expense'    ? themeColors.accent.expense
-    : /* investment */                 themeColors.accent.investment;
+    : event.ruleType === 'typical'    ? themeColors.text.secondary
+    : event.ruleType === 'expense' || event.ruleType === 'loan'
+      ? themeColors.accent.expense
+      : themeColors.accent.investment;
 
   const label =
     event.categoryLabel
     ?? event.note?.trim()
     ?? '(no note)';
+
+  const dateLabel = event.date
+    ? event.date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', weekday: 'short' })
+    : '';
+  const noteExtra = event.note && event.categoryLabel && event.note !== event.categoryLabel
+    ? event.note
+    : '';
+  const meta = [dateLabel, noteExtra].filter(Boolean).join(' · ');
 
   return (
     <View style={styles.eventRow}>
@@ -329,23 +430,22 @@ function EventRow({ event, prevBalance, baseCurrency }) {
         <Text style={styles.eventLabel} numberOfLines={1}>
           {event.categoryEmoji ? `${event.categoryEmoji} ` : ''}{label}
         </Text>
-        <Text style={styles.eventMeta}>
-          {event.date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', weekday: 'short' })}
-          {event.note && event.categoryLabel && event.note !== event.categoryLabel
-            ? ` · ${event.note}`
-            : ''}
-        </Text>
+        {!!meta && <Text style={styles.eventMeta}>{meta}</Text>}
       </View>
       <View style={styles.eventRight}>
-        <Text style={[styles.eventDelta, { color: tint }]}>
-          {isNeg ? '−' : '+'}{formatMoneyCurrency(Math.abs(event.delta), baseCurrency, { decimals: 0 })}
-        </Text>
-        <Text style={[
-          styles.eventBalance,
-          { color: event.balanceAfter < 0 ? themeColors.accent.expense : themeColors.text.secondary },
-        ]}>
-          → {formatMoneyCurrency(event.balanceAfter, baseCurrency, { decimals: 0 })}
-        </Text>
+        {event.ruleType !== 'typical' && (
+          <Text style={[styles.eventDelta, { color: tint }]}>
+            {isNeg ? '−' : '+'}{formatMoneyCurrency(Math.abs(event.delta), baseCurrency)}
+          </Text>
+        )}
+        {event.balanceAfter != null && (
+          <Text style={[
+            styles.eventBalance,
+            { color: event.balanceAfter < 0 ? themeColors.accent.expense : themeColors.text.secondary },
+          ]}>
+            → {formatMoneyCurrency(event.balanceAfter, baseCurrency)}
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -373,6 +473,22 @@ const makeStyles = (c) => ({
   chipRow: {
     flexDirection: 'row',
     gap: spacing.sm,
+  },
+  modeChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surface,
+    alignItems: 'center',
+  },
+  typicalHint: {
+    fontSize: 12,
+    color: c.text.secondary,
+    lineHeight: 17,
+    marginTop: -4,
   },
   chip: {
     flex: 1,

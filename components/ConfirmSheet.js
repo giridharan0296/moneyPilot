@@ -108,18 +108,20 @@ export default function ConfirmSheet({
             <Text style={styles.title}>{title}</Text>
             {message ? <Text style={styles.message}>{message}</Text> : null}
             <View style={styles.actions}>
-              <AppButton
-                label={cancelLabel}
-                variant="secondary"
-                onPress={onCancel}
-                style={styles.actionBtn}
-              />
-              <AppButton
-                label={confirmLabel}
-                variant={destructive ? 'destructive' : 'primary'}
-                onPress={onConfirm}
-                style={styles.actionBtn}
-              />
+              <View style={styles.actionBtn}>
+                <AppButton
+                  label={cancelLabel}
+                  variant="secondary"
+                  onPress={onCancel}
+                />
+              </View>
+              <View style={styles.actionBtn}>
+                <AppButton
+                  label={confirmLabel}
+                  variant={destructive ? 'destructive' : 'primary'}
+                  onPress={onConfirm}
+                />
+              </View>
             </View>
           </SafeAreaView>
         </Animated.View>

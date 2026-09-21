@@ -1,6 +1,6 @@
-# Worth Management — User Guide
+# FinanceIQ — User Guide
 
-Worth Management is a personal-finance app for recording daily money activity, tracking investments and net worth, planning goals, and reviewing reports. It supports Indian financial-year reporting and multiple currencies.
+FinanceIQ is an app for recording daily money activity, tracking investments and net worth, planning goals, and reviewing reports. It supports Indian financial-year reporting and multiple currencies.
 
 > This app is a tracking and planning tool, not financial, tax, or investment advice.
 
@@ -250,7 +250,7 @@ AI Insights can review a compact summary of your finances and show actionable ca
 
 1. Open **Settings → AI Insights**
 2. Enable AI Insights
-3. Choose a supported OpenAI-compatible provider and model
+3. Choose a provider (OpenAI, Groq, OpenRouter, DeepSeek, Cursor, or custom) and model. Cursor uses a Dashboard API key and is slower because it runs a Cloud Agent.
 4. Add your API key
 5. Accept the privacy notice
 6. Open the **Insights** tab and tap **Generate**

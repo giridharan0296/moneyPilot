@@ -8,6 +8,9 @@
 // not the source of truth at runtime.
 // ----------------------------------------------------------------------------
 
+/** Home-screen / window title — plain label, not a product codename. */
+export const APP_DISPLAY_NAME = 'FinanceIQ';
+
 export const STORAGE_KEYS = {
   // Transaction lists
   expenses:    '@financeApp/expenses/v1',
@@ -203,6 +206,15 @@ export const AI_PROVIDER_PRESETS = {
     keyHint: 'sk-...',
     docs:    'https://platform.deepseek.com/api_keys',
   },
+  cursor: {
+    label:   'Cursor',
+    baseUrl: 'https://api.cursor.com/v1',
+    // Blank = Cursor account / team default. Cloud Agents is not
+    // OpenAI /chat/completions — see lib/cursorAgents.js.
+    model:   '',
+    keyHint: 'crsr_...',
+    docs:    'https://cursor.com/docs/api',
+  },
   custom: {
     label:   'Custom (self-hosted / other)',
     baseUrl: '',
@@ -323,7 +335,28 @@ export const BROKERS = [
 // have the same shape as categories (id/label/emoji/color) but scope their
 // ids to be locally unique within the parent — they're always looked up
 // through the parent (`category.subCategories.find(...)`), never globally.
-export const DEFAULT_EXPENSE_CATEGORIES = [
+function othersSubFor(category) {
+  return {
+    id: `${category.id}_other`,
+    label: 'Others',
+    emoji: '📦',
+    color: category.color ?? '#6b7280',
+  };
+}
+
+export function ensureOthersSubcategories(list) {
+  if (!Array.isArray(list)) return list;
+  return list.map((category) => {
+    const subs = Array.isArray(category.subCategories) ? category.subCategories : [];
+    const otherId = `${category.id}_other`;
+    if (subs.some((item) => item?.id === otherId)) {
+      return { ...category, subCategories: subs };
+    }
+    return { ...category, subCategories: [...subs, othersSubFor(category)] };
+  });
+}
+
+const EXPENSE_CATEGORY_SEEDS = [
   {
     id: 'food', label: 'Food', emoji: '🍔', color: '#f97316',
     subCategories: [
@@ -575,7 +608,9 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
   },
 ];
 
-export const DEFAULT_INCOME_CATEGORIES = [
+export const DEFAULT_EXPENSE_CATEGORIES = ensureOthersSubcategories(EXPENSE_CATEGORY_SEEDS);
+
+const INCOME_CATEGORY_SEEDS = [
   {
     id: 'salary', label: 'Employment Income', emoji: '💼', color: '#059669',
     subCategories: [
@@ -685,7 +720,9 @@ export const DEFAULT_INCOME_CATEGORIES = [
   },
 ];
 
-export const DEFAULT_INVESTMENT_CATEGORIES = [
+export const DEFAULT_INCOME_CATEGORIES = ensureOthersSubcategories(INCOME_CATEGORY_SEEDS);
+
+const INVESTMENT_CATEGORY_SEEDS = [
   {
     id: 'mutual_funds', label: 'Mutual Funds', emoji: '📈', color: '#8b5cf6',
     subCategories: [
@@ -835,6 +872,8 @@ export const DEFAULT_INVESTMENT_CATEGORIES = [
     ],
   },
 ];
+
+export const DEFAULT_INVESTMENT_CATEGORIES = ensureOthersSubcategories(INVESTMENT_CATEGORY_SEEDS);
 
 // Account GROUPS are containers ("Bank Accounts", "Wallets", "Cash", ...).
 // Groups hold one or more concrete accounts. Transactions reference an

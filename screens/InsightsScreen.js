@@ -30,6 +30,7 @@ import InsightCard         from '../components/InsightCard';
 import PreviewSummaryModal from '../components/PreviewSummaryModal';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useAiInsights } from '../contexts/AiInsightsContext';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 
 // Which bottom-tab hosts each deep-link route. Kept here (not spread
 // across insights) so a future refactor of tabs → stacks only touches
@@ -41,7 +42,7 @@ import { useAiInsights } from '../contexts/AiInsightsContext';
 // were preserved so this table is a one-line swap per entry.
 const ROUTE_TO_TAB = {
   Budgets:                'More',
-  Loans:                  'More',
+  Loans:                  'Transactions',
   Goals:                  'More',
   RecurringTransactions:  'More',
   Transfers:              'Transactions',
@@ -111,7 +112,11 @@ export default function InsightsScreen({ navigation }) {
   const handleAction = (action) => {
     if (!action?.route) return;
     if (action.route === 'Transfers') {
-      navigation.navigate('Transactions', { initialTab: 'transfer' });
+      openTransactionsTab(navigation, { initialTab: 'transfer' });
+      return;
+    }
+    if (action.route === 'Loans') {
+      openTransactionsTab(navigation, { initialTab: 'loan' });
       return;
     }
     const tab = ROUTE_TO_TAB[action.route];
@@ -151,7 +156,7 @@ export default function InsightsScreen({ navigation }) {
           </Text>
           <Text style={styles.ctaCaveat}>
             An aggregate summary of your finances is sent to your chosen
-            provider (OpenAI / Groq / OpenRouter / DeepSeek / custom).
+            provider (OpenAI / Groq / OpenRouter / DeepSeek / Cursor / custom).
             Individual transactions are never sent.
           </Text>
           <TouchableOpacity

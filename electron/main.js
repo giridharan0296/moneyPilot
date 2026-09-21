@@ -70,12 +70,41 @@ protocol.registerSchemesAsPrivileged([
 app.whenReady().then(() => {
   // Yahoo Finance proxy — renderer can't call Yahoo directly (CORS). Main
   // process fetch has no CORS, and we can read Set-Cookie for the crumb flow.
+  // Cursor Cloud Agents — renderer fetch is blocked (no ACAO). Main
+  // process fetch has no CORS. URL locked to api.cursor.com.
+  ipcMain.handle('cursor-fetch', async (_event, spec = {}) => {
+    const url = spec.url;
+    if (typeof url !== 'string' || !/^https:\/\/api\.cursor\.com(\/|$)/i.test(url)) {
+      return { ok: false, status: 400, bodyText: 'Blocked URL' };
+    }
+    const method = String(spec.method || 'GET').toUpperCase();
+    if (!['GET', 'POST', 'DELETE'].includes(method)) {
+      return { ok: false, status: 400, bodyText: 'Blocked method' };
+    }
+    const headers = {
+      Accept: 'application/json',
+    };
+    if (spec.authorization) headers.Authorization = String(spec.authorization);
+    if (spec.body) headers['Content-Type'] = 'application/json';
+    try {
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: spec.body ? String(spec.body) : undefined,
+      });
+      const bodyText = await res.text();
+      return { ok: res.ok, status: res.status, bodyText };
+    } catch (e) {
+      return { ok: false, status: 0, bodyText: e.message || 'fetch failed' };
+    }
+  });
+
   ipcMain.handle('yahoo-fetch', async (_event, url, opts = {}) => {
     if (typeof url !== 'string' || !/^https:\/\/([a-z0-9-]+\.)*yahoo\.com\//i.test(url)) {
       return { ok: false, status: 400, bodyText: 'Blocked URL', setCookie: [] };
     }
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (compatible; Worth/1.0)',
+      'User-Agent': 'Mozilla/5.0 (compatible; PersonalFinance/1.0)',
       Accept: opts.accept || 'application/json',
     };
     if (opts.cookie) headers.Cookie = opts.cookie;
@@ -122,7 +151,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     backgroundColor: '#f5f7fb',
-    title: 'Worth',
+    title: 'FinanceIQ',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

@@ -1432,7 +1432,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
           <Text style={styles.sectionTitle}>AI Insights</Text>
           <Text style={styles.sectionSubtitle}>
             Optional. Sends an aggregate summary of your finances to an
-            LLM (OpenAI / Groq / OpenRouter / DeepSeek / custom) to
+            LLM (OpenAI / Groq / OpenRouter / DeepSeek / Cursor / custom) to
             surface actionable observations. Individual transactions
             are never sent.
           </Text>
@@ -1624,7 +1624,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
           <TextInput
             value={config?.model ?? ''}
             onChangeText={(v) => onChange({ model: v.trim() })}
-            placeholder="gpt-4o-mini"
+            placeholder={provider === 'cursor' ? 'blank = Cursor default' : 'gpt-4o-mini'}
             placeholderTextColor="#9aa0a6"
             autoCapitalize="none"
             autoCorrect={false}
@@ -1633,10 +1633,9 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
 
           {currentPreset.docs && provider !== 'custom' && (
             <Text style={styles.whisperHelp}>
-              Get a key from the provider's console. Preset default:{' '}
-              <Text style={{ fontFamily: 'monospace' }}>
-                {currentPreset.model}
-              </Text>
+              {provider === 'cursor'
+                ? 'Paste a Cursor Dashboard user API key (Cloud Agents). Browsers cannot call Cursor (CORS) — use Electron or Android/iOS. Insights starts a no-repo agent, then deletes it. Does not work for voice transcription.'
+                : `Get a key from the provider's console. Preset default: ${currentPreset.model}`}
             </Text>
           )}
 

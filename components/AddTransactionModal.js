@@ -23,7 +23,6 @@ import {
   Modal,
   Platform,
   KeyboardAvoidingView,
-  ScrollView,
   Text,
   TouchableOpacity,
   View,
@@ -94,13 +93,7 @@ export default function AddTransactionModal({
           <View style={styles.headerSpacer} />
         </View>
 
-        <ScrollView
-          contentContainerStyle={styles.body}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          automaticallyAdjustKeyboardInsets
-        >
-          <TransactionForm
+        <TransactionForm
             key={
               initialValues
                 ? `prefill-${initialValues.amount}-${initialValues.note || ''}`
@@ -117,7 +110,6 @@ export default function AddTransactionModal({
             onSubmit={handleSubmit}
             allowSaveAndAddAnother={!initialValues}
           />
-        </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -165,5 +157,4 @@ const makeStyles = (c) => ({
   },
   // Matches `headerBackBtn.minWidth` so the title stays visually centred.
   headerSpacer: { width: 76 },
-  body: { padding: 20, paddingBottom: 60 },
 });

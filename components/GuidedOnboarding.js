@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { APP_DISPLAY_NAME } from '../constants';
 import { elevation, radii, spacing } from '../lib/theme';
 
 const STEPS = [
@@ -11,7 +12,7 @@ const STEPS = [
     icon: 'sparkles',
     eyebrow: 'Welcome',
     title: 'See your complete money picture',
-    body: 'Worth brings daily cash flow, investments, loans, goals, and net worth into one place.',
+    body: `${APP_DISPLAY_NAME} brings daily cash flow, investments, loans, goals, and net worth into one place.`,
     points: [
       ['home', 'Dashboard', 'Your useful summary, controlled by the date filter.'],
       ['plus', 'Quick add', 'Use + to record income, expenses, and investments.'],

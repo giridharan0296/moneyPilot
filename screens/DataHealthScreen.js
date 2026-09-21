@@ -2,15 +2,21 @@ import { useMemo } from 'react';
 import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 
 import AppIcon from '../components/AppIcon';
-import { EmptyState, StatusBadge } from '../components/UiPrimitives';
+import { EmptyState } from '../components/UiPrimitives';
 import { useLoans } from '../contexts/LoansContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
-import { buildDataHealthChecks } from '../lib/dataHealth';
+import { buildDataHealthReport } from '../lib/dataHealth';
 import { elevation, radii, spacing } from '../lib/theme';
+
+const SEVERITY_META = {
+  error: { label: 'Fix first', tint: '#dc2626' },
+  warning: { label: 'Worth checking', tint: '#f59e0b' },
+  tip: { label: 'Good habit', tint: '#0891b2' },
+};
 
 export default function DataHealthScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
@@ -21,18 +27,13 @@ export default function DataHealthScreen({ navigation }) {
   const { holdings } = usePortfolio();
   const { loans } = useLoans();
 
-  const checks = useMemo(() => buildDataHealthChecks({
+  const report = useMemo(() => buildDataHealthReport({
     expenses, income, investments, transfers, accounts, categories,
     baseCurrency, holdings, loans,
   }), [
     expenses, income, investments, transfers, accounts, categories,
     baseCurrency, holdings, loans,
   ]);
-
-  const issues = checks.filter((check) => check.count > 0);
-  const healthy = checks.filter((check) => check.count === 0);
-  const passed = healthy.length;
-  const score = Math.round((passed / checks.length) * 100);
 
   const openFix = (check) => {
     if (check.tab) {
@@ -42,44 +43,83 @@ export default function DataHealthScreen({ navigation }) {
     navigation.navigate(check.route, check.routeParams);
   };
 
+  if (!report.hasUserData) {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
+        <IntroCard styles={styles} />
+        <EmptyState
+          icon="sparkles"
+          title="Nothing to review yet"
+          body="Add an account, log a few transactions, or import a statement. This screen will flag broken links, duplicates, and portfolio gaps."
+          tint={colors.accent.primary}
+        />
+      </ScrollView>
+    );
+  }
+
+  const allClear = report.open.length === 0;
+  const statusTint = allClear ? colors.accent.income : report.errorCount > 0 ? '#dc2626' : '#f59e0b';
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
-      <View style={styles.hero}>
-        <View style={styles.scoreRing}>
-          <Text style={styles.score}>{score}</Text>
-          <Text style={styles.scoreSuffix}>%</Text>
+      <IntroCard styles={styles} />
+
+      <View style={[styles.statusCard, { borderColor: `${statusTint}40` }]}>
+        <View style={[styles.statusIcon, { backgroundColor: `${statusTint}18` }]}>
+          <AppIcon
+            name={allClear ? 'check' : 'alert-triangle'}
+            size={26}
+            color={statusTint}
+            strokeWidth={2.2}
+          />
         </View>
-        <View style={styles.heroCopy}>
-          <Text style={styles.heroEyebrow}>DATA HEALTH</Text>
-          <Text style={styles.heroTitle}>
-            {issues.length === 0 ? 'Everything looks healthy' : `${issues.length} ${issues.length === 1 ? 'area needs' : 'areas need'} attention`}
+        <View style={styles.statusCopy}>
+          <Text style={styles.statusTitle}>
+            {allClear
+              ? 'Your books look consistent'
+              : report.errorCount > 0
+                ? `${report.errorCount} ${report.errorCount === 1 ? 'issue needs' : 'issues need'} fixing`
+                : `${report.open.length} ${report.open.length === 1 ? 'suggestion' : 'suggestions'} for you`}
           </Text>
-          <Text style={styles.heroSub}>{passed} of {checks.length} checks passed</Text>
+          <Text style={styles.statusSub}>
+            {allClear
+              ? `${report.totalChecks} checks passed — balances, reports, and portfolio should be trustworthy.`
+              : 'Fix errors first so Dashboard and Reports stay accurate. Warnings and tips are optional but helpful.'}
+          </Text>
         </View>
       </View>
 
-      {issues.length === 0 ? (
+      {allClear ? (
         <EmptyState
           icon="check"
-          title="All checks passed"
-          body="Accounts, categories, currencies, loans and portfolio values are internally consistent."
+          title="All clear"
+          body="Accounts, categories, amounts, loans, and portfolio values look internally consistent."
           tint={colors.accent.income}
         />
       ) : (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Needs attention</Text>
-          <Text style={styles.sectionSub}>Fix these to keep balances and reports reliable.</Text>
-          {issues.map((check) => (
-            <HealthRow key={check.id} check={check} onPress={() => openFix(check)} />
-          ))}
-        </View>
+        <>
+          {(['error', 'warning', 'tip']).map((severity) => {
+            const items = report.open.filter((check) => check.severity === severity);
+            if (items.length === 0) return null;
+            const meta = SEVERITY_META[severity];
+            return (
+              <View key={severity} style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: meta.tint }]}>{meta.label}</Text>
+                {items.map((check) => (
+                  <HealthRow key={check.id} check={check} onPress={() => openFix(check)} />
+                ))}
+              </View>
+            );
+          })}
+        </>
       )}
 
-      {healthy.length > 0 && (
+      {report.clear.length > 0 && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Checks passed</Text>
-          {healthy.map((check) => (
-            <HealthRow key={check.id} check={check} />
+          <Text style={styles.sectionTitle}>Looks good</Text>
+          <Text style={styles.sectionSub}>{report.clear.length} checks passed with your current data.</Text>
+          {report.clear.map((check) => (
+            <HealthRow key={check.id} check={check} compact />
           ))}
         </View>
       )}
@@ -87,78 +127,182 @@ export default function DataHealthScreen({ navigation }) {
   );
 }
 
-function HealthRow({ check, onPress }) {
+function IntroCard({ styles }) {
+  return (
+    <View style={styles.intro}>
+      <Text style={styles.introEyebrow}>DATA CHECK</Text>
+      <Text style={styles.introTitle}>Keep your numbers trustworthy</Text>
+      <Text style={styles.introBody}>
+        Scans accounts, transactions, loans, and portfolio for broken links, bad imports,
+        and double-counting — the things that silently skew Dashboard and Reports.
+      </Text>
+    </View>
+  );
+}
+
+function HealthRow({ check, onPress, compact = false }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
   const hasIssue = check.count > 0;
+
   const content = (
-    <View style={[styles.card, hasIssue && styles.cardIssue]}>
+    <View style={[styles.card, hasIssue && styles.cardIssue, compact && styles.cardCompact]}>
       <View style={[styles.iconBox, { backgroundColor: `${check.tint}18` }]}>
-        <AppIcon name={check.icon} size={21} color={check.tint} strokeWidth={2.1} />
+        <AppIcon name={check.icon} size={compact ? 18 : 21} color={check.tint} strokeWidth={2.1} />
       </View>
       <View style={styles.cardCopy}>
-        <View style={styles.cardTitleRow}>
-          <Text style={styles.cardTitle}>{check.title}</Text>
-          <StatusBadge
-            status={hasIssue ? (check.status ?? 'needs_review') : 'reconciled'}
-            label={hasIssue && !check.status ? 'Needs review' : undefined}
-          />
-        </View>
+        <Text style={styles.cardTitle}>{check.title}</Text>
         <Text style={styles.cardBody}>{hasIssue ? check.issue : check.healthy}</Text>
-        {hasIssue ? (
+        {hasIssue && !compact ? (
           <View style={styles.actionBox}>
-            <Text style={styles.actionLabel}>WHAT TO DO</Text>
             <Text style={styles.actionText}>{check.action}</Text>
-            <Text style={[styles.actionLink, { color: check.tint }]}>{check.actionLabel} →</Text>
+            {onPress ? (
+              <Text style={[styles.actionLink, { color: check.tint }]}>{check.actionLabel} →</Text>
+            ) : null}
           </View>
         ) : null}
       </View>
-      {onPress ? <AppIcon name="chevron-right" size={18} color={colors.text.muted} strokeWidth={2} /> : null}
+      {onPress && hasIssue ? (
+        <AppIcon name="chevron-right" size={18} color={colors.text.muted} strokeWidth={2} />
+      ) : hasIssue ? null : (
+        <AppIcon name="check" size={16} color={colors.accent.income} strokeWidth={2.4} />
+      )}
     </View>
   );
-  if (!onPress) return content;
-  return <TouchableOpacity onPress={onPress} activeOpacity={0.75}>{content}</TouchableOpacity>;
+
+  if (!onPress || !hasIssue) return content;
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.75} accessibilityRole="button">
+      {content}
+    </TouchableOpacity>
+  );
 }
 
 const makeStyles = (c) => ({
   screen: { flex: 1, backgroundColor: c.bg.canvas },
   container: { padding: spacing.lg, paddingBottom: 48, width: '100%', maxWidth: 760, alignSelf: 'center' },
-  hero: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.lg,
-    padding: spacing.xl, borderRadius: radii['2xl'],
-    backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle,
+  intro: {
+    marginBottom: spacing.lg,
+    padding: spacing.lg,
+    borderRadius: radii.xl,
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
     ...elevation.card,
   },
-  scoreRing: {
-    width: 82, height: 82, borderRadius: 41, borderWidth: 7,
-    borderColor: c.accent.primary, backgroundColor: c.accent.primary + '0D',
-    alignItems: 'center', justifyContent: 'center', flexDirection: 'row',
+  introEyebrow: {
+    color: c.accent.primary,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.2,
   },
-  score: { color: c.text.primary, fontSize: 25, fontWeight: '900', letterSpacing: -1 },
-  scoreSuffix: { color: c.text.secondary, fontSize: 12, fontWeight: '800', marginTop: 7 },
-  heroCopy: { flex: 1, minWidth: 0 },
-  heroEyebrow: { color: c.accent.primary, fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
-  heroTitle: { color: c.text.primary, fontSize: 20, lineHeight: 25, fontWeight: '900', marginTop: 4 },
-  heroSub: { color: c.text.secondary, fontSize: 12, marginTop: 5 },
-  section: { marginTop: spacing.xl },
-  sectionTitle: { color: c.text.primary, fontSize: 17, fontWeight: '900' },
-  sectionSub: { color: c.text.secondary, fontSize: 12, marginTop: 3, marginBottom: spacing.md },
+  introTitle: {
+    color: c.text.primary,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 4,
+    lineHeight: 25,
+  },
+  introBody: {
+    color: c.text.secondary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: spacing.sm,
+  },
+  statusCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radii.xl,
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    marginBottom: spacing.lg,
+    ...elevation.card,
+  },
+  statusIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusCopy: { flex: 1, minWidth: 0 },
+  statusTitle: {
+    color: c.text.primary,
+    fontSize: 16,
+    fontWeight: '800',
+    lineHeight: 21,
+  },
+  statusSub: {
+    color: c.text.secondary,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  section: { marginTop: spacing.lg },
+  sectionTitle: {
+    color: c.text.primary,
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: spacing.sm,
+  },
+  sectionSub: {
+    color: c.text.secondary,
+    fontSize: 12,
+    marginTop: -4,
+    marginBottom: spacing.sm,
+  },
   card: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    padding: spacing.md, marginTop: spacing.sm, borderRadius: radii.xl,
-    backgroundColor: c.bg.surface, borderWidth: 1, borderColor: c.border.subtle,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    borderRadius: radii.xl,
+    backgroundColor: c.bg.surface,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
   },
-  cardIssue: { borderColor: '#f59e0b40' },
-  iconBox: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  cardIssue: { borderColor: '#f59e0b35' },
+  cardCompact: {
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  iconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
   cardCopy: { flex: 1, minWidth: 0 },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm },
-  cardTitle: { flex: 1, minWidth: 120, color: c.text.primary, fontSize: 14, fontWeight: '800' },
-  cardBody: { color: c.text.secondary, fontSize: 12, lineHeight: 17, marginTop: 4 },
-  actionBox: {
-    marginTop: spacing.sm, paddingTop: spacing.sm,
-    borderTopWidth: 1, borderTopColor: c.border.subtle,
+  cardTitle: {
+    color: c.text.primary,
+    fontSize: 14,
+    fontWeight: '800',
   },
-  actionLabel: { color: c.text.muted, fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
-  actionText: { color: c.text.secondary, fontSize: 12, lineHeight: 17, marginTop: 3 },
-  actionLink: { fontSize: 12, fontWeight: '900', marginTop: 6 },
+  cardBody: {
+    color: c.text.secondary,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  actionBox: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: c.border.subtle,
+  },
+  actionText: {
+    color: c.text.secondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  actionLink: {
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 6,
+  },
 });

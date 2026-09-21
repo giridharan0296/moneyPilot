@@ -7,12 +7,19 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "NPM_CONFIG_PRODUCTION": "false"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "preview": {
+      "developmentClient": false,
       "distribution": "internal",
+      "env": {
+        "NPM_CONFIG_PRODUCTION": "true"
+      },
       "android": {
         "buildType": "apk"
       }

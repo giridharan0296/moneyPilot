@@ -16,8 +16,6 @@ export default function ExpensesScreen({ route }) {
         emptyIcon: 'credit-card',
         emptyTitle: 'No expenses yet.',
         emptySub: 'Tap + to add your first expense.',
-        clearAllTitle: 'Clear all expenses?',
-        clearAllMessage: 'This cannot be undone.',
       }}
     />
   );

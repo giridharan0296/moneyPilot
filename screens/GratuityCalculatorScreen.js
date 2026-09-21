@@ -14,7 +14,7 @@ import { useThemedStyles } from '../contexts/ThemeContext';
 
 const GRATUITY_CEILING = 2000000;
 const money = (value) => Number.isFinite(value)
-  ? `₹ ${Math.round(value).toLocaleString('en-IN')}`
+  ? `₹ ${Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   : '—';
 
 export default function GratuityCalculatorScreen() {

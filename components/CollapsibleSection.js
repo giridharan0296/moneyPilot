@@ -7,9 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Platform,
   Text,
-  UIManager,
   View,
 } from 'react-native';
 
@@ -23,10 +21,6 @@ import {
   readCollapsibleSectionState,
   writeCollapsibleSectionState,
 } from '../lib/collapsibleSectionState';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 export default function CollapsibleSection({
   title,

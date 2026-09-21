@@ -20,6 +20,13 @@ const HUB_ITEMS = [
     color: '#6366f1',
   },
   {
+    key: 'market',
+    route: 'MarketAllocation',
+    icon: 'bar-chart-2',
+    label: 'Market mix',
+    color: '#0891b2',
+  },
+  {
     key: 'portfolio',
     route: 'Portfolio',
     icon: 'bar-chart-2',

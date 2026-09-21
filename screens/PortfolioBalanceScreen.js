@@ -77,8 +77,8 @@ function DriftRow({ row, baseCurrency, styles }) {
       {row.action !== 'ok' && (
         <Text style={[styles.driftHint, { color: actionColor }]}>
           {row.action === 'over'
-            ? `Over by ${formatMoneyCurrency(Math.abs(row.driftValue), baseCurrency, { decimals: 0 })} — consider trimming`
-            : `Under by ${formatMoneyCurrency(Math.abs(row.driftValue), baseCurrency, { decimals: 0 })} — consider adding`}
+            ? `Over by ${formatMoneyCurrency(Math.abs(row.driftValue), baseCurrency)} — consider trimming`
+            : `Under by ${formatMoneyCurrency(Math.abs(row.driftValue), baseCurrency)} — consider adding`}
         </Text>
       )}
     </View>
@@ -193,7 +193,7 @@ export default function PortfolioBalanceScreen() {
       <View style={styles.hero}>
         <Text style={styles.heroLabel}>PORTFOLIO VALUE</Text>
         <Text style={styles.heroValue}>
-          {formatMoneyCurrency(totalValue, baseCurrency, { decimals: 0 })}
+          {formatMoneyCurrency(totalValue, baseCurrency)}
         </Text>
         <Text style={styles.heroSub}>
           Based on {source === 'holdings' ? 'holdings & assets' : 'logged contributions'}
@@ -346,8 +346,8 @@ export default function PortfolioBalanceScreen() {
                 </Text>
                 <Text style={styles.suggestAction}>
                   {s.action === 'over'
-                    ? `Move out ~${formatMoneyCurrency(Math.abs(s.driftValue), baseCurrency, { decimals: 0 })}`
-                    : `Add ~${formatMoneyCurrency(Math.abs(s.driftValue), baseCurrency, { decimals: 0 })}`}
+                    ? `Move out ~${formatMoneyCurrency(Math.abs(s.driftValue), baseCurrency)}`
+                    : `Add ~${formatMoneyCurrency(Math.abs(s.driftValue), baseCurrency)}`}
                 </Text>
               </View>
               <AppIcon

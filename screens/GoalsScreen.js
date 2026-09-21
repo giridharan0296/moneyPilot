@@ -244,7 +244,7 @@ export function GoalsPane({
       ? {
           ...template,
           targetAmount: emergencyEstimate.targetAmount,
-          estimateNote: `6 months × ${formatMoneyCurrency(emergencyEstimate.monthlyAverage, baseCurrency, { decimals: 0 })} recent monthly spending`,
+          estimateNote: `6 months × ${formatMoneyCurrency(emergencyEstimate.monthlyAverage, baseCurrency)} recent monthly spending`,
         }
       : template);
 
@@ -275,7 +275,7 @@ export function GoalsPane({
               >
                 <Text style={styles.templateEmoji}>{template.emoji}</Text>
                 <Text style={styles.templateName}>{template.name}</Text>
-                <Text style={styles.templateAmount}>{formatMoneyCurrency(template.targetAmount, baseCurrency, { decimals: 0 })}</Text>
+                <Text style={styles.templateAmount}>{formatMoneyCurrency(template.targetAmount, baseCurrency)}</Text>
                 {template.estimateNote ? <Text style={styles.templateEstimate}>{template.estimateNote}</Text> : null}
               </TouchableOpacity>
             ))}
@@ -435,10 +435,10 @@ function GoalCard({
         <GoalProgressBar percent={percent} status={status} />
         <View style={styles.progressMeta}>
           <Text style={styles.progressCurrent}>
-            {formatMoneyCurrency(current, baseCurrency, { decimals: 0 })}
+            {formatMoneyCurrency(current, baseCurrency)}
           </Text>
           <Text style={styles.progressTarget}>
-            {' / '}{formatMoneyCurrency(target, baseCurrency, { decimals: 0 })}
+            {' / '}{formatMoneyCurrency(target, baseCurrency)}
           </Text>
         </View>
       </View>
@@ -457,7 +457,7 @@ function GoalCard({
           <View style={styles.metaItem}>
             <AppIcon name="calendar" size={12} color={themeColors.text.secondary} strokeWidth={2} />
             <Text style={styles.metaText}>
-              ~{formatMoneyCurrency(monthlyNeeded, baseCurrency, { decimals: 0 })}/mo needed
+              ~{formatMoneyCurrency(monthlyNeeded, baseCurrency)}/mo needed
             </Text>
           </View>
         )}

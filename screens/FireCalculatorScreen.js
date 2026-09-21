@@ -643,7 +643,7 @@ function compact(n) {
   if (v >= 10000000) return `${sign}${(v / 10000000).toFixed(2).replace(/\.?0+$/, '')}Cr`;
   if (v >= 100000)   return `${sign}${(v / 100000).toFixed(2).replace(/\.?0+$/, '')}L`;
   if (v >= 1000)     return `${sign}${(v / 1000).toFixed(1).replace(/\.0$/, '')}K`;
-  return `${sign}${Math.round(v).toLocaleString('en-IN')}`;
+  return `${sign}${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function recommendation(r, themeColors) {

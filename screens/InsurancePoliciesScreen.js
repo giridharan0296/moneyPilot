@@ -32,6 +32,7 @@ import {
 } from '../lib/insurancePolicies';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 
 export default function InsurancePoliciesScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
@@ -93,7 +94,7 @@ export default function InsurancePoliciesScreen({ navigation }) {
 
   const openLogPremium = (policy) => {
     const { type, prefill } = expensePrefillFromPolicy(policy);
-    navigation.getParent()?.navigate('Transactions', { initialTab: type });
+    openTransactionsTab(navigation.getParent() ?? navigation, { initialTab: type });
     setTimeout(() => {
       DeviceEventEmitter.emit('transactions:openAdd', { type, prefill });
     }, 60);

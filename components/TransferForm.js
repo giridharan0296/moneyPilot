@@ -7,10 +7,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import DateTimeField from './DateTimeField';
 
 import { radii, spacing } from '../lib/theme';
-import { KIND_META, KINDS } from '../lib/transfers';
+import { KIND_META } from '../lib/transfers';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
@@ -20,6 +21,52 @@ import QuickAddPickerItem from './QuickAddPickerItem';
 import TagInput from './TagInput';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
+import { openTransactionsTab } from '../lib/navigationTabReset';
+
+const MOVE_KIND = 'internal_transfer';
+const PERSON_OR_LOAN_KINDS = ['lend', 'borrow', 'repay_received', 'loan_repayment'];
+
+function transferSelectionScore(transfer, selection) {
+  const {
+    kind,
+    accountId,
+    targetAccountId,
+    counterpartyName,
+    linkedNetWorthId,
+    excludeId,
+    isOwnAccountTransfer,
+  } = selection;
+  if (excludeId && transfer.id === excludeId) return 0;
+  if ((transfer.kind ?? MOVE_KIND) !== kind) return 0;
+
+  let score = 1;
+  if (isOwnAccountTransfer && accountId && targetAccountId) {
+    const samePair = transfer.accountId === accountId
+      && transfer.targetAccountId === targetAccountId;
+    const reversedPair = transfer.accountId === targetAccountId
+      && transfer.targetAccountId === accountId;
+    if (samePair) score += 6;
+    else if (reversedPair) score += 4;
+    else return 0;
+  } else if (accountId) {
+    if (transfer.accountId === accountId) score += 2;
+    else if (isOwnAccountTransfer && transfer.targetAccountId === accountId) score += 1;
+    else return 0;
+  }
+
+  if (linkedNetWorthId) {
+    if (transfer.linkedNetWorthId !== linkedNetWorthId) return 0;
+    score += 6;
+  }
+
+  const name = String(counterpartyName ?? '').trim().toLowerCase();
+  if (name && (kind === 'lend' || kind === 'borrow')) {
+    if (String(transfer.counterpartyName ?? '').trim().toLowerCase() !== name) return 0;
+    score += 6;
+  }
+
+  return score;
+}
 
 // ----------------------------------------------------------------------------
 // TransferForm — kind-aware form for adding OR editing a Transfer.
@@ -45,7 +92,7 @@ import { useTransfers } from '../contexts/TransfersContext';
 // ----------------------------------------------------------------------------
 
 export default function TransferForm({
-  kind: initialKind = 'lend',
+  kind: initialKind = MOVE_KIND,
   initialValues = null,
   accounts,
   accountGroups = [],
@@ -58,9 +105,10 @@ export default function TransferForm({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const navigation = useNavigation();
   const { baseCurrency } = useSettings();
   const { allTags } = useTransactions();
-  const { transfers } = useTransfers();
+  const { transfers, ready: transfersReady } = useTransfers();
   const isEdit = !!initialValues;
 
   // In edit mode the kind is locked to whatever the transfer already has.
@@ -68,7 +116,15 @@ export default function TransferForm({
     initialValues?.kind ?? initialKind,
   );
   const meta = KIND_META[kind] ?? KIND_META.lend;
-  const isOwnAccountTransfer = kind === 'internal_transfer';
+  const isOwnAccountTransfer = kind === MOVE_KIND;
+  const [showPersonOrLoan, setShowPersonOrLoan] = useState(
+    () => (initialValues?.kind ?? initialKind) !== MOVE_KIND,
+  );
+
+  const openLoans = () => {
+    onCancel?.();
+    openTransactionsTab(navigation.getParent() ?? navigation, { initialTab: 'loan' });
+  };
 
   // Common fields.
   const [amount, setAmount] = useState(
@@ -84,6 +140,11 @@ export default function TransferForm({
   const [tags, setTags] = useState(
     Array.isArray(initialValues?.tags) ? initialValues.tags : [],
   );
+  const noteTouchedRef = useRef(!!String(initialValues?.note ?? '').trim());
+  const tagsTouchedRef = useRef(
+    Array.isArray(initialValues?.tags) && initialValues.tags.length > 0,
+  );
+  const lastPrefillKeyRef = useRef(null);
   const [date, setDate] = useState(
     initialValues?.createdAt ? new Date(initialValues.createdAt) : new Date(),
   );
@@ -107,23 +168,6 @@ export default function TransferForm({
 
   const [error, setError] = useState(null);
   const tagInputRef = useRef(null);
-  const tagSuggestions = useMemo(() => {
-    const seen = new Set();
-    const out = [];
-    const bump = (tag) => {
-      const label = String(tag ?? '').trim();
-      if (!label) return;
-      const key = label.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(label);
-    };
-    for (const transfer of transfers) {
-      for (const tag of transfer.tags ?? []) bump(tag);
-    }
-    for (const tag of allTags) bump(tag);
-    return out;
-  }, [allTags, transfers]);
   const selectedFormalLoan = useMemo(
     () => loans.find((loan) => loan.linkedLiabilityId === linkedNetWorthId) ?? null,
     [linkedNetWorthId, loans],
@@ -139,6 +183,158 @@ export default function TransferForm({
       return () => clearTimeout(t);
     }
   }, [isEdit]);
+
+  // Edit: keep note/tags in sync if the selected transfer is swapped in.
+  const editNote = initialValues?.note ?? '';
+  const editTagsKey = (initialValues?.tags ?? []).join('\u0001');
+  useEffect(() => {
+    if (!initialValues) return;
+    setNote(initialValues.note ?? '');
+    setTags(Array.isArray(initialValues.tags) ? initialValues.tags : []);
+    noteTouchedRef.current = !!String(initialValues.note ?? '').trim();
+    tagsTouchedRef.current = Array.isArray(initialValues.tags) && initialValues.tags.length > 0;
+  }, [editNote, editTagsKey, initialValues, initialValues?.id]);
+
+  const selection = useMemo(() => ({
+    kind,
+    accountId,
+    targetAccountId,
+    counterpartyName,
+    linkedNetWorthId,
+    excludeId: initialValues?.id,
+    isOwnAccountTransfer,
+  }), [
+    accountId,
+    counterpartyName,
+    initialValues?.id,
+    isOwnAccountTransfer,
+    kind,
+    linkedNetWorthId,
+    targetAccountId,
+  ]);
+
+  const matchingMoves = useMemo(() => {
+    return (transfers ?? [])
+      .map((t) => ({ t, score: transferSelectionScore(t, selection) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score || new Date(b.t.createdAt) - new Date(a.t.createdAt))
+      .map((row) => row.t);
+  }, [selection, transfers]);
+
+  const previousNotes = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const t of matchingMoves) {
+      const label = String(t.note ?? '').trim();
+      const key = label.toLowerCase();
+      if (!label || seen.has(key) || key === note.trim().toLowerCase()) continue;
+      seen.add(key);
+      out.push(label);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }, [matchingMoves, note]);
+
+  const previousTags = useMemo(() => {
+    const counts = new Map();
+    for (const t of matchingMoves) {
+      for (const tag of t.tags ?? []) {
+        const saved = String(tag ?? '').trim();
+        if (!saved) continue;
+        counts.set(saved, (counts.get(saved) ?? 0) + 1);
+      }
+    }
+    const selected = new Set(tags.map((tag) => String(tag).toLowerCase()));
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag]) => tag)
+      .filter((tag) => !selected.has(tag.toLowerCase()))
+      .slice(0, 8);
+  }, [matchingMoves, tags]);
+
+  const tagSuggestions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const bump = (tag) => {
+      const label = String(tag ?? '').trim();
+      if (!label) return;
+      const key = label.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(label);
+    };
+    for (const tag of previousTags) bump(tag);
+    for (const transfer of matchingMoves) {
+      for (const tag of transfer.tags ?? []) bump(tag);
+    }
+    for (const tag of allTags) bump(tag);
+    return out;
+  }, [allTags, matchingMoves, previousTags]);
+
+  // Add mode: reuse the most common note/tags for the current From/To,
+  // person, or loan selection — same idea as category on Income/Expense.
+  useEffect(() => {
+    if (isEdit) return;
+    if (!transfersReady) return;
+    if (!accountId) return;
+    const key = [
+      kind,
+      accountId,
+      targetAccountId ?? '',
+      String(counterpartyName ?? '').trim().toLowerCase(),
+      linkedNetWorthId ?? '',
+    ].join(':');
+    if (lastPrefillKeyRef.current === key) return;
+
+    const scored = (transfers ?? [])
+      .map((t) => ({ t, score: transferSelectionScore(t, selection) }))
+      .filter((row) => row.score > 0);
+    if (scored.length === 0) {
+      if ((transfers ?? []).length === 0) return;
+      lastPrefillKeyRef.current = key;
+      return;
+    }
+    lastPrefillKeyRef.current = key;
+    const best = Math.max(...scored.map((row) => row.score));
+    const matches = scored.filter((row) => row.score === best).map((row) => row.t);
+
+    if (!noteTouchedRef.current) {
+      const noteCounts = new Map();
+      for (const t of matches) {
+        const saved = String(t.note ?? '').trim();
+        if (!saved) continue;
+        noteCounts.set(saved, (noteCounts.get(saved) ?? 0) + 1);
+      }
+      const frequent = [...noteCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (frequent) setNote(frequent[0]);
+    }
+
+    if (!tagsTouchedRef.current) {
+      const tagCounts = new Map();
+      for (const t of matches) {
+        for (const tag of t.tags ?? []) {
+          const saved = String(tag ?? '').trim();
+          if (!saved) continue;
+          tagCounts.set(saved, (tagCounts.get(saved) ?? 0) + 1);
+        }
+      }
+      const frequentTags = [...tagCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 5)
+        .map(([tag]) => tag);
+      if (frequentTags.length > 0) setTags(frequentTags);
+    }
+  }, [
+    accountId,
+    counterpartyName,
+    isEdit,
+    kind,
+    linkedNetWorthId,
+    selection,
+    targetAccountId,
+    transfers,
+    transfersReady,
+  ]);
 
   // The list of "pickable" items depends on the kind. Assets for repayment
   // of money we lent; liabilities for repayment of loans.
@@ -167,6 +363,7 @@ export default function TransferForm({
   const changeKind = (nextKind) => {
     if (isEdit) return;
     setKind(nextKind);
+    setShowPersonOrLoan(nextKind !== MOVE_KIND);
     setLinkedNetWorthId(null);
     setError(null);
   };
@@ -278,40 +475,111 @@ export default function TransferForm({
         </>
       ) : (
         <>
-          <Text style={styles.label}>What kind of transfer?</Text>
-          <View style={styles.kindGrid}>
-            {KINDS.map((k) => {
-              const km = KIND_META[k];
-              const selected = k === kind;
-              return (
-                <TouchableOpacity
-                  key={k}
-                  onPress={() => changeKind(k)}
-                  activeOpacity={0.7}
-                  style={[
-                    styles.kindTile,
-                    selected && {
-                      backgroundColor: km.color + '15',
-                      borderColor: km.color,
-                    },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={km.label}
-                >
-                  <AppIcon
-                    name={km.icon}
-                    size={20}
-                    color={selected ? km.color : '#6b7280'}
-                    strokeWidth={2}
-                    style={styles.kindEmoji}
-                  />
-                  <Text style={[styles.kindLabel, selected && { color: km.color }]}>
-                    {km.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <Text style={styles.label}>What are you doing?</Text>
+          <TouchableOpacity
+            onPress={() => changeKind(MOVE_KIND)}
+            activeOpacity={0.7}
+            style={[
+              styles.kindPrimary,
+              isOwnAccountTransfer && {
+                backgroundColor: KIND_META[MOVE_KIND].color + '15',
+                borderColor: KIND_META[MOVE_KIND].color,
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Between my accounts"
+          >
+            <AppIcon
+              name={KIND_META[MOVE_KIND].icon}
+              size={20}
+              color={isOwnAccountTransfer ? KIND_META[MOVE_KIND].color : themeColors.text.secondary}
+              strokeWidth={2}
+            />
+            <View style={styles.kindPrimaryCopy}>
+              <Text
+                style={[
+                  styles.kindPrimaryTitle,
+                  isOwnAccountTransfer && { color: KIND_META[MOVE_KIND].color },
+                ]}
+              >
+                Between my accounts
+              </Text>
+              <Text style={styles.kindPrimarySub}>
+                Wallet → bank, or any two of your own accounts
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setShowPersonOrLoan((open) => !open)}
+            activeOpacity={0.7}
+            style={styles.moreKindsToggle}
+            accessibilityRole="button"
+            accessibilityLabel="Person or loan options"
+          >
+            <Text style={styles.moreKindsToggleText}>
+              {showPersonOrLoan ? 'Hide person or loan' : 'More · person or loan'}
+            </Text>
+            <AppIcon
+              name={showPersonOrLoan ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={themeColors.text.secondary}
+              strokeWidth={2.2}
+            />
+          </TouchableOpacity>
+
+          {showPersonOrLoan && (
+            <>
+              <TouchableOpacity
+                onPress={openLoans}
+                activeOpacity={0.8}
+                style={styles.loansBanner}
+                accessibilityRole="button"
+                accessibilityLabel="Open Loans"
+              >
+                <Text style={styles.loansBannerTitle}>
+                  Tracking a balance or EMI? Add it under Loans.
+                </Text>
+                <Text style={styles.loansBannerBody}>
+                  HDFC home loan or ₹5,000 to Rahul both belong there. These kinds stay for one-off cash you already recorded.
+                </Text>
+                <Text style={styles.loansBannerLink}>Open Loans →</Text>
+              </TouchableOpacity>
+              <View style={styles.kindGrid}>
+                {PERSON_OR_LOAN_KINDS.map((k) => {
+                  const km = KIND_META[k];
+                  const selected = k === kind;
+                  return (
+                    <TouchableOpacity
+                      key={k}
+                      onPress={() => changeKind(k)}
+                      activeOpacity={0.7}
+                      style={[
+                        styles.kindTile,
+                        selected && {
+                          backgroundColor: km.color + '15',
+                          borderColor: km.color,
+                        },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={km.label}
+                    >
+                      <AppIcon
+                        name={km.icon}
+                        size={20}
+                        color={selected ? km.color : themeColors.text.secondary}
+                        strokeWidth={2}
+                        style={styles.kindEmoji}
+                      />
+                      <Text style={[styles.kindLabel, selected && { color: km.color }]}>
+                        {km.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
           <Text style={styles.helper}>{meta.helper}</Text>
         </>
       )}
@@ -381,8 +649,8 @@ export default function TransferForm({
             <View style={styles.emptyLinked}>
               <Text style={styles.emptyLinkedText}>
                 {kind === 'repay_received'
-                  ? 'No Money Lent assets yet. Record a Lend transfer first, or add one from Net Worth.'
-                  : 'No liabilities yet. Record a Borrow transfer first, or add one from Net Worth.'}
+                  ? 'Nothing to reduce yet. Add a Money Lent loan under Loans, or record a Lend here first.'
+                  : 'No liabilities yet. Add the loan under Loans, or record a Borrow here first.'}
               </Text>
             </View>
           ) : (
@@ -421,7 +689,7 @@ export default function TransferForm({
                         selected && { color: themeColors.text.inverse },
                       ]}
                     >
-                      {formatMoneyCurrency(it.amount, it.currency ?? baseCurrency, { decimals: 0 })}
+                      {formatMoneyCurrency(it.amount, it.currency ?? baseCurrency)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -506,20 +774,80 @@ export default function TransferForm({
       <TextInput
         style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
         value={note}
-        onChangeText={setNote}
+        onChangeText={(value) => {
+          if (value !== note) noteTouchedRef.current = true;
+          setNote(value);
+        }}
         placeholder="e.g. Cash handed over on 18 Jul, no interest"
         placeholderTextColor={themeColors.text.muted}
         multiline
       />
+      {previousNotes.length > 0 ? (
+        <View style={styles.suggestionBlock}>
+          <Text style={styles.suggestionLabel}>Previous notes</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.suggestionRow}
+          >
+            {previousNotes.map((label) => (
+              <TouchableOpacity
+                key={label.toLowerCase()}
+                onPress={() => {
+                  noteTouchedRef.current = true;
+                  setNote(label);
+                }}
+                style={styles.suggestionChip}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.suggestionChipText} numberOfLines={1}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
 
       <Text style={styles.label}>Tags (optional)</Text>
       <TagInput
         ref={tagInputRef}
         value={tags}
-        onChange={setTags}
+        onChange={(next) => {
+          const same = next.length === tags.length
+            && next.every((tag, i) => tag === tags[i]);
+          if (!same) tagsTouchedRef.current = true;
+          setTags(next);
+        }}
         suggestions={tagSuggestions}
         placeholder="e.g. family, emergency, reimbursable"
       />
+      {previousTags.length > 0 ? (
+        <View style={styles.suggestionBlock}>
+          <Text style={styles.suggestionLabel}>Previous tags</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.suggestionRow}
+          >
+            {previousTags.map((label) => (
+              <TouchableOpacity
+                key={label.toLowerCase()}
+                onPress={() => {
+                  tagsTouchedRef.current = true;
+                  setTags((current) => (
+                    current.some((tag) => tag.toLowerCase() === label.toLowerCase())
+                      ? current
+                      : [...current, label]
+                  ));
+                }}
+                style={styles.suggestionChip}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.suggestionChipText} numberOfLines={1}>#{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
 
       {error && <Text style={styles.error}>{error}</Text>}
 
@@ -716,7 +1044,88 @@ const makeStyles = (c) => ({
     borderWidth: 1,
     borderColor: c.border.subtle,
   },
+  suggestionBlock: { marginTop: 8, gap: 6 },
+  suggestionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: c.text.secondary,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  suggestionRow: { gap: 8, paddingVertical: 2 },
+  suggestionChip: {
+    maxWidth: 220,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+  },
+  suggestionChipText: { fontSize: 13, color: c.text.primary, fontWeight: '600' },
 
+  kindPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: c.border.subtle,
+    borderRadius: radii.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: c.bg.surfaceAlt,
+    marginTop: spacing.xs,
+  },
+  kindPrimaryCopy: { flex: 1, minWidth: 0 },
+  kindPrimaryTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  kindPrimarySub: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  moreKindsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+    paddingVertical: 4,
+  },
+  moreKindsToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: c.text.secondary,
+  },
+  loansBanner: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: '#dc262615',
+    borderLeftWidth: 3,
+    borderLeftColor: '#dc2626',
+  },
+  loansBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: c.text.primary,
+    marginBottom: 4,
+  },
+  loansBannerBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: c.text.secondary,
+  },
+  loansBannerLink: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#dc2626',
+    marginTop: spacing.sm,
+  },
   // Kind selector — 2x2 tile grid
   kindGrid: {
     flexDirection: 'row',

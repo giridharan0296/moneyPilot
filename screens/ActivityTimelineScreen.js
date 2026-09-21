@@ -12,6 +12,7 @@ import { useTransfers } from '../contexts/TransfersContext';
 import { buildActivityTimeline, groupTimelineByDate } from '../lib/activityTimeline';
 import { formatMoney } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 
 const VIEW_MODES = [
   { id: 'timeline', label: 'Timeline' },
@@ -59,15 +60,24 @@ export default function ActivityTimelineScreen({ navigation, route }) {
       return;
     }
     if (item.source === 'transaction') {
-      navigation.getParent()?.navigate(
-        item.type === 'investment' ? 'Invest' : 'Transactions',
-        item.type === 'investment'
-          ? { screen: 'InvestmentsHome', params: { focusId: item.sourceId }, initial: false }
-          : { initialTab: item.type, focusId: item.sourceId },
-      );
+      if (item.type === 'investment') {
+        navigation.getParent()?.navigate('Invest', {
+          screen: 'InvestmentsHome',
+          params: { focusId: item.sourceId },
+          initial: false,
+        });
+        return;
+      }
+      openTransactionsTab(navigation.getParent() ?? navigation, {
+        initialTab: item.type,
+        focusId: item.sourceId,
+      });
       return;
     }
-    navigation.getParent()?.navigate('Transactions', { initialTab: 'transfer', focusId: item.sourceId });
+    openTransactionsTab(navigation.getParent() ?? navigation, {
+      initialTab: 'transfer',
+      focusId: item.sourceId,
+    });
   };
 
   return (
@@ -166,7 +176,7 @@ function ActivityRow({ item, onPress }) {
       </View>
       {item.amount > 0 ? (
         <Text style={[styles.amount, { color: item.direction === 0 ? item.color : item.direction > 0 ? '#059669' : '#dc2626' }]}>
-          {sign}{formatMoney(item.amount, item.currency, { decimals: 0 })}
+          {sign}{formatMoney(item.amount, item.currency)}
         </Text>
       ) : null}
     </TouchableOpacity>

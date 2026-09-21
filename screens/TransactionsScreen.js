@@ -1,9 +1,8 @@
 // ----------------------------------------------------------------------------
 // TransactionsScreen
 //
-// The "Transactions" bottom tab. Consolidates Income, Expense, and Transfers
-// into a single tab with an in-screen segmented control at the top
-// (Income | Expense | Transfers).
+// The "Transactions" bottom tab. Consolidates Income, Expense, Move, and
+// Loans into a single tab with an in-screen segmented control at the top.
 //
 // Design decisions:
 //
@@ -20,7 +19,7 @@
 //
 // 3. External-navigation compatibility.
 //    Search / Dashboard deep-link with
-//      Transactions, { initialTab: 'income' | 'expense' | 'transfer', focusId? }
+//      Transactions, { initialTab: 'income' | 'expense' | 'transfer' | 'loan', focusId? }
 // ----------------------------------------------------------------------------
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -36,10 +35,11 @@ import AppIcon from '../components/AppIcon';
 import IncomeScreen from './IncomeScreen';
 import ExpensesScreen from './ExpensesScreen';
 import TransfersScreen from './TransfersScreen';
+import LoansScreen from './LoansScreen';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { elevation, radii, spacing } from '../lib/theme';
 
-const TAB_KEYS = ['income', 'expense', 'transfer'];
+const TAB_KEYS = ['income', 'expense', 'transfer', 'loan'];
 
 const FAB_SIZE = 56;
 
@@ -48,9 +48,10 @@ export default function TransactionsScreen({ route }) {
   const themeColors = useThemeColors();
 
   const TAB_META = useMemo(() => ({
-    income:   { label: 'Income',    tint: themeColors.accent.income,  icon: 'wallet' },
-    expense:  { label: 'Expense',   tint: themeColors.accent.expense, icon: 'credit-card' },
-    transfer: { label: 'Transfers', tint: '#0ea5e9',                  icon: 'arrow-right-left' },
+    income:   { label: 'Income', tint: themeColors.accent.income,  icon: 'wallet', addLabel: 'income' },
+    expense:  { label: 'Expense', tint: themeColors.accent.expense, icon: 'credit-card', addLabel: 'expense' },
+    transfer: { label: 'Move', tint: '#0ea5e9', icon: 'arrow-right-left', addLabel: 'transfer' },
+    loan:     { label: 'Loans', tint: '#dc2626', icon: 'landmark', addLabel: 'loan' },
   }), [themeColors.accent.income, themeColors.accent.expense]);
 
   const [activeTab, setActiveTab] = useState(
@@ -198,6 +199,17 @@ export default function TransactionsScreen({ route }) {
           <TransfersScreen embedded />
         </View>
         ) : null}
+        {mountedTabs.has('loan') ? (
+        <View
+          style={[
+            styles.pane,
+            activeTab === 'loan' ? styles.paneVisible : styles.paneHidden,
+            { pointerEvents: activeTab === 'loan' ? 'auto' : 'none' },
+          ]}
+        >
+          <LoansScreen embedded />
+        </View>
+        ) : null}
       </View>
 
       {!modalOpen && (
@@ -211,7 +223,7 @@ export default function TransactionsScreen({ route }) {
           }
           activeOpacity={0.88}
           accessibilityRole="button"
-          accessibilityLabel={`Add ${activeMeta.label.toLowerCase().replace(/s$/, '')}`}
+          accessibilityLabel={`Add ${activeMeta.addLabel}`}
         >
           <AppIcon name="plus" size={26} color={themeColors.text.onHero} strokeWidth={2.6} />
         </TouchableOpacity>
@@ -245,7 +257,7 @@ const makeStyles = (c) => ({
     marginBottom: spacing.sm,
     position: 'relative',
   },
-  tabLabel: { fontSize: 13, fontWeight: '600', color: c.text.secondary },
+  tabLabel: { fontSize: 12, fontWeight: '600', color: c.text.secondary },
   underline: {
     position: 'absolute',
     left: 8,

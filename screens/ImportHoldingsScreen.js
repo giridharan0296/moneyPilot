@@ -27,11 +27,13 @@ import {
 import { pickFile } from '../lib/openFile';
 
 import { BROKERS } from '../constants';
-import { parseCSV } from '../lib/csv';
+import { parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
 import { parseXLSX } from '../lib/xlsx';
 import {
   parseHoldings,
   autoDetectColumns,
+  findHoldingsHeaderRow,
+  scoreHoldingsHeaderRow,
   HOLDING_FIELDS,
 } from '../lib/parseHoldings';
 import { usePortfolio } from '../contexts/PortfolioContext';
@@ -41,7 +43,7 @@ import AppIcon from '../components/AppIcon';
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
-  return '₹ ' + Math.round(n).toLocaleString('en-IN');
+  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Empty { symbol: null, quantity: null, ... } — used as the initial state
@@ -132,10 +134,15 @@ export default function ImportHoldingsScreen({ navigation }) {
       let parsed;
       if (ext === 'xlsx' || ext === 'xls') {
         const base64 = await picked.readBase64();
-        const { sheets } = parseXLSX(base64, { rawNumbers: true });
+        const { sheets } = parseXLSX(base64, {
+          rawNumbers: true,
+          headerScorer: scoreHoldingsHeaderRow,
+        });
         parsed = bestHoldingsSheet(sheets, broker);
       } else {
-        parsed = parseCSV(await picked.readText());
+        const raw = parseCSVRaw(await picked.readText());
+        const headerIdx = findHoldingsHeaderRow(raw);
+        parsed = reshapeWithHeaderRow(raw, headerIdx >= 0 ? headerIdx : 0);
       }
 
       if (!parsed?.rows?.length) {

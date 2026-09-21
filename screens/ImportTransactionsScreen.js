@@ -53,7 +53,7 @@ const TYPES = [
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
-  return '₹ ' + Math.round(n).toLocaleString('en-IN');
+  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatDate(iso) {

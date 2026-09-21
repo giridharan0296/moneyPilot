@@ -7,7 +7,7 @@ import { STORAGE_KEYS } from '../constants';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { projectSWP, sustainableMonthlyWithdrawal, yearsUntilDepletion } from '../lib/swp';
 
-const money = (n) => (Number.isFinite(n) ? `₹ ${Math.round(n).toLocaleString('en-IN')}` : '—');
+const money = (n) => (Number.isFinite(n) ? `₹ ${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—');
 
 export default function SWPCalculatorScreen() {
   const styles = useThemedStyles(makeStyles);

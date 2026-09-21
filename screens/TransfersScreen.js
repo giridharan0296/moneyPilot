@@ -3,21 +3,17 @@
 //
 // Layout:
 //   ┌────────────────────────────────────────────┐
-//   │  HERO: Owed to you  ₹X  |  You owe  ₹Y     │
-//   │  (derived from linked NetWorth items)      │
+//   │  HERO: Move money — between your accounts  │
 //   └────────────────────────────────────────────┘
 //
 //   [ + New transfer ]  (opens inline form)
 //
-//   Row list (grouped by kind for scanability):
-//     OUTSTANDING (count) / REPAYMENTS (count)
-//     Each row: colored kind bar + name + amount + date; tap = edit,
-//                                                       ✕   = delete
+//   Row list grouped by day (sticky headers) with kind breakdown chart.
 //
 // Actions:
 //   - + New   → inline TransferForm at top
 //   - Tap row → bottom-sheet Modal with the same TransferForm in edit mode
-//   - ✕       → undo-toast; reverses NetWorth + expense side effects
+//   - swipe left → confirm, then undo-toast; reverses NetWorth + expense side effects
 // ----------------------------------------------------------------------------
 
 import { useLayoutEffect, useMemo, useState, useEffect } from 'react';
@@ -27,69 +23,68 @@ import {
   Pressable,
   SafeAreaView,
   ScrollView,
+  SectionList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
 import TransferForm from '../components/TransferForm';
 import AppIcon from '../components/AppIcon';
+import CategoryPieChart, { PieLegendList } from '../components/CategoryPieChart';
+import DateFilterBar from '../components/DateFilterBar';
+import SwipeableDeleteRow from '../components/SwipeableDeleteRow';
+import TransactionDayHeader from '../components/TransactionDayHeader';
+import { useDateFilter } from '../contexts/DateFilterContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
+import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { useLoans } from '../contexts/LoansContext';
-import { formatTimestamp } from '../lib/formatTimestamp';
 import { KIND_META, kindLabel, transferSubtitle } from '../lib/transfers';
-import { computeLoansLendingSummary } from '../lib/loansLendingSummary';
-import { radii, spacing } from '../lib/theme';
+import { groupItemsByDay } from '../lib/transactionDayGroups';
+import { sortByCreatedAtDesc } from '../lib/transactionSort';
+import { elevation, radii, spacing } from '../lib/theme';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { openTransactionsTab } from '../lib/navigationTabReset';
 
-// Rows are grouped by these two buckets to keep the list scannable.
-// Repayments (both directions) live together because the story is "money
-// coming back" regardless of which side.
-const GROUPS = [
-  {
-    id: 'internal',
-    title: 'Between your accounts',
-    kinds: ['internal_transfer'],
-  },
-  {
-    id: 'outstanding',
-    title: 'Outstanding (Lend + Borrow)',
-    kinds: ['lend', 'borrow'],
-  },
-  {
-    id: 'repayments',
-    title: 'Repayments',
-    kinds: ['repay_received', 'loan_repayment'],
-  },
-];
+const TRANSFER_ACCENT = '#0ea5e9';
 
 export default function TransfersScreen({ navigation, embedded = false }) {
+  const tabNavigation = useNavigation();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { transfers, addTransfer, updateTransfer, deleteTransfer } =
     useTransfers();
   const { deleteEvent, loans, logEmi } = useLoans();
-  const { accounts, accountGroups, baseCurrency, fxRates } = useSettings();
+  const { accounts, accountGroups, baseCurrency } = useSettings();
   const { assets, liabilities } = useNetWorth();
   const { showToast, showUndoableToast } = useToast();
+  const { confirm } = useConfirmSheet();
+  const { filterByRange, rangeLabel, isAllTime } = useDateFilter();
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null); // full transfer object OR null
   const [fromAccountId, setFromAccountId] = useState(null);
   const [toAccountId, setToAccountId] = useState(null);
+  const [chartSelection, setChartSelection] = useState(null);
+
+  const dateFilteredTransfers = useMemo(
+    () => sortByCreatedAtDesc(filterByRange(transfers)),
+    [transfers, filterByRange],
+  );
 
   const filteredTransfers = useMemo(() => {
-    return transfers.filter((transfer) => {
+    return dateFilteredTransfers.filter((transfer) => {
       if (fromAccountId && transfer.accountId !== fromAccountId) return false;
       if (toAccountId && transfer.targetAccountId !== toAccountId) return false;
       return true;
     });
-  }, [transfers, fromAccountId, toAccountId]);
+  }, [dateFilteredTransfers, fromAccountId, toAccountId]);
 
   // Filter to only Money Lent assets and Personal Loan liabilities for the
   // form's linkable picker. Anything else in NetWorth (houses, gold, etc.)
@@ -190,7 +185,16 @@ export default function TransfersScreen({ navigation, embedded = false }) {
     showToast('Transfer updated', { variant: 'success', duration: 1500 });
   };
 
-  const handleDelete = (transfer) => {
+  const handleDelete = async (transfer) => {
+    const label = kindLabel(transfer.kind);
+    const ok = await confirm({
+      title: 'Delete this move?',
+      message: `${label} · ${formatMoneyCurrency(transfer.amount, baseCurrency)}\n\nThis can be undone for a few seconds after deleting.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+
     // Formal-loan repayments are projections of an EMI/prepayment event.
     // Delete the owning event so the loan timeline, outstanding principal,
     // transfer row and linked interest expense are reconciled together.
@@ -225,9 +229,8 @@ export default function TransfersScreen({ navigation, embedded = false }) {
     const removed = res.transfer;
     if (editing?.id === transfer.id) setEditing(null);
 
-    const label = kindLabel(transfer.kind);
     showUndoableToast({
-      message: `Deleted ${label} · ${formatMoneyCurrency(transfer.amount, baseCurrency, { decimals: 0 })}`,
+      message: `Deleted ${label} · ${formatMoneyCurrency(transfer.amount, baseCurrency)}`,
       onUndo: () => {
         addTransfer({
           kind: removed.kind,
@@ -246,142 +249,192 @@ export default function TransfersScreen({ navigation, embedded = false }) {
     });
   };
 
-  // Totals for the hero — same logic as Dashboard "Loans & lending" strip.
-  const lendingSummary = useMemo(
-    () => computeLoansLendingSummary({
-      assets,
-      liabilities,
-      loans,
-      fxRates,
-      baseCurrency,
-    }),
-    [assets, liabilities, loans, fxRates, baseCurrency],
+  const totalMoved = useMemo(
+    () => filteredTransfers.reduce((sum, t) => sum + (Number(t.amount) || 0), 0),
+    [filteredTransfers],
   );
-  const { owedToYou, youOwe } = lendingSummary;
 
-  // Group transfers for display. Also compute totals per group so headers
-  // can show a scannable subtitle like "OUTSTANDING (3) · ₹42,000".
-  const grouped = useMemo(() => {
-    const g = {
-      internal:     { items: [], total: 0 },
-      outstanding: { items: [], total: 0 },
-      repayments:  { items: [], total: 0 },
-    };
+  const byKind = useMemo(() => {
+    const totals = {};
     for (const t of filteredTransfers) {
-      const bucket = t.kind === 'internal_transfer'
-        ? g.internal
-        : (t.kind === 'lend' || t.kind === 'borrow' || t.kind === 'loan_disbursement')
-        ? g.outstanding
-        : g.repayments;
-      bucket.items.push(t);
-      bucket.total += t.amount || 0;
+      totals[t.kind] = (totals[t.kind] ?? 0) + (Number(t.amount) || 0);
     }
-    return g;
-  }, [filteredTransfers]);
+    return Object.entries(totals)
+      .map(([kind, value]) => {
+        const meta = KIND_META[kind] ?? {};
+        return {
+          id: kind,
+          label: kindLabel(kind),
+          emoji: null,
+          color: meta.color ?? '#9ca3af',
+          value,
+          percent: totalMoved > 0 ? (value / totalMoved) * 100 : 0,
+        };
+      })
+      .filter((slice) => slice.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [filteredTransfers, totalMoved]);
+
+  const daySections = useMemo(
+    () => groupItemsByDay(filteredTransfers, {
+      sumAmount: (t) => Number(t.amount) || 0,
+    }),
+    [filteredTransfers],
+  );
+
+  useEffect(() => {
+    setChartSelection(null);
+  }, [rangeLabel, fromAccountId, toAccountId, filteredTransfers.length]);
 
   return (
     <>
-      <ScrollView
+      <SectionList
         style={styles.screen}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
-      >
-        {/* Hero */}
-        <View style={styles.hero}>
-          <View style={styles.heroTitleRow}>
-            <AppIcon name="arrow-right-left" size={20} color="#0ea5e9" strokeWidth={2.1} />
-            <Text style={styles.heroTitle}>Loans & Lending</Text>
-          </View>
-          <View style={styles.heroRow}>
-            <View style={[styles.heroPill, { borderColor: '#059669' }]}>
-              <Text style={styles.heroPillLabel}>Owed to you</Text>
-              <Text style={[styles.heroPillValue, { color: '#065f46' }]}>
-                {formatMoneyCurrency(owedToYou, baseCurrency, { decimals: 0 })}
-              </Text>
-            </View>
-            <View style={[styles.heroPill, { borderColor: '#dc2626' }]}>
-              <Text style={styles.heroPillLabel}>You owe</Text>
-              <Text style={[styles.heroPillValue, { color: '#7f1d1d' }]}>
-                {formatMoneyCurrency(youOwe, baseCurrency, { decimals: 0 })}
-              </Text>
-            </View>
-          </View>
-          <Text style={styles.heroFootnote}>
-            Includes formal loans (home, personal, etc.) plus informal
-            lend/borrow balances from Net Worth.
-          </Text>
-        </View>
-
-        {accounts.length > 0 && (
-          <TransferAccountFilter
+        sections={daySections}
+        keyExtractor={(item) => item.id}
+        stickySectionHeadersEnabled
+        renderSectionHeader={({ section }) => (
+          <TransactionDayHeader
+            title={section.title}
+            subtitle={section.subtitle}
+            total={section.total}
+            baseCurrency={baseCurrency}
+            totalColor={TRANSFER_ACCENT}
+          />
+        )}
+        renderItem={({ item }) => (
+          <TransferRow
+            transfer={item}
             accounts={accounts}
-            fromAccountId={fromAccountId}
-            toAccountId={toAccountId}
-            onChangeFrom={setFromAccountId}
-            onChangeTo={setToAccountId}
-            onClear={() => {
-              setFromAccountId(null);
-              setToAccountId(null);
+            baseCurrency={baseCurrency}
+            onPress={() => {
+              setCreating(false);
+              setEditing(item);
             }}
+            onDelete={() => handleDelete(item)}
           />
         )}
-
-        {creating && (
-          <TransferForm
-            accounts={accounts}
-            accountGroups={accountGroups}
-            assets={lentAssets}
-            liabilities={anyLiabilities}
-            loans={loans}
-            onSubmit={handleAdd}
-            onCancel={() => setCreating(false)}
-          />
-        )}
-
-        {transfers.length === 0 && !creating && <EmptyState />}
-
-        {transfers.length > 0 && filteredTransfers.length === 0 && !creating && (
-          <FilterEmptyState
-            onClear={() => {
-              setFromAccountId(null);
-              setToAccountId(null);
-            }}
-          />
-        )}
-
-        {GROUPS.map((g) => {
-          const bucket = grouped[g.id];
-          if (bucket.items.length === 0) return null;
-          return (
-            <View key={g.id} style={styles.group}>
-              <View style={styles.groupHeaderRow}>
-                <Text style={styles.groupTitle}>
-                  {g.title.toUpperCase()} ({bucket.items.length})
-                </Text>
-                <Text style={styles.groupTotal}>
-                  {formatMoneyCurrency(bucket.total, baseCurrency, { decimals: 0 })} moved
-                </Text>
+        ListHeaderComponent={
+          <>
+            <View style={styles.hero}>
+              <View style={styles.heroTitleRow}>
+                <AppIcon name="arrow-right-left" size={20} color={TRANSFER_ACCENT} strokeWidth={2.1} />
+                <Text style={styles.heroTitle}>Move money</Text>
               </View>
-              {bucket.items.map((t) => (
-                <TransferRow
-                  key={t.id}
-                  transfer={t}
-                  accounts={accounts}
-                  baseCurrency={baseCurrency}
-                  onPress={() => setEditing(t)}
-                  onDelete={() => handleDelete(t)}
-                />
-              ))}
+              <Text style={styles.heroFootnote}>
+                Move cash between your own accounts. This is not income, spending,
+                or a loan balance.
+              </Text>
+              <TouchableOpacity
+                onPress={() => openTransactionsTab(tabNavigation, { initialTab: 'loan' })}
+                accessibilityRole="button"
+                accessibilityLabel="Open Loans"
+              >
+                <Text style={styles.heroLink}>Track a loan or IOU in Loans →</Text>
+              </TouchableOpacity>
             </View>
-          );
-        })}
 
-        <Text style={styles.footer}>
-          Transfers don't count as income or expenses. They record cash
-          movement AND auto-update your Net Worth. Interest paid on loans is
-          the exception — it's a real expense and gets logged under Bills.
-        </Text>
-      </ScrollView>
+            <DateFilterBar />
+
+            {accounts.length > 0 && (
+              <TransferAccountFilter
+                accounts={accounts}
+                fromAccountId={fromAccountId}
+                toAccountId={toAccountId}
+                onChangeFrom={setFromAccountId}
+                onChangeTo={setToAccountId}
+                onClear={() => {
+                  setFromAccountId(null);
+                  setToAccountId(null);
+                }}
+              />
+            )}
+
+            {creating && (
+              <TransferForm
+                accounts={accounts}
+                accountGroups={accountGroups}
+                assets={lentAssets}
+                liabilities={anyLiabilities}
+                loans={loans}
+                onSubmit={handleAdd}
+                onCancel={() => setCreating(false)}
+              />
+            )}
+
+            {filteredTransfers.length > 0 && (
+              <>
+                <View style={styles.totalCard}>
+                  <Text style={styles.totalLabel}>TOTAL MOVED</Text>
+                  <Text style={styles.totalAmount}>
+                    {formatMoneyCurrency(totalMoved, baseCurrency)}
+                  </Text>
+                  <Text style={styles.totalSub}>
+                    {filteredTransfers.length}{' '}
+                    {filteredTransfers.length === 1 ? 'transfer' : 'transfers'}
+                    {!isAllTime && ` · ${rangeLabel}`}
+                  </Text>
+                </View>
+
+                {byKind.length > 0 && (
+                  <View style={styles.chartCard}>
+                    <Text style={styles.chartTitle}>By type</Text>
+                    <CategoryPieChart
+                      data={byKind}
+                      size={200}
+                      selectedIndex={chartSelection}
+                      onSelectedIndexChange={setChartSelection}
+                    />
+                    <PieLegendList
+                      rows={byKind}
+                      total={totalMoved}
+                      baseCurrency={baseCurrency}
+                      selectedIndex={chartSelection}
+                      onSelect={setChartSelection}
+                      style={{ marginTop: spacing.lg, width: '100%' }}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+
+            {filteredTransfers.length > 0 && (
+              <>
+                <View style={styles.listHeader}>
+                  <Text style={styles.listHeaderTitle}>Recent</Text>
+                </View>
+                <Text style={styles.tapHint}>Tap a row to edit · swipe left to delete</Text>
+              </>
+            )}
+          </>
+        }
+        ListEmptyComponent={
+          transfers.length === 0 && !creating ? (
+            <EmptyState />
+          ) : transfers.length > 0 && filteredTransfers.length === 0 && !creating ? (
+            fromAccountId || toAccountId ? (
+              <FilterEmptyState
+                onClear={() => {
+                  setFromAccountId(null);
+                  setToAccountId(null);
+                }}
+              />
+            ) : (
+              <RangeEmptyState rangeLabel={rangeLabel} />
+            )
+          ) : null
+        }
+        ListFooterComponent={
+          filteredTransfers.length > 0 ? (
+            <Text style={styles.footer}>
+              Transfers between your accounts do not count as income or expenses.
+              Loan balances, EMIs, and money lent to a person live under Loans.
+            </Text>
+          ) : null
+        }
+      />
 
       {/* Edit modal — bottom-sheet-ish full-screen modal. Uses the same
           TransferForm in edit mode. Kind and linked-item picker are locked
@@ -420,6 +473,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
             >
               {editing && (
                 <TransferForm
+                  key={editing.id}
                   initialValues={editing}
                   accounts={accounts}
                   accountGroups={accountGroups}
@@ -457,15 +511,12 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
     : null;
 
   return (
-    <Pressable
+    <SwipeableDeleteRow
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${kindLabel(transfer.kind)} of ₹${Math.round(transfer.amount)}`}
-      accessibilityHint="Opens edit view"
-      style={({ pressed }) => [
-        styles.row,
-        pressed && { backgroundColor: themeColors.bg.surfaceAlt },
-      ]}
+      onDelete={onDelete}
+      deleteLabel={`Delete ${kindLabel(transfer.kind)}`}
+      wrapStyle={{ marginBottom: spacing.sm }}
+      contentStyle={styles.row}
     >
       {/* Colored left-edge bar — quick visual ID of kind */}
       <View style={[styles.rowBar, { backgroundColor: km?.color ?? '#9ca3af' }]} />
@@ -487,14 +538,16 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
         <Text style={styles.rowSub} numberOfLines={1}>
           {transferSubtitle(transfer, accounts)}
         </Text>
-        <View style={styles.rowMetaRow}>
-          <Text style={styles.rowDate}>{formatTimestamp(transfer.createdAt)}</Text>
-        </View>
+        {transfer.note?.trim() ? (
+          <Text style={styles.rowNote} numberOfLines={2}>
+            {transfer.note.trim()}
+          </Text>
+        ) : null}
         {principalAmount != null && (
           <Text style={styles.rowPrincipal} numberOfLines={2}>
-            Principal paid {formatMoneyCurrency(principalAmount, baseCurrency, { decimals: 0 })}
+            Principal paid {formatMoneyCurrency(principalAmount, baseCurrency)}
             {transfer.interestAmount > 0
-              ? ` · Interest ${formatMoneyCurrency(transfer.interestAmount, baseCurrency, { decimals: 0 })}`
+              ? ` · Interest ${formatMoneyCurrency(transfer.interestAmount, baseCurrency)}`
               : ''}
           </Text>
         )}
@@ -513,20 +566,10 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
       </View>
       <View style={styles.rowRight}>
         <Text style={[styles.rowAmount, { color: cashColor }]}>
-          {cashPrefix}{formatMoneyCurrency(transfer.amount, baseCurrency, { decimals: 0 })}
+          {cashPrefix}{formatMoneyCurrency(transfer.amount, baseCurrency)}
         </Text>
-        <TouchableOpacity
-          onPress={onDelete}
-          hitSlop={12}
-          style={styles.deleteBtn}
-          accessibilityRole="button"
-          accessibilityLabel={`Delete ${kindLabel(transfer.kind)} transfer`}
-          accessibilityHint="Deletes and reverses Net Worth impact with a 5-second undo"
-        >
-          <AppIcon name="x" size={14} color={themeColors.text.secondary} strokeWidth={2.4} />
-        </TouchableOpacity>
       </View>
-    </Pressable>
+    </SwipeableDeleteRow>
   );
 }
 
@@ -627,6 +670,18 @@ function FilterEmptyState({ onClear }) {
   );
 }
 
+function RangeEmptyState({ rangeLabel }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.filterEmpty}>
+      <Text style={styles.filterEmptyTitle}>Nothing in {rangeLabel}</Text>
+      <Text style={styles.filterEmptyBody}>
+        Try a different period above, or switch to All to see every transfer.
+      </Text>
+    </View>
+  );
+}
+
 function EmptyState() {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -637,8 +692,9 @@ function EmptyState() {
       </View>
       <Text style={styles.emptyTitle}>No transfers yet</Text>
       <Text style={styles.emptyBody}>
-        Move money between your accounts, or record a loan you gave or
-        received, without affecting income or expense totals. Tap + to add one.
+        Move cash between your own accounts — wallet to bank, or any two you
+        own. Tap + to add one. For a home loan or money lent to someone, use
+        Loans instead.
       </Text>
     </View>
   );
@@ -719,9 +775,75 @@ const makeStyles = (c) => ({
     marginTop: 4,
   },
   heroFootnote: {
+    fontSize: 13,
+    color: c.text.secondary,
+    lineHeight: 18,
+  },
+  heroLink: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#dc2626',
+  },
+
+  totalCard: {
+    backgroundColor: c.bg.hero,
+    borderRadius: radii['2xl'],
+    padding: spacing['2xl'],
+    alignItems: 'center',
+    marginBottom: spacing.xl,
+    ...elevation.raised,
+  },
+  totalLabel: {
+    color: c.text.onHeroMuted,
+    fontSize: 12,
+    letterSpacing: 1,
+    fontWeight: '600',
+  },
+  totalAmount: {
+    color: c.text.onHero,
+    fontSize: 36,
+    fontWeight: '700',
+    marginTop: spacing.sm,
+  },
+  totalSub: {
+    color: c.text.onHeroMuted,
+    fontSize: 12,
+    marginTop: spacing.xs,
+  },
+
+  chartCard: {
+    backgroundColor: c.bg.surface,
+    borderRadius: radii['2xl'],
+    padding: spacing.xl,
+    marginBottom: spacing.xl,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    alignItems: 'center',
+    ...elevation.card,
+  },
+  chartTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: c.text.primary,
+    alignSelf: 'flex-start',
+    marginBottom: spacing.md,
+  },
+
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  listHeaderTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: c.text.primary,
+  },
+  tapHint: {
     fontSize: 11,
     color: c.text.muted,
-    lineHeight: 16,
+    marginBottom: spacing.sm,
   },
 
   filterCard: {
@@ -880,6 +1002,11 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     marginTop: 2,
   },
+  rowNote: {
+    fontSize: 12,
+    color: c.text.secondary,
+    marginTop: 3,
+  },
   rowMetaRow: { flexDirection: 'row', marginTop: 2, alignItems: 'center' },
   rowDate: { fontSize: 11, color: c.text.muted },
   rowInterest: {
@@ -924,19 +1051,6 @@ const makeStyles = (c) => ({
   },
   rowAmount: {
     fontSize: 15,
-    fontWeight: '700',
-  },
-  deleteBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.pill,
-    backgroundColor: c.bg.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deleteText: {
-    color: c.text.secondary,
-    fontSize: 13,
     fontWeight: '700',
   },
 

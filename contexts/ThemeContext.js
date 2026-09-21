@@ -21,14 +21,15 @@ import {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFonts } from 'expo-font';
+import { useFonts, loadAsync as loadFontsAsync } from 'expo-font';
 import { Appearance, StyleSheet } from 'react-native';
 
 import { colors as lightColors, darkColors } from '../lib/theme';
 import {
-  FONT_ASSETS,
   FONT_OPTIONS,
   DEFAULT_FONT_ID,
+  STARTUP_FONT_ASSETS,
+  fontAssetsForId,
   getFontOption,
   isKnownFontId,
   applyFontToStyleMap,
@@ -48,8 +49,9 @@ export function ThemeProvider({ children }) {
     () => Appearance.getColorScheme() ?? 'light',
   );
   const [ready, setReady] = useState(false);
+  const [activeFontReady, setActiveFontReady] = useState(false);
 
-  const [fontsLoaded] = useFonts(FONT_ASSETS);
+  const [startupFontsLoaded] = useFonts(STARTUP_FONT_ASSETS);
 
   // Hydrate the persisted choices on mount.
   useEffect(() => {
@@ -68,6 +70,28 @@ export function ThemeProvider({ children }) {
       }
     })();
   }, []);
+
+  // After storage hydrates, load the user's font if it isn't the startup default.
+  useEffect(() => {
+    if (!ready || !startupFontsLoaded) return undefined;
+    const assets = fontAssetsForId(fontId);
+    if (Object.keys(assets).length === 0) {
+      setActiveFontReady(true);
+      return undefined;
+    }
+    let cancelled = false;
+    loadFontsAsync(assets)
+      .then(() => {
+        if (!cancelled) setActiveFontReady(true);
+      })
+      .catch((e) => {
+        console.warn('Failed to load theme font:', e);
+        if (!cancelled) setActiveFontReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, startupFontsLoaded, fontId]);
 
   // Persist the user's explicit mode choice (not the resolved scheme).
   useEffect(() => {
@@ -97,6 +121,7 @@ export function ThemeProvider({ children }) {
   const colors = resolvedScheme === 'dark' ? darkColors : lightColors;
   // Until google fonts finish loading, fall back to System so we never
   // paint with a fontFamily that isn't registered yet (blank glyphs).
+  const fontsLoaded = startupFontsLoaded && activeFontReady;
   const fontOption = getFontOption(
     fontsLoaded ? fontId : 'system',
   );
@@ -108,7 +133,19 @@ export function ThemeProvider({ children }) {
 
   const setFontId = useCallback((next) => {
     if (!isKnownFontId(next)) return;
+    setActiveFontReady(false);
     setFontIdState(next);
+    const assets = fontAssetsForId(next);
+    if (Object.keys(assets).length === 0) {
+      setActiveFontReady(true);
+      return;
+    }
+    loadFontsAsync(assets)
+      .then(() => setActiveFontReady(true))
+      .catch((e) => {
+        console.warn('Failed to load theme font:', e);
+        setActiveFontReady(true);
+      });
   }, []);
 
   const value = useMemo(

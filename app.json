@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Worth",
+    "name": "FinanceIQ",
     "slug": "expense-tracker",
     "owner": "giridharan19",
     "version": "1.0.0",
@@ -8,12 +8,6 @@
     "orientation": "portrait",
     "icon": "./assets/worth-app-icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/worth-splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0B1220"
-    },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
@@ -22,12 +16,12 @@
       }
     },
     "android": {
+      "versionCode": 3,
       "package": "com.giridharan19.expensetracker",
       "adaptiveIcon": {
         "foregroundImage": "./assets/worth-app-icon.png",
         "backgroundColor": "#0B1220"
       },
-      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.RECORD_AUDIO",
@@ -68,7 +62,9 @@
             "backgroundColor": "#0B1220"
           }
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {

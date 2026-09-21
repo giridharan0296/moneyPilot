@@ -134,7 +134,7 @@ export default function GoldChitPanel({ navigation }) {
                   {scheme.installmentCount} pay-in{scheme.installmentCount === 1 ? '' : 's'}
                 </Text>
                 <Text style={styles.schemePaid}>
-                  Paid {formatMoneyCurrency(scheme.totalPaid, baseCurrency, { decimals: 0 })}
+                  Paid {formatMoneyCurrency(scheme.totalPaid, baseCurrency)}
                   {' · tracked in Net Worth'}
                 </Text>
               </View>

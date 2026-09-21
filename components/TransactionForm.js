@@ -1402,15 +1402,14 @@ export default function TransactionForm({
   };
 
   return (
-    <View>
-      <SpeakToFillButton
-        onTranscript={applyTranscript}
-        onNeedsManualInput={() => setManualTranscript('')}
-        whisperApiKey={whisperApiKey}
-        audioUriGetter={() => voiceNote?.file}
-        accentColor={accentColor}
-      />
-
+    <View style={styles.formRoot}>
+      <ScrollView
+        style={styles.formScroll}
+        contentContainerStyle={styles.formScrollBody}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
+      >
       {lastVoiceFill && (
         <VoiceFillSummary
           summary={lastVoiceFill}
@@ -1944,7 +1943,7 @@ export default function TransactionForm({
                     Add each historical purchase separately — we combine units and average cost for you.
                   </Text>
                   <Text style={styles.openingLotsClipboardHint}>
-                    Numbers above the keyboard are your phone's clipboard or autofill suggestions — not from Worth. Type units manually if those are phone numbers.
+                    Numbers above the keyboard are your phone's clipboard or autofill suggestions — not from this app. Type units manually if those are phone numbers.
                   </Text>
                   {openingLots.map((lot, index) => (
                     <View key={lot.clientKey} style={styles.openingLotBlock}>
@@ -1961,9 +1960,9 @@ export default function TransactionForm({
                           </TouchableOpacity>
                         ) : null}
                       </View>
-                      <View style={styles.openingPositionFieldRow}>
-                        <View style={styles.openingPositionField}>
-                          <Text style={styles.label}>Units</Text>
+                      <View style={styles.openingLotFields}>
+                        <View>
+                          <Text style={styles.openingLotFieldLabel}>Units</Text>
                           <TextInput
                             {...ISOLATED_NUMERIC_INPUT}
                             nativeID={`opening-lot-${lot.clientKey}-units`}
@@ -1978,8 +1977,8 @@ export default function TransactionForm({
                             placeholderTextColor={themeColors.text.muted}
                           />
                         </View>
-                        <View style={styles.openingPositionField}>
-                          <Text style={styles.label}>Price per unit (₹)</Text>
+                        <View>
+                          <Text style={styles.openingLotFieldLabel}>Price per unit (₹)</Text>
                           <Text style={styles.openingLotFieldHint}>Not the total — enter one unit's cost.</Text>
                           <TextInput
                             {...ISOLATED_NUMERIC_INPUT}
@@ -2349,6 +2348,16 @@ export default function TransactionForm({
           style={styles.submitBtnWrap}
         />
       )}
+      </ScrollView>
+      <View style={styles.micRail} pointerEvents="box-none">
+        <SpeakToFillButton
+          onTranscript={applyTranscript}
+          onNeedsManualInput={() => setManualTranscript('')}
+          whisperApiKey={whisperApiKey}
+          audioUriGetter={() => voiceNote?.file}
+          accentColor={accentColor}
+        />
+      </View>
     </View>
   );
 }
@@ -2821,6 +2830,18 @@ const makeStyles = (c) => ({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  formRoot: { flex: 1 },
+  micRail: {
+    position: 'absolute',
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    zIndex: 20,
+  },
+  formScroll: { flex: 1 },
+  formScrollBody: { padding: 20, paddingBottom: 60 },
   input: {
     backgroundColor: c.bg.surfaceAlt,
     borderRadius: 10,
@@ -2866,8 +2887,13 @@ const makeStyles = (c) => ({
   openingPositionTitle: { color: c.text.primary, fontSize: 13, fontWeight: '800' },
   openingPositionHint: { color: c.text.secondary, fontSize: 11, lineHeight: 16, marginTop: 2 },
   openingPositionFields: { padding: 12, paddingTop: 0, borderTopWidth: 1, borderTopColor: c.border.subtle },
-  openingPositionFieldRow: { flexDirection: 'row', gap: 8 },
-  openingPositionField: { flex: 1 },
+  openingLotFields: { gap: 10 },
+  openingLotFieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: c.text.secondary,
+    marginBottom: 6,
+  },
   openingLotsIntro: {
     color: c.text.secondary,
     fontSize: 11,

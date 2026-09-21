@@ -196,9 +196,10 @@ export function AiInsightsProvider({ children }) {
     try {
       const insights = await generateInsights(
         {
-          apiKey:  aiApiKey,               // <-- from SecureStore
-          baseUrl: aiConfig.baseUrl,
-          model:   aiConfig.model,
+          apiKey:   aiApiKey,               // <-- from SecureStore
+          provider: aiConfig.provider,
+          baseUrl:  aiConfig.baseUrl,
+          model:    aiConfig.model,
         },
         summary,
         { signal: ctrl.signal },

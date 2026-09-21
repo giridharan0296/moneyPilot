@@ -16,8 +16,6 @@ export default function IncomeScreen({ route }) {
         emptyIcon: 'wallet',
         emptyTitle: 'No income yet.',
         emptySub: 'Tap + to add your first entry.',
-        clearAllTitle: 'Clear all income?',
-        clearAllMessage: 'This cannot be undone.',
       }}
     />
   );

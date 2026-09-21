@@ -10,8 +10,8 @@
 // Section rationale (5 groups, ~14 items):
 //
 //   1. Analyze     — "Show me trends / history" (Search, Reports, …)
-//   2. Track & rules — "Set ongoing rules or accounts" (Budgets, Loans,
-//                    Goals, Recurring, Transfers)
+//   2. Track & rules — "Set ongoing rules or accounts" (Budgets,
+//                    Goals, Recurring)
 //   3. Import      — Bulk data-in flows (Bank statement, Transactions CSV)
 //   4. Financial tools — Calculators, forecasts, and stock research
 //   5. App         — Configuration (Settings)
@@ -42,8 +42,8 @@ const SECTIONS = [
       {
         route: 'DataHealth',
         icon: 'activity',
-        name: 'Data Health',
-        desc: 'Find missing links, FX rates, duplicate entries, stale reconciliations, and portfolio issues.',
+        name: 'Data check',
+        desc: 'Spot broken account links, bad imports, duplicate entries, and portfolio gaps before they skew your totals.',
         tint: '#059669',
       },
       {
@@ -86,13 +86,6 @@ const SECTIONS = [
         name: 'Plans',
         desc: 'Budgets and goals — monthly limits, savings targets, and one-time spend caps.',
         tint: '#6366f1',
-      },
-      {
-        route: 'Loans',
-        icon: 'landmark',
-        name: 'Loans',
-        desc: 'Formal loans (home, car, personal) with EMI logging, prepayments, and payoff projection.',
-        tint: '#dc2626',
       },
       {
         route: 'RecurringTransactions',

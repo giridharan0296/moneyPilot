@@ -2,7 +2,6 @@ import {
   Modal,
   Platform,
   KeyboardAvoidingView,
-  ScrollView,
   Text,
   TouchableOpacity,
   View,
@@ -186,23 +185,16 @@ export default function EditTransactionModal({
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          contentContainerStyle={styles.body}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          automaticallyAdjustKeyboardInsets
-        >
-          <TransactionForm
-            categories={categories}
-            accounts={accounts}
-            accountGroups={accountGroups}
-            initialValues={initialValues}
-            accentColor={accentColor}
-            submitLabel="Save changes"
-            type={type}
-            onSubmit={handleSave}
-          />
-        </ScrollView>
+        <TransactionForm
+          categories={categories}
+          accounts={accounts}
+          accountGroups={accountGroups}
+          initialValues={initialValues}
+          accentColor={accentColor}
+          submitLabel="Save changes"
+          type={type}
+          onSubmit={handleSave}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -246,5 +238,4 @@ const makeStyles = (c) => ({
   // Delete is a destructive-action link — stays red across both themes.
   headerDeleteBtn: { minWidth: 76, alignItems: 'flex-end' },
   headerDelete: { color: '#dc2626', fontWeight: '600', fontSize: 15 },
-  body: { padding: 20, paddingBottom: 60 },
 });

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Text,
   TouchableOpacity,
@@ -13,34 +14,23 @@ import { transcribeAudio } from '../lib/transcribe';
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
-// ----------------------------------------------------------------------------
-// SpeakToFillButton — one-tap "voice → structured fields" entry point.
-//
-// Chooses a transcription strategy in this priority order:
-//
-//   1. Native on-device STT   (dev build, works offline on iOS)
-//   2. OpenAI Whisper         (Expo Go with a saved API key)
-//   3. Manual typing modal    (Expo Go, no key) — handled by parent
-//
-// Whichever wins, the resulting text is handed to `onTranscript(text)`
-// so the parent's parser can fill amount + category + note. This
-// component doesn't care about the parser — it only sources text.
-// ----------------------------------------------------------------------------
-
+// Icon-first voice fill. A 44pt mic sits next to the field the user is
+// already looking at (amount, report title). Accessibility label carries
+// the old "Speak to fill" wording for screen readers.
 export default function SpeakToFillButton({
   onTranscript,
-  onNeedsManualInput, // called when neither native STT nor a key exists
+  onNeedsManualInput,
   whisperApiKey,
-  audioUriGetter,     // returns the current voice-note relPath, if any
+  audioUriGetter,
   accentColor = '#2563eb',
   disabled = false,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const nativeAvailable = isNativeSpeechInstalled();
-  const [listening, setListening]     = useState(false);
-  const [preview,   setPreview]       = useState('');
-  const [busy,      setBusy]          = useState(false);
+  const [listening, setListening] = useState(false);
+  const [preview, setPreview] = useState('');
+  const [busy, setBusy] = useState(false);
   const activeSession = useRef(null);
 
   const startNative = async () => {
@@ -99,92 +89,85 @@ export default function SpeakToFillButton({
 
   const handlePress = () => {
     if (listening) return stopNative();
-    if (nativeAvailable)    return startNative();
-    if (whisperApiKey)      return useWhisper();
+    if (nativeAvailable) return startNative();
+    if (whisperApiKey) return useWhisper();
     return onNeedsManualInput?.();
   };
 
-  // Label reflects the active strategy so the user knows what will happen.
-  // Icon is separate so it can be rendered as a proper SVG next to the
-  // label — no emoji baked into the string.
-  const iconName = listening ? 'square' : (busy ? null : 'mic');
-  const label = (() => {
-    if (listening)       return 'Listening… tap to stop';
-    if (busy)            return '…  Transcribing';
-    if (nativeAvailable) return 'Speak to fill';
-    if (whisperApiKey)   return 'Auto-fill from voice note';
-    return 'Speak to fill (tap for options)';
-  })();
-
-  const method = (() => {
-    if (nativeAvailable) return 'On-device — no network, no API key';
-    if (whisperApiKey)   return 'OpenAI Whisper — uses the audio you recorded';
-    return 'No key & no dev build — you\'ll type what you said';
-  })();
+  const a11y = listening
+    ? 'Stop listening'
+    : busy
+      ? 'Transcribing'
+      : 'Fill form with voice';
 
   return (
     <View style={styles.wrap}>
-      <TouchableOpacity
-        onPress={handlePress}
-        disabled={disabled || busy}
-        activeOpacity={0.8}
-        style={[
-          styles.btn,
-          listening && { backgroundColor: '#dc2626', borderColor: '#dc2626' },
-          !listening && { borderColor: accentColor },
-          (disabled || busy) && styles.disabled,
-        ]}
-      >
-        <View style={styles.btnInner}>
-          {iconName ? (
-            <AppIcon
-              name={iconName}
-              size={16}
-              color={listening ? '#fff' : (accentColor ?? themeColors.text.primary)}
-              strokeWidth={2.2}
-              filled={listening}
-            />
-          ) : null}
-          <Text style={[styles.btnText, listening && styles.btnTextActive]}>
-            {label}
-          </Text>
-        </View>
-      </TouchableOpacity>
-      <Text style={styles.methodHint}>{method}</Text>
       {listening && preview ? (
         <View style={styles.preview}>
           <Text style={styles.previewLabel}>Hearing…</Text>
           <Text style={styles.previewText}>{preview}</Text>
         </View>
       ) : null}
+      <TouchableOpacity
+        onPress={handlePress}
+        disabled={disabled || busy}
+        activeOpacity={0.75}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel={a11y}
+        accessibilityState={{ disabled: disabled || busy, busy: listening || busy }}
+        style={[
+          styles.micBtn,
+          { borderColor: listening ? '#dc2626' : accentColor },
+          listening && styles.micBtnLive,
+          (disabled || busy) && styles.disabled,
+        ]}
+      >
+        {busy ? (
+          <ActivityIndicator size="small" color={accentColor} />
+        ) : (
+          <AppIcon
+            name={listening ? 'square' : 'mic'}
+            size={22}
+            color={listening ? '#fff' : (accentColor ?? themeColors.text.primary)}
+            strokeWidth={2.2}
+            filled={listening}
+          />
+        )}
+      </TouchableOpacity>
     </View>
   );
 }
 
 const makeStyles = (c) => ({
-  wrap: { gap: 4 },
-  btn: {
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: c.bg.surface,
-    borderWidth: 2,
+  wrap: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    maxWidth: 280,
   },
-  disabled: { opacity: 0.5 },
-  btnInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  btnText: { fontSize: 15, fontWeight: '700', color: c.text.primary },
-  btnTextActive: { color: '#fff' },
-  methodHint: {
-    fontSize: 11,
-    color: c.text.secondary,
-    textAlign: 'center',
-    marginTop: 2,
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    backgroundColor: c.bg.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
-  // Preview quote keeps its indigo tint — semantic "we heard something"
-  // callout; reads on both themes.
+  micBtnLive: {
+    backgroundColor: '#dc2626',
+    borderColor: '#dc2626',
+  },
+  disabled: { opacity: 0.45 },
   preview: {
-    marginTop: 8,
+    flexShrink: 1,
     padding: 10,
     borderRadius: 10,
     backgroundColor: '#eef2ff',

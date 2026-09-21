@@ -64,7 +64,7 @@ const MAP_FIELDS = [
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
-  return '₹ ' + Math.round(n).toLocaleString('en-IN');
+  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Cross-platform confirm — native Alert.alert doesn't do prompts on web.

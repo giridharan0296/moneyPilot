@@ -55,7 +55,7 @@ import {
 
 function formatMoney(n) {
   if (!isFinite(n) || n == null) return '—';
-  return '₹ ' + Math.round(n).toLocaleString('en-IN');
+  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function formatPct(n, digits = 2) {
   if (!isFinite(n) || n == null) return '—';
@@ -88,7 +88,7 @@ function mapLoanKindToCalcType(loanKind) {
 
 function formatMoneyShort(n) {
   if (!isFinite(n) || n == null) return '—';
-  return '₹' + Math.round(n).toLocaleString('en-IN');
+  return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ---------------------------------------------------------------------------

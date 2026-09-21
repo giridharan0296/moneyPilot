@@ -72,7 +72,7 @@ function computeSIP(monthlyStr, returnStr, yearsStr, stepUpStr, lumpSumStr, infl
 
 function formatMoney(n) {
   if (!isFinite(n)) return '—';
-  return '₹ ' + Math.round(n).toLocaleString('en-IN');
+  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function SIPCalculatorScreen() {

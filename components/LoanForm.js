@@ -58,6 +58,12 @@ const DIRECTIONS = [
   { id: 'owed_to_me', label: 'Owed to me (lender)', icon: 'upload' },
 ];
 
+const INFORMAL_KIND_IDS = new Set(['informal_lend', 'informal_borrow']);
+const LOAN_PATHS = [
+  { id: 'bank', label: 'Bank / EMI', hint: 'Home, car, personal, education' },
+  { id: 'person', label: 'Person', hint: 'Friend, family, informal IOU' },
+];
+
 const FIRST_INTEREST_PERIODS = [
   { id: 'monthly', label: 'Standard monthly' },
   { id: 'month_end', label: 'Until month-end' },
@@ -82,6 +88,9 @@ export default function LoanForm({
   const { loanKinds, findLoanKind, addCustomLoanKind } = useLoans();
 
   const [kind, setKind] = useState(initialValues?.kind ?? 'personal');
+  const [loanPath, setLoanPath] = useState(
+    INFORMAL_KIND_IDS.has(initialValues?.kind) ? 'person' : 'bank',
+  );
   const [addingCustomKind, setAddingCustomKind] = useState(false);
   const [customKindLabel, setCustomKindLabel] = useState('');
   const kindMeta = findLoanKind(kind);
@@ -286,6 +295,13 @@ export default function LoanForm({
     ratePct, selectedAccount, tenureMonths,
   ]);
 
+  const visibleLoanKinds = useMemo(() => {
+    if (loanPath === 'person') {
+      return loanKinds.filter((k) => INFORMAL_KIND_IDS.has(k.id));
+    }
+    return loanKinds.filter((k) => !INFORMAL_KIND_IDS.has(k.id));
+  }, [loanKinds, loanPath]);
+
   const changeKind = (nextKindId) => {
     setKind(nextKindId);
     // Selecting an existing type cancels the in-progress custom type editor.
@@ -303,6 +319,18 @@ export default function LoanForm({
       if (nextKindId === 'home' && nextMeta.defaultMethod !== 'flat') {
         setFirstInterestPeriod('month_end');
       }
+    }
+  };
+
+  const changeLoanPath = (nextPath) => {
+    if (isEdit || nextPath === loanPath) return;
+    setLoanPath(nextPath);
+    setAddingCustomKind(false);
+    setCustomKindLabel('');
+    if (nextPath === 'person') {
+      changeKind(direction === 'owed_to_me' ? 'informal_lend' : 'informal_borrow');
+    } else {
+      changeKind('personal');
     }
   };
 
@@ -442,13 +470,38 @@ export default function LoanForm({
   return (
     <View style={styles.root}>
       {/* Kind */}
+      <Text style={styles.label}>What is this?</Text>
+      <View style={styles.pathRow}>
+        {LOAN_PATHS.map((path) => {
+          const selected = path.id === loanPath;
+          return (
+            <TouchableOpacity
+              key={path.id}
+              onPress={() => changeLoanPath(path.id)}
+              activeOpacity={isEdit ? 1 : 0.7}
+              style={[
+                styles.pathTile,
+                selected && { backgroundColor: accent + '18', borderColor: accent },
+                isEdit && !selected && { opacity: 0.45 },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={path.label}
+            >
+              <Text style={[styles.pathTitle, selected && { color: accent }]}>
+                {path.label}
+              </Text>
+              <Text style={styles.pathHint}>{path.hint}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       <Text style={styles.label}>Loan type</Text>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.chipRow}
       >
-        {loanKinds.map((k) => {
+        {visibleLoanKinds.map((k) => {
           const selected = k.id === kind;
           return (
             <TouchableOpacity
@@ -475,7 +528,7 @@ export default function LoanForm({
             </TouchableOpacity>
           );
         })}
-        {!isEdit && (
+        {!isEdit && loanPath === 'bank' && (
           <TouchableOpacity
             onPress={() => setAddingCustomKind((v) => !v)}
             activeOpacity={0.7}
@@ -1074,6 +1127,18 @@ const makeStyles = (c) => ({
     marginTop: 14, marginBottom: 6,
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
+  pathRow: { flexDirection: 'row', gap: 8 },
+  pathTile: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: c.border.subtle,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: c.bg.surfaceAlt,
+  },
+  pathTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
+  pathHint: { fontSize: 11, color: c.text.secondary, marginTop: 3, lineHeight: 15 },
   hint: { fontSize: 11, color: c.text.secondary, marginTop: 4, fontStyle: 'italic' },
   creditWarning: { fontSize: 11, lineHeight: 16, color: c.accent.expense, marginTop: 7, fontWeight: '700' },
 

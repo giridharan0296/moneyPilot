@@ -4,7 +4,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-na
 import CalculatorField from '../components/CalculatorField';
 import { useThemedStyles } from '../contexts/ThemeContext';
 
-const money = (n) => (Number.isFinite(n) ? `₹ ${Math.round(n).toLocaleString('en-IN')}` : '—');
+const money = (n) => (Number.isFinite(n) ? `₹ ${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—');
 
 export default function MISCalculatorScreen() {
   const styles = useThemedStyles(makeStyles);

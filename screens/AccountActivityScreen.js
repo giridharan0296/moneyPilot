@@ -1,21 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Dimensions,
   LayoutAnimation,
-  Platform,
   ScrollView,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 
 import ActivitySearchPane from '../components/ActivitySearchPane';
 import AppIcon from '../components/AppIcon';
+import DateFilterBar from '../components/DateFilterBar';
 import { PieBreakdownView } from '../components/CategoryPieChart';
 import TrendBarChart from '../components/TrendBarChart';
 import { EmptyState as VisualEmptyState } from '../components/UiPrimitives';
+import { useDateFilter } from '../contexts/DateFilterContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
@@ -26,18 +26,18 @@ import {
   breakdownSummary,
   trendSummary,
 } from '../lib/accountActivityCharts';
-import { buildAccountMovements, computeAccountPeriodActivity } from '../lib/accountBalances';
+import {
+  ALL_ACCOUNTS_ID,
+  buildAccountMovements,
+  buildAllAccountMovements,
+  computeAccountPeriodActivity,
+  computeAllAccountsPeriodActivity,
+} from '../lib/accountBalances';
 import { formatMoney } from '../lib/currency';
+import '../lib/motion';
 import { radii, spacing } from '../lib/theme';
 
 const CHART_WIDTH = Dimensions.get('window').width - 64;
-
-if (
-  Platform.OS === 'android'
-  && UIManager.setLayoutAnimationEnabledExperimental
-) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 function animateExpand() {
   LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -56,30 +56,28 @@ const ROW_COLORS = {
   'Transfer out': '#f59e0b',
 };
 
-function periodRange(period) {
-  const now = new Date();
-  if (period === 'all') return { start: null, end: now, label: 'All time through today' };
-  const start = new Date(now.getFullYear(), now.getMonth() - (period === 'last' ? 1 : 0), 1);
-  const end = period === 'last'
-    ? new Date(now.getFullYear(), now.getMonth(), 1)
-    : new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { start, end, label: start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
-}
-
 export default function AccountActivityScreen() {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
   const navigation = useNavigation();
-  const { accounts, baseCurrency, categories } = useSettings();
+  const { accounts, baseCurrency, categories, fxRates } = useSettings();
   const { income, expenses, investments } = useTransactions();
   const { transfers } = useTransfers();
+  const { range, label: rangeLabel, isAllTime } = useDateFilter();
   const [viewMode, setViewMode] = useState('balance');
-  const [period, setPeriod] = useState('all');
-  const [accountId, setAccountId] = useState(null);
+  const [accountId, setAccountId] = useState(ALL_ACCOUNTS_ID);
   const [showAllRows, setShowAllRows] = useState(false);
   const [expanded, setExpanded] = useState({ trend: false, outflow: true });
-  const activeAccount = accounts.find((account) => account.id === accountId) ?? accounts[0] ?? null;
-  const range = periodRange(period);
+  const isAllAccounts = accountId === ALL_ACCOUNTS_ID;
+  const activeAccount = isAllAccounts
+    ? null
+    : (accounts.find((account) => account.id === accountId) ?? accounts[0] ?? null);
+  const rangeStart = range?.start ?? null;
+  const rangeEnd = range?.end ?? null;
+
+  useEffect(() => {
+    setShowAllRows(false);
+  }, [rangeStart?.getTime(), rangeEnd?.getTime(), isAllTime, accountId]);
 
   const toggleSection = (key) => {
     animateExpand();
@@ -87,6 +85,17 @@ export default function AccountActivityScreen() {
   };
 
   const allMovements = useMemo(() => {
+    if (isAllAccounts) {
+      return buildAllAccountMovements({
+        accounts,
+        income,
+        expenses,
+        investments,
+        transfers,
+        fxRates,
+        baseCurrency,
+      });
+    }
     if (!activeAccount) return [];
     return buildAccountMovements({
       accountId: activeAccount.id,
@@ -96,7 +105,7 @@ export default function AccountActivityScreen() {
       investments,
       transfers,
     });
-  }, [activeAccount, income, expenses, investments, transfers]);
+  }, [isAllAccounts, accounts, activeAccount, income, expenses, investments, transfers, fxRates, baseCurrency]);
 
   const trend = useMemo(
     () => accountMonthlyInOut(allMovements, 12),
@@ -108,13 +117,26 @@ export default function AccountActivityScreen() {
       movements: allMovements,
       expenses,
       expenseCategories: categories.expense,
-      rangeStart: range.start,
-      rangeEnd: range.end,
+      rangeStart,
+      rangeEnd,
     }),
-    [allMovements, expenses, categories.expense, range.start, range.end],
+    [allMovements, expenses, categories.expense, rangeStart, rangeEnd],
   );
 
   const activity = useMemo(() => {
+    if (isAllAccounts) {
+      return computeAllAccountsPeriodActivity({
+        accounts,
+        income,
+        expenses,
+        investments,
+        transfers,
+        rangeStart,
+        rangeEnd,
+        fxRates,
+        baseCurrency,
+      });
+    }
     if (!activeAccount) return null;
     return computeAccountPeriodActivity({
       account: activeAccount,
@@ -122,14 +144,14 @@ export default function AccountActivityScreen() {
       expenses,
       investments,
       transfers,
-      rangeStart: range.start,
-      rangeEnd: range.end,
+      rangeStart,
+      rangeEnd,
     });
-  }, [activeAccount, income, expenses, investments, transfers, range.start, range.end]);
+  }, [isAllAccounts, accounts, activeAccount, income, expenses, investments, transfers, rangeStart, rangeEnd, fxRates, baseCurrency]);
 
   const visibleRows = showAllRows ? (activity?.rows ?? []) : (activity?.rows ?? []).slice(0, 50);
 
-  if (!activeAccount || !activity) {
+  if (accounts.length === 0 || !activity) {
     return (
       <View style={styles.empty}>
         <AppIcon name="wallet" size={40} color={styles.emptyIcon.color} strokeWidth={1.8} />
@@ -150,32 +172,44 @@ export default function AccountActivityScreen() {
     );
   }
 
-  const currency = activeAccount.currency ?? baseCurrency;
-  const searchScopeHint = `Searching in ${activeAccount.emoji} ${activeAccount.label}`;
+  const currency = isAllAccounts ? baseCurrency : (activeAccount.currency ?? baseCurrency);
+  const searchScopeHint = isAllAccounts
+    ? 'Searching across all accounts'
+    : `Searching in ${activeAccount.emoji} ${activeAccount.label}`;
 
   return (
     <View style={styles.screen}>
       <View style={styles.headerBlock}>
-        <Text style={styles.subheading}>Track money moving in and out of each account.</Text>
+        <Text style={styles.subheading}>
+          Overall cash across every account, or drill into one ledger.
+        </Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chips}
         >
-          {accounts.map((account) => (
-            <TouchableOpacity
-              key={account.id}
-              onPress={() => {
-                setAccountId(account.id);
-                setShowAllRows(false);
-              }}
-              style={[styles.chip, account.id === activeAccount.id && styles.chipActive]}
-            >
-              <Text style={[styles.chipText, account.id === activeAccount.id && styles.chipTextActive]}>
-                {account.emoji} {account.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          <TouchableOpacity
+            onPress={() => setAccountId(ALL_ACCOUNTS_ID)}
+            style={[styles.chip, isAllAccounts && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, isAllAccounts && styles.chipTextActive]}>
+              All accounts
+            </Text>
+          </TouchableOpacity>
+          {accounts.map((account) => {
+            const selected = !isAllAccounts && account.id === activeAccount?.id;
+            return (
+              <TouchableOpacity
+                key={account.id}
+                onPress={() => setAccountId(account.id)}
+                style={[styles.chip, selected && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+                  {account.emoji} {account.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
 
         <View style={styles.modeSwitch}>
@@ -199,38 +233,40 @@ export default function AccountActivityScreen() {
 
       {viewMode === 'search' ? (
         <ActivitySearchPane
-          key={activeAccount.id}
+          key={isAllAccounts ? ALL_ACCOUNTS_ID : activeAccount.id}
           navigation={navigation}
-          initialAccountIds={[activeAccount.id]}
-          lockAccountFilter
+          initialAccountIds={isAllAccounts ? [] : [activeAccount.id]}
+          lockAccountFilter={!isAllAccounts}
           scopeHint={searchScopeHint}
-          searchPlaceholder="Search this account — notes, categories, amounts…"
+          searchPlaceholder={
+            isAllAccounts
+              ? 'Search all accounts — notes, categories, amounts…'
+              : 'Search this account — notes, categories, amounts…'
+          }
         />
       ) : (
         <ScrollView contentContainerStyle={styles.container}>
-          <View style={styles.periodRow}>
-            {[['month', 'This month'], ['last', 'Last month'], ['all', 'All time']].map(([id, label]) => (
-              <TouchableOpacity
-                key={id}
-                onPress={() => { setPeriod(id); setShowAllRows(false); }}
-                style={[styles.period, period === id && styles.periodActive]}
-              >
-                <Text style={[styles.periodText, period === id && styles.periodTextActive]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={styles.periodLabel}>{range.label}</Text>
+          <DateFilterBar />
+
           <View style={styles.summary}>
             <Metric label="Opening" value={activity.opening} color={colors.text.primary} currency={currency} />
             <Metric label="Money in" value={activity.moneyIn} color={colors.accent.income} currency={currency} />
             <Metric label="Money out" value={activity.moneyOut} color={colors.accent.expense} currency={currency} />
             <Metric label="Closing" value={activity.closing} color={colors.accent.primary} currency={currency} />
           </View>
-          {period === 'all' && (
+          <Text style={styles.periodLabel}>
+            {isAllTime ? 'All time through today' : rangeLabel}
+          </Text>
+          {isAllAccounts ? (
+            <Text style={styles.balanceHint}>
+              Totals are in {baseCurrency}. Transfers between your own accounts
+              are left out of Money in/out so they are not counted twice.
+            </Text>
+          ) : isAllTime ? (
             <Text style={styles.balanceHint}>
               Closing matches the balance shown on Settings → Accounts for this account.
             </Text>
-          )}
+          ) : null}
 
           <Text style={styles.chartsLabel}>Charts</Text>
 
@@ -251,7 +287,7 @@ export default function AccountActivityScreen() {
 
           <ExpandableChartSection
             title="Outflow breakdown"
-            subtitle={`${range.label} · expenses, investments, and transfers out.`}
+            subtitle={`${isAllTime ? 'All time' : rangeLabel} · expenses, investments, and transfers out.`}
             collapsedHint={breakdownSummary(outflowBreakdown, currency, formatMoney)}
             expanded={expanded.outflow}
             onToggle={() => toggleSection('outflow')}
@@ -350,11 +386,14 @@ function ActivityRow({ row, currency }) {
         <View style={styles.rowTop}>
           <Text style={styles.rowTitle} numberOfLines={2}>{row.note || row.label}</Text>
           <Text style={[styles.rowAmount, { color: positive ? colors.accent.income : colors.accent.expense }]}>
-            {positive ? '+' : '−'}{formatMoney(Math.abs(row.delta), currency, { decimals: 0 })}
+            {positive ? '+' : '−'}{formatMoney(Math.abs(row.delta), currency)}
           </Text>
         </View>
         <Text style={styles.rowMeta}>
-          {row.label} · {new Date(row.createdAt).toLocaleDateString(undefined, {
+          {row.label}
+          {row.accountLabel ? ` · ${row.accountLabel}` : ''}
+          {' · '}
+          {new Date(row.createdAt).toLocaleDateString(undefined, {
             day: 'numeric',
             month: 'short',
             year: 'numeric',
@@ -370,7 +409,7 @@ function Metric({ label, value, color, currency }) {
   return (
     <View style={styles.metric}>
       <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={[styles.metricValue, { color }]}>{formatMoney(value, currency, { decimals: 0 })}</Text>
+      <Text style={[styles.metricValue, { color }]}>{formatMoney(value, currency)}</Text>
     </View>
   );
 }
@@ -418,19 +457,8 @@ const makeStyles = (c) => ({
   },
   modeSegmentText: { fontSize: 13, fontWeight: '700', color: c.text.secondary },
   modeSegmentTextActive: { color: c.text.primary },
-  container: { paddingHorizontal: spacing.lg, paddingBottom: 40 },
-  periodRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
-  period: {
-    flex: 1,
-    paddingVertical: 9,
-    alignItems: 'center',
-    borderRadius: radii.md,
-    backgroundColor: c.bg.surfaceAlt,
-  },
-  periodActive: { backgroundColor: c.accent.primary },
-  periodText: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
-  periodTextActive: { color: c.text.inverse },
-  periodLabel: { marginTop: spacing.md, marginBottom: spacing.sm, color: c.text.secondary, fontWeight: '700', fontSize: 12 },
+  container: { paddingHorizontal: spacing.lg, paddingBottom: 40, paddingTop: spacing.xs },
+  periodLabel: { marginTop: spacing.sm, marginBottom: spacing.sm, color: c.text.secondary, fontWeight: '700', fontSize: 12 },
   summary: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   metric: {
     flexBasis: '48%',

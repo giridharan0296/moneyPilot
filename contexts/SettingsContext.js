@@ -17,6 +17,7 @@ import {
   DEFAULT_AI_CONFIG,
   AI_PROVIDER_PRESETS,
   BROKERS,
+  ensureOthersSubcategories,
 } from '../constants';
 import { prefixedId, shortId } from '../lib/ids';
 import {
@@ -549,8 +550,9 @@ const CATEGORY_MIGRATION_KEYS = [
   'add_events_travel_sweets_subs_v16',
   'add_household_events_subs_v17',
   'add_events_jewellery_sub_v18',
+  'add_others_subcategory_v19',
 ];
-const CURRENT_CATEGORY_MIGRATION = 'add_events_jewellery_sub_v18';
+const CURRENT_CATEGORY_MIGRATION = 'add_others_subcategory_v19';
 
 // Persist categories THEN the migration flag, IN THAT ORDER. Ordering
 // matters because of the crash-window (BK-M3):
@@ -852,6 +854,7 @@ export function SettingsProvider({ children }) {
         //   v16 → Events: Travel + Sweets & Snacks subs.
         //   v17 → Household toiletries + Events accessories/cosmetics subs.
         //   v18 → Events: Jewellery & Ornaments sub (split from Clothing).
+        //   v19 → Others sub-category on every expense / income / investment parent.
         if (!migApplied.has(CURRENT_CATEGORY_MIGRATION)) {
           expense    = ensureExpenseGiftCategory(expense);
           expense    = ensureExpenseUtilitiesCategory(expense);
@@ -892,6 +895,9 @@ export function SettingsProvider({ children }) {
           );
           income     = reorderCategoriesToDefaults(income, DEFAULT_INCOME_CATEGORIES);
           investment = reorderCategoriesToDefaults(investment, DEFAULT_INVESTMENT_CATEGORIES);
+          expense    = ensureOthersSubcategories(expense);
+          income     = ensureOthersSubcategories(income);
+          investment = ensureOthersSubcategories(investment);
           for (const key of CATEGORY_MIGRATION_KEYS) migApplied.add(key);
           // BK-M3 fix: persist categories BEFORE the migration flag so
           // a crash between the two writes is recoverable (merge is
@@ -989,13 +995,13 @@ export function SettingsProvider({ children }) {
   const addCategory = useCallback((type, { label, emoji, color }) => {
     const trimmed = (label ?? '').trim();
     if (!trimmed) return null;
-    const newCat = {
+    const newCat = ensureOthersSubcategories([{
       id: `${type}_${shortId()}`,
       label: trimmed,
       emoji: (emoji ?? '📌').trim() || '📌',
       color: color ?? '#6b7280',
       subCategories: [],
-    };
+    }])[0];
     setCategories((prev) => ({
       ...prev,
       [type]: [...prev[type], newCat],
@@ -1346,9 +1352,9 @@ export function SettingsProvider({ children }) {
       DEPRECATED_INVESTMENT_SUBCATEGORY_IDS,
     );
     setCategories({
-      expense:    mergedExpense,
-      income:     mergedIncome,
-      investment: mergedInvestment,
+      expense:    ensureOthersSubcategories(mergedExpense),
+      income:     ensureOthersSubcategories(mergedIncome),
+      investment: ensureOthersSubcategories(mergedInvestment),
     });
 
     // BK-M2 fix: apply restored settings_migrations if present, then

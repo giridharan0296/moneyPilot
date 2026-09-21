@@ -20,25 +20,27 @@
 // Actions:
 //   - Tap row  → LoanDetail
 //   - + New    → LoanDetail with routeParams.mode='new'
-//   - ✕ (row)  → confirm + deleteLoan (removes mirror liability too)
+//   - swipe left → confirm + deleteLoan (removes mirror liability too)
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  DeviceEventEmitter,
   SafeAreaView,
   ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
 import { useLoans } from '../contexts/LoansContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import AppButton from '../components/AppButton';
 import AppIcon from '../components/AppIcon';
-import PressableScale from '../components/PressableScale';
+import SwipeableDeleteRow from '../components/SwipeableDeleteRow';
 import { EmptyState as VisualEmptyState, MetricTile, StatusBadge } from '../components/UiPrimitives';
 import {
   computePayoffPercent,
@@ -49,22 +51,28 @@ import {
 import { radii, spacing, elevation } from '../lib/theme';
 
 const GROUPS = [
-  { id: 'owed_by_me', title: 'I owe',       direction: 'owed_by_me',   emptyHint: 'Add a home / car / personal loan to track your EMIs.' },
-  { id: 'owed_to_me', title: 'Owed to me',  direction: 'owed_to_me',   emptyHint: 'Log an informal loan you extended to a friend or family member.' },
+  { id: 'owed_by_me', title: 'I owe',       direction: 'owed_by_me',   emptyHint: 'Add a bank loan or money you borrowed from someone.' },
+  { id: 'owed_to_me', title: 'Owed to me',  direction: 'owed_to_me',   emptyHint: 'Add money you lent to a friend or family member.' },
 ];
 
-export default function LoansScreen({ navigation }) {
+export default function LoansScreen({ navigation, embedded = false }) {
+  const stackNavigation = useNavigation();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { loans, summary, deleteLoan } = useLoans();
   const { showToast } = useToast();
   const [showClosed, setShowClosed] = useState(false);
 
+  const openLoan = (params) => {
+    stackNavigation.navigate('LoanDetail', params);
+  };
+
   useLayoutEffect(() => {
+    if (embedded || !navigation?.setOptions) return;
     navigation.setOptions({
       headerRight: () => (
         <TouchableOpacity
-          onPress={() => navigation.navigate('LoanDetail', { mode: 'new' })}
+          onPress={() => openLoan({ mode: 'new' })}
           hitSlop={12}
           style={{ paddingHorizontal: 8 }}
           accessibilityRole="button"
@@ -79,7 +87,19 @@ export default function LoansScreen({ navigation }) {
         </TouchableOpacity>
       ),
     });
-  }, [navigation, themeColors.text.primary]);
+  }, [embedded, navigation, themeColors.text.primary]);
+
+  useEffect(() => {
+    if (!embedded) return undefined;
+    const sub = DeviceEventEmitter.addListener(
+      'transactions:openAdd',
+      (payload) => {
+        if (payload?.type !== 'loan') return;
+        openLoan({ mode: 'new' });
+      },
+    );
+    return () => sub.remove();
+  }, [embedded]);
 
   const visibleLoans = useMemo(
     () => (showClosed ? loans : loans.filter((l) => l.status !== 'closed')),
@@ -118,9 +138,10 @@ export default function LoansScreen({ navigation }) {
   };
 
   const closedCount = loans.filter((l) => l.status === 'closed').length;
+  const Root = embedded ? View : SafeAreaView;
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <Root style={styles.screen}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         {/* Hero */}
         <View style={styles.hero}>
@@ -133,7 +154,7 @@ export default function LoansScreen({ navigation }) {
             <MetricTile label="Owed to you" value={formatMoney(summary.owedToMe)} icon="download" tint="#059669" />
           </View>
           <Text style={styles.heroFootnote}>
-            {summary.active} active · {summary.closed} closed. Each loan mirrors into Net Worth automatically.
+            {summary.active} active · {summary.closed} closed. Bank EMIs and person-to-person IOUs both live here. Use Move only for cash between your own accounts.
           </Text>
         </View>
 
@@ -141,9 +162,9 @@ export default function LoansScreen({ navigation }) {
           <VisualEmptyState
             icon="landmark"
             title="No loans tracked yet"
-            body="Track a loan to calculate EMIs, split principal and interest, and keep Net Worth current."
+            body="HDFC home loan → Bank / EMI. ₹5,000 to Rahul → Person. Outstanding, payments, and payoff all stay on this screen."
             actionLabel="Add first loan"
-            onAction={() => navigation.navigate('LoanDetail', { mode: 'new' })}
+            onAction={() => openLoan({ mode: 'new' })}
             tint="#dc2626"
           />
         )}
@@ -164,7 +185,7 @@ export default function LoansScreen({ navigation }) {
                 <LoanRow
                   key={l.id}
                   loan={l}
-                  onPress={() => navigation.navigate('LoanDetail', { loanId: l.id })}
+                  onPress={() => openLoan({ loanId: l.id })}
                   onDelete={() => handleDelete(l)}
                 />
               ))}
@@ -186,27 +207,28 @@ export default function LoansScreen({ navigation }) {
         )}
 
         <Text style={styles.footer}>
-          Loans are formal obligations with a principal, rate, and tenure — separate
-          from the freeform Transfers ledger. Every EMI you log auto-updates Net Worth.
+          Tap a row to open it · swipe left to delete. Use Move only to shift
+          cash between your own accounts. Payments against a loan are logged
+          here and update Net Worth automatically.
         </Text>
       </ScrollView>
-    </SafeAreaView>
+    </Root>
   );
 }
 
 function LoanRow({ loan, onPress, onDelete }) {
   const styles = useThemedStyles(makeStyles);
-  const themeColors = useThemeColors();
   const { kindIcon, kindLabel } = useLoans();
   const pct = computePayoffPercent(loan);
   const { remainingMonths, projectedClosureDate } = computePayoffProjection(loan);
 
   const barColor = loan.status === 'closed' ? '#9ca3af' : '#059669';
   return (
-    <PressableScale
+    <SwipeableDeleteRow
       onPress={onPress}
-      haptic
-      scaleTo={0.985}
+      onDelete={onDelete}
+      deleteLabel={`Delete ${loan.name}`}
+      wrapStyle={{ marginBottom: spacing.sm }}
       contentStyle={[styles.row, loan.status === 'closed' && { opacity: 0.6 }]}
     >
       <View style={styles.rowEmoji}>
@@ -250,16 +272,7 @@ function LoanRow({ loan, onPress, onDelete }) {
         <Text style={styles.rowAmount}>{formatMoney(loan.principal)}</Text>
         <Text style={styles.rowAmountSub}>Principal</Text>
       </View>
-      <TouchableOpacity
-        onPress={onDelete}
-        style={styles.deleteBtn}
-        hitSlop={12}
-        accessibilityRole="button"
-        accessibilityLabel={`Delete ${loan.name}`}
-      >
-        <AppIcon name="x" size={14} color={themeColors.text.secondary} strokeWidth={2.4} />
-      </TouchableOpacity>
-    </PressableScale>
+    </SwipeableDeleteRow>
   );
 }
 
@@ -299,7 +312,6 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
     padding: spacing.md,
-    marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: c.border.subtle,
     ...elevation.card,
@@ -330,14 +342,6 @@ const makeStyles = (c) => ({
   rowAmountBlock: { alignItems: 'flex-end', flexShrink: 0, minWidth: 64 },
   rowAmount: { fontSize: 14, fontWeight: '700', color: c.text.primary },
   rowAmountSub: { fontSize: 10, color: c.text.muted, marginTop: 2, paddingHorizontal: 1 },
-
-  deleteBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: c.palette.n100,
-    alignItems: 'center', justifyContent: 'center',
-    marginLeft: spacing.sm,
-  },
-  deleteText: { color: c.text.secondary, fontSize: 13, fontWeight: '700' },
 
   toggleClosed: {
     marginTop: spacing.md,

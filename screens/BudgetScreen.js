@@ -313,7 +313,7 @@ export function BudgetPane({
               >
                 <Text style={styles.templateEmoji}>{template.emoji}</Text>
                 <Text style={styles.templateName}>{template.label}</Text>
-                <Text style={styles.templateAmount}>{formatMoneyCurrency(template.amount, baseCurrency, { decimals: 0 })}/month</Text>
+                <Text style={styles.templateAmount}>{formatMoneyCurrency(template.amount, baseCurrency)}/month</Text>
                 <Text style={styles.templateNote}>{template.note}</Text>
               </TouchableOpacity>
             ))}
@@ -499,7 +499,7 @@ function EmptyState() {
 }
 
 function copyForStatus({ status, spent, remaining, percent }, baseCurrency) {
-  const abs = formatMoneyCurrency(Math.abs(remaining), baseCurrency, { decimals: 0 });
+  const abs = formatMoneyCurrency(Math.abs(remaining), baseCurrency);
   if (status === 'over') return `Over by ${abs}`;
   if (status === 'warn') return `${abs} left · ${Math.round(percent)}%`;
   return `${abs} left`;

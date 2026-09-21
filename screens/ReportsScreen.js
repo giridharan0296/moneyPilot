@@ -2,26 +2,25 @@
 // ReportsScreen — analytics & trends over transactions.
 //
 // Sections:
-//   A. Selected period (follows DateFilter)
-//      — stat strip, group-by breakdowns, top expenses
-//   B. Tax year FY (selectable Indian FY · independent of month/week filter)
-//   C. 12-month trend (fixed rolling window, ignores DateFilter)
+//   A. Custom report (independent period + subject, optional voice)
+//   B. Selected period (follows DateFilter)
+//   C. Tax year FY (selectable Indian FY · independent of month/week filter)
+//   D. 12-month trend (fixed rolling window, ignores DateFilter)
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
 import {
   Dimensions,
   LayoutAnimation,
-  Platform,
   ScrollView,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from 'react-native';
 
 import AppIcon from '../components/AppIcon';
 import { PieBreakdownView } from '../components/CategoryPieChart';
+import CustomReportCard from '../components/CustomReportCard';
 import DateFilterBar from '../components/DateFilterBar';
 import TrendBarChart from '../components/TrendBarChart';
 import { EmptyState as VisualEmptyState } from '../components/UiPrimitives';
@@ -30,6 +29,8 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
+import { useLoans } from '../contexts/LoansContext';
+import '../lib/motion';
 import {
   flowInvestments,
   groupModeLabel,
@@ -62,13 +63,6 @@ function toBaseAmountRows(list, fxRates, baseCurrency) {
 }
 
 const CHART_WIDTH = Dimensions.get('window').width - 64; // matches container padding
-
-if (
-  Platform.OS === 'android'
-  && UIManager.setLayoutAnimationEnabledExperimental
-) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 function animateExpand() {
   LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -110,6 +104,7 @@ function buildFinancialYearStats(startYear, expenses, income, investments, trans
     saved: fiscalStats.net,
     investments: fiscalStats.totalInvestment,
     repayment: fiscalStats.totalRepayment,
+    credit: fiscalStats.totalCredit,
     payslipTds: payslipTax.totalTds,
     payslipMonths: payslipTax.payslipCount,
   };
@@ -141,6 +136,7 @@ export default function ReportsScreen() {
   );
   const { expenses, income, investments } = useTransactions();
   const { transfers } = useTransfers();
+  const { loans } = useLoans();
   const { label: rangeLabel, filterByRange } = useDateFilter();
 
   const statsContext = useMemo(
@@ -234,6 +230,20 @@ export default function ReportsScreen() {
       <DateFilterBar />
 
       <SectionHeader
+        title="Voice report"
+        hint="Speak a request. It does not use the date filter below."
+      />
+      <CustomReportCard
+        expenses={expenses}
+        income={income}
+        investments={investments}
+        transfers={transfers}
+        loans={loans}
+        categories={categories}
+        accounts={accounts}
+      />
+
+      <SectionHeader
         title="Selected period"
         hint="Totals and breakdowns follow the date filter — pick Month, Week, FY, Custom, or All."
       />
@@ -245,8 +255,8 @@ export default function ReportsScreen() {
 
       <ExpandableReportSection
         title="Period totals"
-        subtitle="Income, spending, investing, and cash left for the selected range."
-        collapsedHint={`Cash left ${formatMoneyCurrency(Math.abs(stats.net), baseCurrency, { decimals: 0 })} · ${rangeLabel}`}
+        subtitle="Income, loan credits, spending, investing, and cash left for the selected range."
+        collapsedHint={`Cash left ${formatMoneyCurrency(Math.abs(stats.net), baseCurrency)} · ${rangeLabel}`}
         expanded={expanded.periodTotals}
         onToggle={() => toggleSection('periodTotals')}
       >
@@ -257,6 +267,14 @@ export default function ReportsScreen() {
             color="#059669"
             baseCurrency={baseCurrency}
           />
+          {stats.totalCredit > 0 && (
+            <StatCard
+              label="Loan credited"
+              value={stats.totalCredit}
+              color="#0d9488"
+              baseCurrency={baseCurrency}
+            />
+          )}
           <StatCard
             label="Expenses"
             value={stats.totalExpense}
@@ -291,7 +309,8 @@ export default function ReportsScreen() {
           />
         </View>
         <Text style={styles.statExplain}>
-          Cash left = income − expenses − invested − loan principal repaid.
+          Cash left = income + loan credited − expenses − invested − loan principal repaid.
+          Loan credited is principal that landed in an account (not income).
           Loan interest is in expenses. Moving money between your own accounts
           is not counted here.
         </Text>
@@ -366,7 +385,7 @@ export default function ReportsScreen() {
         subtitle={`Largest single expenses in ${rangeLabel.toLowerCase()}.`}
         collapsedHint={
           top10.length > 0
-            ? `Top: ${formatMoneyCurrency(top10[0].amount, baseCurrency, { decimals: 0 })}`
+            ? `Top: ${formatMoneyCurrency(top10[0].amount, baseCurrency)}`
             : 'No expenses yet'
         }
         expanded={expanded.top10}
@@ -398,7 +417,7 @@ export default function ReportsScreen() {
                     </Text>
                   </View>
                   <Text style={styles.topAmount}>
-                    {formatMoneyCurrency(tx.amount, baseCurrency, { decimals: 0 })}
+                    {formatMoneyCurrency(tx.amount, baseCurrency)}
                   </Text>
                 </View>
               );
@@ -419,7 +438,7 @@ export default function ReportsScreen() {
             ? 'Year-to-date totals for tax / annual planning (1 Apr through today).'
             : 'Full-year totals for tax / annual planning (1 Apr – 31 Mar).'
         }
-        collapsedHint={`Cash left ${formatMoneyCurrency(financialYear.saved, baseCurrency, { decimals: 0 })} · ${financialYear.isPartial ? 'FY YTD' : 'Full FY'}`}
+        collapsedHint={`Cash left ${formatMoneyCurrency(financialYear.saved, baseCurrency)} · ${financialYear.isPartial ? 'FY YTD' : 'Full FY'}`}
         expanded={expanded.fy}
         onToggle={() => toggleSection('fy')}
         cardStyle={styles.fyCard}
@@ -433,12 +452,20 @@ export default function ReportsScreen() {
         />
         <View style={styles.financialYearGrid}>
           <YearMetric label="Income" value={financialYear.income} color="#059669" baseCurrency={baseCurrency} />
+          {financialYear.credit > 0 && (
+            <YearMetric label="Loan credited" value={financialYear.credit} color="#0d9488" baseCurrency={baseCurrency} />
+          )}
           <YearMetric label="Expenses" value={financialYear.expenses} color="#dc2626" baseCurrency={baseCurrency} />
           <YearMetric label="Invested" value={financialYear.investments} color="#7c3aed" baseCurrency={baseCurrency} />
           {financialYear.repayment > 0 && (
             <YearMetric label="Loan principal" value={financialYear.repayment} color="#6366f1" baseCurrency={baseCurrency} />
           )}
-          <YearMetric label="Cash left" value={financialYear.saved} color="#0ea5e9" baseCurrency={baseCurrency} />
+          <YearMetric
+            label="Cash left"
+            value={financialYear.saved}
+            color={financialYear.saved >= 0 ? '#0ea5e9' : '#dc2626'}
+            baseCurrency={baseCurrency}
+          />
           {financialYear.payslipTds > 0 && (
             <YearMetric
               label={`TDS (${financialYear.payslipMonths} payslip${financialYear.payslipMonths === 1 ? '' : 's'})`}
@@ -466,9 +493,8 @@ export default function ReportsScreen() {
       </ExpandableReportSection>
 
       <Text style={styles.footnote}>
-        Selected period = date filter + group-by. Use the FY filter for
-        financial-year breakdowns. Tax year below can browse any FY independently.
-        The 12-month trend uses a fixed rolling window.
+        Custom report uses its own period. Selected period = date filter + group-by.
+        Tax year can browse any FY independently. The 12-month trend uses a fixed rolling window.
       </Text>
     </ScrollView>
   );
@@ -479,7 +505,7 @@ function breakdownSummary(rows, baseCurrency, idField = 'categoryId') {
   const total = rows.reduce((s, r) => s + (r.value || 0), 0);
   const top = rows[0];
   const topLabel = top?.label ?? '—';
-  return `${formatMoneyCurrency(total, baseCurrency, { decimals: 0 })} · ${rows.length} item${rows.length === 1 ? '' : 's'} · top ${topLabel}`;
+  return `${formatMoneyCurrency(total, baseCurrency)} · ${rows.length} item${rows.length === 1 ? '' : 's'} · top ${topLabel}`;
 }
 
 function FinancialYearNav({
@@ -654,7 +680,7 @@ function StatCard({ label, value, color, baseCurrency, raw = false }) {
     <View style={styles.statCard}>
       <Text style={styles.statLabel}>{label}</Text>
       <Text style={[styles.statValue, { color }]} numberOfLines={1}>
-        {raw ? value : formatMoneyCurrency(value, baseCurrency, { decimals: 0 })}
+        {raw ? value : formatMoneyCurrency(value, baseCurrency)}
       </Text>
     </View>
   );
@@ -666,7 +692,7 @@ function YearMetric({ label, value, color, baseCurrency }) {
     <View style={styles.financialYearMetric}>
       <Text style={styles.financialYearLabel}>{label}</Text>
       <Text style={[styles.financialYearValue, { color }]} numberOfLines={1}>
-        {formatMoneyCurrency(value, baseCurrency, { decimals: 0 })}
+        {formatMoneyCurrency(value, baseCurrency)}
       </Text>
     </View>
   );

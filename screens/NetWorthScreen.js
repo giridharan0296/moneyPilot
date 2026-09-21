@@ -75,8 +75,8 @@ import {
 import { portfolioKindLabel } from '../lib/portfolioNetWorthSync';
 
 function formatMoney(n) {
-  if (!isFinite(n)) return '0';
-  return Math.round(n).toLocaleString('en-IN');
+  if (!isFinite(n)) return '0.00';
+  return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function NetWorthScreen() {

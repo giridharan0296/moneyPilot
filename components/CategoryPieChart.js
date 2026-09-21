@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { G, Path, Rect } from 'react-native-svg';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
@@ -45,9 +45,9 @@ function formatPercent(pct) {
 }
 
 function formatCenterAmount(value, baseCurrency) {
-  const full = formatMoneyCurrency(value, baseCurrency, { decimals: 0 });
+  const full = formatMoneyCurrency(value, baseCurrency);
   if (full.length > 11) {
-    return formatMoneyCurrency(value, baseCurrency, { decimals: 0, compact: true });
+    return formatMoneyCurrency(value, baseCurrency, { compact: true });
   }
   return full;
 }
@@ -149,47 +149,26 @@ export default function CategoryPieChart({
 
   const chartBody = (
     <View style={{ width: canvasSize, height: canvasSize, position: 'relative' }}>
-      <Svg width={canvasSize} height={canvasSize}>
-        <Rect
-          x={0}
-          y={0}
-          width={canvasSize}
-          height={canvasSize}
-          fill="transparent"
-          onPress={() => {
-            if (selectedIndex != null) setSelectedIndex(null);
-          }}
-        />
-        {segments.map((seg) => {
-          const isSelected = selectedIndex === seg.index;
-          const tx = isSelected ? seg.popDx : 0;
-          const ty = isSelected ? seg.popDy : 0;
-          return (
-            <G
-              key={seg.index}
-              transform={tx || ty ? `translate(${tx}, ${ty})` : undefined}
-            >
-              <Path
-                d={seg.path}
-                fill={seg.color}
-                stroke={sliceStroke}
-                strokeWidth={2}
-                strokeLinejoin="round"
-                opacity={1}
-                onPress={() => setSelectedIndex(isSelected ? null : seg.index)}
-              />
-            </G>
-          );
-        })}
-      </Svg>
-      <View style={[styles.centerLabel, { width: canvasSize, height: canvasSize }]} pointerEvents="none">
+      {/* Hub label sits under the SVG hole — must NOT cover the donut ring
+          or slice taps never reach the chart (especially on web, where
+          pointerEvents="none" on a full-size sibling does not pass through
+          to the Svg below). */}
+      <View
+        style={[
+          styles.centerLabel,
+          {
+            width: hubWidth,
+            height: hubHeight,
+            left: (canvasSize - hubWidth) / 2,
+            top: (canvasSize - hubHeight) / 2,
+          },
+        ]}
+        pointerEvents="none"
+      >
         <View
           style={[
             styles.centerHub,
-            {
-              width: hubWidth,
-              height: hubHeight,
-            },
+            { width: hubWidth, height: hubHeight },
             selected && styles.centerHubSelected,
             selected && {
               borderColor: selected.color,
@@ -239,6 +218,63 @@ export default function CategoryPieChart({
           )}
         </View>
       </View>
+
+      {/* SVG on top so slice presses register on web + native. */}
+      <Svg
+        width={canvasSize}
+        height={canvasSize}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+        pointerEvents="box-none"
+      >
+        <Rect
+          x={0}
+          y={0}
+          width={canvasSize}
+          height={canvasSize}
+          fill="transparent"
+          onPress={() => {
+            if (selectedIndex != null) setSelectedIndex(null);
+          }}
+        />
+        {segments.map((seg) => {
+          const isSelected = selectedIndex === seg.index;
+          const tx = isSelected ? seg.popDx : 0;
+          const ty = isSelected ? seg.popDy : 0;
+          return (
+            <G
+              key={seg.index}
+              transform={tx || ty ? `translate(${tx}, ${ty})` : undefined}
+              onPress={() => setSelectedIndex(isSelected ? null : seg.index)}
+            >
+              <Path
+                d={seg.path}
+                fill={seg.color}
+                stroke={sliceStroke}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                pointerEvents="auto"
+              />
+            </G>
+          );
+        })}
+      </Svg>
+
+      {/* Tap the centre hole to clear selection without blocking slices. */}
+      {selectedIndex != null && (
+        <Pressable
+          onPress={() => setSelectedIndex(null)}
+          style={{
+            position: 'absolute',
+            left: (canvasSize - innerR * 1.1) / 2,
+            top: (canvasSize - innerR * 1.1) / 2,
+            width: innerR * 1.1,
+            height: innerR * 1.1,
+            borderRadius: innerR * 0.55,
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Clear chart selection"
+        />
+      )}
     </View>
   );
 
@@ -262,13 +298,15 @@ export function PieLegendList({
   onSelect,
   maxItems,
   style,
+  maxHeight = 220,
 }) {
   const styles = useThemedStyles(makeStyles);
   const total = totalProp ?? rows.reduce((s, r) => s + r.value, 0);
   const visible = maxItems ? rows.slice(0, maxItems) : rows;
+  const scrollLegend = !maxItems && visible.length > 4;
 
-  return (
-    <View style={[styles.legendList, style]}>
+  const list = (
+    <View style={[styles.legendList, !scrollLegend && style]}>
       {visible.map((r, index) => {
         const selected = selectedIndex === index;
         const pct = total > 0 ? (r.value / total) * 100 : 0;
@@ -277,11 +315,13 @@ export function PieLegendList({
         return (
           <Pressable
             key={key}
-            onPress={() => onSelect(selected ? null : index)}
-            style={[
+            onPress={() => onSelect?.(selected ? null : index)}
+            style={({ pressed }) => [
               styles.legendItem,
               selected && styles.legendItemSelected,
               selected && { borderLeftColor: r.color },
+              pressed && !selected && styles.legendItemPressed,
+              Platform.OS === 'web' && selected && styles.legendItemSelectedWeb,
             ]}
           >
             <View style={styles.legendHeader}>
@@ -300,7 +340,7 @@ export function PieLegendList({
                   style={[styles.legendAmount, selected && styles.legendAmountSelected]}
                   numberOfLines={1}
                 >
-                  {formatMoneyCurrency(r.value, baseCurrency, { decimals: 0 })}
+                  {formatMoneyCurrency(r.value, baseCurrency)}
                 </Text>
               </View>
               <View style={styles.legendPercentCol}>
@@ -337,6 +377,20 @@ export function PieLegendList({
       )}
     </View>
   );
+
+  if (!scrollLegend) return list;
+
+  return (
+    <ScrollView
+      style={[{ maxHeight, width: '100%' }, style]}
+      nestedScrollEnabled
+      directionalLockEnabled
+      showsVerticalScrollIndicator
+      keyboardShouldPersistTaps="handled"
+    >
+      {list}
+    </ScrollView>
+  );
 }
 
 /** Chart + synced legend — used on Reports breakdown cards. */
@@ -347,7 +401,7 @@ export function PieBreakdownView({
   thickness = 34,
   emptyLabel,
   emptyText,
-  maxLegend = 8,
+  maxLegend,
 }) {
   const styles = useThemedStyles(makeStyles);
   const [selectedIndex, setSelectedIndex] = useState(null);
@@ -415,6 +469,15 @@ const makeStyles = (c) => ({
   },
   legendItemSelected: {
     backgroundColor: c.bg.surfaceAlt,
+  },
+  legendItemPressed: {
+    backgroundColor: c.bg.surfaceAlt,
+    opacity: 0.92,
+  },
+  legendItemSelectedWeb: {
+    outlineStyle: 'solid',
+    outlineWidth: 1,
+    outlineColor: c.border.strong,
   },
   legendHeader: {
     flexDirection: 'row',
@@ -492,8 +555,6 @@ const makeStyles = (c) => ({
   },
   centerLabel: {
     position: 'absolute',
-    top: 0,
-    left: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -43,6 +43,7 @@
 //               (Home, Transactions, Invest, Insights) stay hero.
 // ----------------------------------------------------------------------------
 
+import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   NavigationContainer,
@@ -52,13 +53,15 @@ import {
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Platform, View } from 'react-native';
+import { Platform, StatusBar as RNStatusBar, View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 
 import { elevation } from './lib/theme';
 import { stackTabListeners } from './lib/navigationTabReset';
 
 import DashboardScreen        from './screens/DashboardScreen';
 import TransactionsScreen     from './screens/TransactionsScreen';
+import LoansRedirectScreen    from './screens/LoansRedirectScreen';
 import InvestmentsScreen      from './screens/InvestmentsScreen';
 import SettingsHubScreen      from './screens/SettingsHubScreen';
 import AdvancedSettingsScreen from './screens/SettingsScreen';
@@ -98,9 +101,9 @@ import StockHistoryScreen        from './screens/StockHistoryScreen';
 import MarketBoardScreen         from './screens/MarketBoardScreen';
 import PortfolioScreen        from './screens/PortfolioScreen';
 import PortfolioBalanceScreen from './screens/PortfolioBalanceScreen';
+import MarketAllocationScreen from './screens/MarketAllocationScreen';
 import ImportHoldingsScreen   from './screens/ImportHoldingsScreen';
 import NetWorthScreen         from './screens/NetWorthScreen';
-import LoansScreen            from './screens/LoansScreen';
 import LoanDetailScreen       from './screens/LoanDetailScreen';
 
 import AppIcon                  from './components/AppIcon';
@@ -210,6 +213,7 @@ const HEADER_TINTS = {
   Investments:   TAB_TINTS.Invest,    // violet
   Portfolio:     '#7c3aed',            // violet family
   PortfolioBalance: '#6366f1',        // indigo — allocation rebalance
+  MarketAllocation: '#0891b2',      // cyan — stocks/MF/ETF mix
   ImportHoldings:'#8b5cf6',            // lighter violet
   NetWorth:      '#14b8a6',            // teal — feels like "wealth"
 
@@ -263,7 +267,7 @@ const HEADER_TINTS = {
 
 // Shared header look for both stacks — computed from the active theme so
 // dark mode picks up dark headers / titles without any per-screen edits.
-function makeStackScreenOptions(colors, fontFamilyBold) {
+function makeStackScreenOptions(colors, fontFamilyBold, isDark) {
   return {
     headerStyle: { backgroundColor: colors.bg.surface },
     headerTitleStyle: {
@@ -273,13 +277,36 @@ function makeStackScreenOptions(colors, fontFamilyBold) {
     },
     headerTintColor: colors.text.primary,
     contentStyle: { backgroundColor: colors.bg.canvas },
+    // Android 15 / edge-to-edge reports topInset 0 inside nested stacks,
+    // which disables native header padding and hides the back button
+    // under the status bar. statusBarTranslucent forces that padding on.
+    statusBarTranslucent: true,
+    statusBarStyle: isDark ? 'light' : 'dark',
   };
 }
 
-function InvestmentsStack() {
-  const { colors, fontFamilyBold } = useTheme();
+function TransactionsStack() {
+  const { colors, fontFamilyBold, isDark } = useTheme();
   return (
-    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold)}>
+    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
+      <Stack.Screen
+        name="TransactionsHome"
+        component={TransactionsScreen}
+        options={{ headerTitle: hdr('arrow-down-up', 'Transactions', HEADER_TINTS.Transactions) }}
+      />
+      <Stack.Screen
+        name="LoanDetail"
+        component={LoanDetailScreen}
+        options={{ headerTitle: hdr('landmark', 'Loan', HEADER_TINTS.LoanDetail) }}
+      />
+    </Stack.Navigator>
+  );
+}
+
+function InvestmentsStack() {
+  const { colors, fontFamilyBold, isDark } = useTheme();
+  return (
+    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
       <Stack.Screen
         name="InvestmentsHome"
         component={InvestmentsScreen}
@@ -294,6 +321,11 @@ function InvestmentsStack() {
         name="PortfolioBalance"
         component={PortfolioBalanceScreen}
         options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio', HEADER_TINTS.PortfolioBalance) }}
+      />
+      <Stack.Screen
+        name="MarketAllocation"
+        component={MarketAllocationScreen}
+        options={{ headerTitle: hdr('bar-chart-2', 'Market Allocation', HEADER_TINTS.MarketAllocation) }}
       />
       <Stack.Screen
         name="ImportHoldings"
@@ -316,9 +348,9 @@ function InvestmentsStack() {
 //   2. Future detail screens (per-insight drill-down, insight history,
 //      etc.) can be pushed onto this stack without touching App.js.
 function InsightsStack() {
-  const { colors, fontFamilyBold } = useTheme();
+  const { colors, fontFamilyBold, isDark } = useTheme();
   return (
-    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold)}>
+    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
       <Stack.Screen
         name="InsightsHome"
         component={InsightsScreen}
@@ -335,9 +367,9 @@ function InsightsStack() {
 // name stays the same. This keeps deep-link tables (see
 // screens/InsightsScreen.js → ROUTE_TO_TAB) a one-line swap per entry.
 function MoreStack() {
-  const { colors, fontFamilyBold } = useTheme();
+  const { colors, fontFamilyBold, isDark } = useTheme();
   return (
-    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold)}>
+    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
       <Stack.Screen
         name="MoreMenu"
         component={MoreMenuScreen}
@@ -348,7 +380,7 @@ function MoreStack() {
       <Stack.Screen
         name="DataHealth"
         component={DataHealthScreen}
-        options={{ headerTitle: hdr('activity', 'Data Health', '#059669') }}
+        options={{ headerTitle: hdr('activity', 'Data check', '#059669') }}
       />
       <Stack.Screen
         name="ActivityTimeline"
@@ -392,7 +424,7 @@ function MoreStack() {
       />
       <Stack.Screen
         name="Loans"
-        component={LoansScreen}
+        component={LoansRedirectScreen}
         options={{ headerTitle: hdr('landmark', 'Loans', HEADER_TINTS.Loans) }}
       />
       <Stack.Screen
@@ -593,12 +625,18 @@ function MoreStack() {
 // immediate feedback that their choice took effect.
 // -----------------------------------------------------------------------------
 function ThemedApp() {
-  const { colors, isDark, ready, fontFamilyBold } = useTheme();
+  const { colors, isDark, ready, fontsLoaded, fontFamilyBold } = useTheme();
   const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    if (ready && fontsLoaded) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [ready, fontsLoaded]);
 
   // Wait for the persisted theme choice before rendering anything so we
   // don't briefly flash the wrong palette on cold start.
-  if (!ready) return null;
+  if (!ready || !fontsLoaded) return null;
 
   // Android edge-to-edge (app.json) draws behind the system nav bar — pad the
   // tab bar by the real bottom inset so icons/labels aren't covered.
@@ -674,15 +712,22 @@ function ThemedApp() {
               tabBarLabel: 'Home',
               tabBarActiveTintColor: TAB_TINTS.Dashboard,
               tabBarIcon: tabIcon('home', TAB_TINTS.Dashboard),
+              safeAreaInsets: {
+                top: Math.max(
+                  insets.top,
+                  Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 0) : 0,
+                ),
+              },
             }}
           />
-          {/* Consolidated Income + Expense + Transfers into a single tab.
+          {/* Consolidated Income + Expense + Move + Loans into a single tab.
               See screens/TransactionsScreen.js. */}
           <Tab.Screen
             name="Transactions"
-            component={TransactionsScreen}
+            component={TransactionsStack}
+            listeners={stackTabListeners('TransactionsHome')}
             options={{
-              headerTitle: hdr('arrow-down-up', 'Transactions', TAB_TINTS.Transactions),
+              headerShown: false,
               tabBarLabel: 'Transactions',
               tabBarActiveTintColor: TAB_TINTS.Transactions,
               // A scalloped receipt glyph — one clear silhouette that

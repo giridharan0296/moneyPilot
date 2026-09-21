@@ -2,15 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
   LayoutAnimation,
-  Platform,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from 'react-native';
 
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import '../lib/motion';
 import { withAlpha } from '../lib/colorAlpha';
 import { elevation, radii, spacing } from '../lib/theme';
 import {
@@ -18,10 +17,6 @@ import {
   readDashboardSectionOpen,
 } from '../lib/dashboardSections';
 import { writeCollapsibleSectionState } from '../lib/collapsibleSectionState';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 const TOGGLE_ANIM = LayoutAnimation.create(
   240,
