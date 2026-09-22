@@ -38,6 +38,8 @@ export default function AccountNetWorthSync() {
       expenses,
       investments,
       transfers,
+      fxRates,
+      baseCurrency,
       asOf: new Date().toISOString(),
     });
 

@@ -104,6 +104,8 @@ export default function AccountActivityScreen() {
       expenses,
       investments,
       transfers,
+      fxRates,
+      baseCurrency,
     });
   }, [isAllAccounts, accounts, activeAccount, income, expenses, investments, transfers, fxRates, baseCurrency]);
 
@@ -146,6 +148,8 @@ export default function AccountActivityScreen() {
       transfers,
       rangeStart,
       rangeEnd,
+      fxRates,
+      baseCurrency,
     });
   }, [isAllAccounts, accounts, activeAccount, income, expenses, investments, transfers, rangeStart, rangeEnd, fxRates, baseCurrency]);
 

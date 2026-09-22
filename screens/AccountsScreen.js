@@ -72,6 +72,7 @@ export default function AccountsScreen({ navigation }) {
     deleteAccount,
     updateAccount,
     baseCurrency,
+    fxRates,
   } = useSettings();
   const { income, expenses, investments } = useTransactions();
   const { transfers } = useTransfers();
@@ -144,6 +145,7 @@ export default function AccountsScreen({ navigation }) {
             onDeleteGroup={deleteAccountGroup}
             onUpdateGroup={updateAccountGroup}
             baseCurrency={baseCurrency}
+            fxRates={fxRates}
             income={income}
             expenses={expenses}
             investments={investments}
@@ -186,6 +188,7 @@ function GroupCard({
   onDeleteGroup,
   onUpdateGroup,
   baseCurrency,
+  fxRates,
   income,
   expenses,
   investments,
@@ -203,11 +206,13 @@ function GroupCard({
       expenses,
       investments,
       transfers,
+      fxRates,
+      baseCurrency,
       // Account cards represent the balance now. Future-dated entries
       // belong to forecasts and must not change today's available balance.
       asOf: new Date().toISOString(),
     }),
-    [accounts, income, expenses, investments, transfers],
+    [accounts, income, expenses, investments, transfers, fxRates, baseCurrency],
   );
 
   const confirmDeleteAccount = (item) => {

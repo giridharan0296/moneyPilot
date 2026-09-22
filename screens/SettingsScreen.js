@@ -33,7 +33,7 @@ import {
   FONT_OPTIONS,
 } from '../contexts/ThemeContext';
 import buildCsv from '../lib/exportCsv';
-import { CURRENCIES, currencyMeta } from '../lib/currency';
+import { CURRENCIES, currencyMeta, isBaseCurrencyLocked } from '../lib/currency';
 import { spacing } from '../lib/theme';
 import { InfoCallout, StatusBadge } from '../components/UiPrimitives';
 import {
@@ -1868,6 +1868,18 @@ export function CurrencySection({
   const [addingCode, setAddingCode] = useState(null); // e.g. 'USD'
   const [addingRate, setAddingRate] = useState('');
 
+  // The base can't change under existing entries (see isBaseCurrencyLocked).
+  const { expenses: ledgerExpenses, income: ledgerIncome, investments: ledgerInvestments } = useTransactions();
+  const { transfers: ledgerTransfers } = useTransfers();
+  const { loans: ledgerLoans } = useLoans();
+  const baseIsLocked = isBaseCurrencyLocked({
+    expenses: ledgerExpenses,
+    income: ledgerIncome,
+    investments: ledgerInvestments,
+    transfers: ledgerTransfers,
+    loans: ledgerLoans,
+  });
+
   const sortedRateRows = Object.entries(fxRates ?? {})
     .filter(([code]) => code !== baseCurrency)
     .sort(([a], [b]) => a.localeCompare(b));
@@ -1907,7 +1919,7 @@ export function CurrencySection({
           body={
             'BASE CURRENCY\n'
             + 'Every dashboard total, chart, and report is expressed in this. Foreign-currency rows keep their native amount too — you\'ll see both on the row.\n\n'
-            + 'Changing the base does NOT retroactively rewrite historical row conversions — past ₹ totals stay ₹, only NEW rows adopt the new base.\n\n'
+            + 'The base can only be changed while you have no transactions, transfers or loans: every saved total is stored in it, so switching later would relabel your amounts rather than convert them. To switch, back up, reset, then set the new base before adding entries.\n\n'
             + 'FX RATES\n'
             + 'Set the current exchange rate for each foreign currency you use. These prefill the rate field when you add a transaction or foreign account.\n\n'
             + 'Updating a rate here does NOT retroactively re-value existing rows (their per-row rate is frozen at add time — matches how bank statements behave).'
@@ -1929,9 +1941,18 @@ export function CurrencySection({
               key={c.code}
               onPress={() => {
                 if (selected) return;
+                if (baseIsLocked) {
+                  Alert.alert(
+                    'Base currency is locked',
+                    `Your entries are saved in ${baseCurrency}, and every total is added up in it. Switching to ${c.code} now would relabel those amounts instead of converting them.
+
+To change it: back up your data, reset in Settings → Advanced, then set the new base currency before adding entries.`,
+                  );
+                  return;
+                }
                 Alert.alert(
                   'Change base currency?',
-                  `New totals and entries will use ${c.code}. Existing saved conversions stay unchanged.`,
+                  `New totals and entries will use ${c.code}.`,
                   [
                     { text: 'Cancel', style: 'cancel' },
                     { text: `Use ${c.code}`, onPress: () => onChangeBase?.(c.code) },

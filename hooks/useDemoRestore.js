@@ -20,6 +20,7 @@ import {
   confirmLoadDemo,
   DEMO_RESTORE_MESSAGE,
 } from '../lib/demoRestore';
+import { clearWriteBlocks } from '../lib/safeStorage';
 
 export function useDemoRestore() {
   const { restoreState: restoreSettings } = useSettings();
@@ -36,6 +37,9 @@ export function useDemoRestore() {
   const { setThemeMode, setFontId } = useTheme();
 
   const applyRestore = useCallback((payload) => {
+    // Restoring / loading demo data deliberately replaces what is stored, so
+    // keys that were blocked after a failed load may be written again.
+    clearWriteBlocks();
     const d = payload.data ?? {};
     const prefs = d.preferences ?? {};
     const failures = [];

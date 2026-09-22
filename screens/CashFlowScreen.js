@@ -64,6 +64,8 @@ export default function CashFlowScreen({ navigation }) {
       expenses,
       investments,
       transfers,
+      fxRates,
+      baseCurrency,
       asOf: new Date().toISOString(),
     });
     return accounts.reduce((sum, account) => {

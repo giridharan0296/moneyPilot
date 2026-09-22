@@ -8,6 +8,12 @@ import {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  blockWrites,
+  readStored,
+  readStoredJson,
+  writeStored,
+} from '../lib/safeStorage';
+import {
   STORAGE_KEYS,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
@@ -570,9 +576,9 @@ async function persistCategoriesThenMigrationFlag(catsByType, migApplied) {
       const key = storageKeyForCategoryType(type);
       const list = catsByType[type];
       if (!key || !Array.isArray(list)) continue;
-      await AsyncStorage.setItem(key, JSON.stringify(list));
+      await writeStored(key, JSON.stringify(list));
     }
-    await AsyncStorage.setItem(
+    await writeStored(
       STORAGE_KEYS.settings_migrations,
       JSON.stringify([...migApplied]),
     );
@@ -630,6 +636,20 @@ function migrateFlatAccounts(oldAccounts) {
   return { groups, accounts };
 }
 
+// Everything the settings load feeds. If loading throws part-way, saving any
+// of these could overwrite stored data with defaults, so they are all blocked.
+const SETTINGS_DATA_KEYS = [
+  STORAGE_KEYS.settings_categories_expense,
+  STORAGE_KEYS.settings_categories_income,
+  STORAGE_KEYS.settings_categories_investment,
+  STORAGE_KEYS.settings_accounts,
+  STORAGE_KEYS.settings_account_groups,
+  STORAGE_KEYS.base_currency,
+  STORAGE_KEYS.fx_rates,
+  STORAGE_KEYS.broker_defaults_by_subcategory,
+  STORAGE_KEYS.brokers,
+];
+
 export function SettingsProvider({ children }) {
   const [categories, setCategories] = useState({
     expense:    DEFAULT_EXPENSE_CATEGORIES,
@@ -682,18 +702,20 @@ export function SettingsProvider({ children }) {
     (async () => {
       try {
         const [expRaw, incRaw, invRaw, accRaw, grpRaw, whisperRaw, migRaw, baseRaw, ratesRaw, brokerDefRaw, aiRaw, brokersRaw] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.settings_categories_expense),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_categories_income),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_categories_investment),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_accounts),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_account_groups),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_whisper_api_key),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_migrations),
-          AsyncStorage.getItem(STORAGE_KEYS.base_currency),
-          AsyncStorage.getItem(STORAGE_KEYS.fx_rates),
-          AsyncStorage.getItem(STORAGE_KEYS.broker_defaults_by_subcategory),
-          AsyncStorage.getItem(STORAGE_KEYS.settings_ai_config),
-          AsyncStorage.getItem(STORAGE_KEYS.brokers),
+          readStoredJson(STORAGE_KEYS.settings_categories_expense),
+          readStoredJson(STORAGE_KEYS.settings_categories_income),
+          readStoredJson(STORAGE_KEYS.settings_categories_investment),
+          // Accounts are referenced by every transaction: if they can't be
+          // parsed, don't fall back to defaults and overwrite them.
+          readStoredJson(STORAGE_KEYS.settings_accounts, { blockOnCorrupt: true }),
+          readStoredJson(STORAGE_KEYS.settings_account_groups, { blockOnCorrupt: true }),
+          readStored(STORAGE_KEYS.settings_whisper_api_key),
+          readStoredJson(STORAGE_KEYS.settings_migrations),
+          readStored(STORAGE_KEYS.base_currency),
+          readStoredJson(STORAGE_KEYS.fx_rates),
+          readStoredJson(STORAGE_KEYS.broker_defaults_by_subcategory),
+          readStoredJson(STORAGE_KEYS.settings_ai_config),
+          readStoredJson(STORAGE_KEYS.brokers),
         ]);
         if (whisperRaw) setWhisperApiKeyState(whisperRaw);
 
@@ -930,6 +952,7 @@ export function SettingsProvider({ children }) {
         }
       } catch (e) {
         console.warn('Failed to load settings:', e);
+        blockWrites(SETTINGS_DATA_KEYS);
       } finally {
         setReady(true);
       }
@@ -940,7 +963,7 @@ export function SettingsProvider({ children }) {
   useEffect(() => {
     if (!ready) return;
     for (const type of CATEGORY_TYPES) {
-      AsyncStorage.setItem(
+      writeStored(
         storageKeyForCategoryType(type),
         JSON.stringify(categories[type]),
       ).catch((e) => console.warn(`Save categories/${type} failed:`, e));
@@ -950,7 +973,7 @@ export function SettingsProvider({ children }) {
   // ---- Auto-persist account groups + accounts ----
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.settings_account_groups,
       JSON.stringify(accountGroups),
     ).catch((e) => console.warn('Save account groups failed:', e));
@@ -958,7 +981,7 @@ export function SettingsProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.settings_accounts,
       JSON.stringify(accounts),
     ).catch((e) => console.warn('Save accounts failed:', e));
@@ -967,17 +990,17 @@ export function SettingsProvider({ children }) {
   // Currency plumbing — persist base + fx rate table on change.
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.base_currency, baseCurrency)
+    writeStored(STORAGE_KEYS.base_currency, baseCurrency)
       .catch((e) => console.warn('Save base currency failed:', e));
   }, [baseCurrency, ready]);
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.fx_rates, JSON.stringify(fxRates))
+    writeStored(STORAGE_KEYS.fx_rates, JSON.stringify(fxRates))
       .catch((e) => console.warn('Save FX rates failed:', e));
   }, [fxRates, ready]);
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.broker_defaults_by_subcategory,
       JSON.stringify(brokerDefaultsBySubCategory),
     ).catch((e) => console.warn('Save broker defaults failed:', e));
@@ -985,7 +1008,7 @@ export function SettingsProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.brokers,
       JSON.stringify(brokers),
     ).catch((e) => console.warn('Save brokers failed:', e));

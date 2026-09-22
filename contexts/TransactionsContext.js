@@ -30,8 +30,13 @@ import {
   useMemo,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  blockWrites,
+  readStoredJson,
+  writeStored,
+} from '../lib/safeStorage';
 import { STORAGE_KEYS } from '../constants';
+import { roundMoney } from '../lib/currency';
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { GOLD_CHIT_SUB_ID } from '../lib/goldChit';
 
@@ -64,7 +69,7 @@ function normalizeTx(t) {
   // and totals (which sum amountInBase) showed stale values.
   let amountInBase = null;
   if (isFinite(amount) && fxRateVal != null && fxRateVal > 0) {
-    amountInBase = amount * fxRateVal;
+    amountInBase = roundMoney(amount * fxRateVal);
   } else if (t?.amountInBase != null && isFinite(Number(t.amountInBase))) {
     amountInBase = Number(t.amountInBase);
   }
@@ -188,22 +193,31 @@ export function TransactionsProvider({ children }) {
   }[type]);
 
   // ---- Load persisted lists on mount ------------------------------------
+  //
+  // Each list loads on its own: one unreadable key must not stop the others
+  // from loading (they would then be overwritten with [] by the persist
+  // effects below). A key that can't be used is blocked from writes so its
+  // stored data survives — see lib/safeStorage.js.
   useEffect(() => {
-    (async () => {
+    const loadList = async (key, setList) => {
       try {
-        const [expRaw, incRaw, invRaw] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.expenses),
-          AsyncStorage.getItem(STORAGE_KEYS.income),
-          AsyncStorage.getItem(STORAGE_KEYS.investments),
-        ]);
-        if (expRaw) setExpenses(JSON.parse(expRaw).map(normalizeTx));
-        if (incRaw) setIncome(JSON.parse(incRaw).map(normalizeTx));
-        if (invRaw) setInvestments(JSON.parse(invRaw).map(normalizeTx));
+        const raw = await readStoredJson(key);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('expected an array');
+        setList(parsed.map(normalizeTx));
       } catch (e) {
-        console.warn('Failed to load transactions:', e);
-      } finally {
-        setReady(true);
+        console.warn(`Failed to load ${key}:`, e);
+        blockWrites(key);
       }
+    };
+    (async () => {
+      await Promise.all([
+        loadList(STORAGE_KEYS.expenses, setExpenses),
+        loadList(STORAGE_KEYS.income, setIncome),
+        loadList(STORAGE_KEYS.investments, setInvestments),
+      ]);
+      setReady(true);
     })();
   }, []);
 
@@ -211,17 +225,17 @@ export function TransactionsProvider({ children }) {
   //      keeps a per-type failure from clobbering the other two. ----------
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.expenses, JSON.stringify(expenses))
+    writeStored(STORAGE_KEYS.expenses, JSON.stringify(expenses))
       .catch((e) => console.warn('Save expenses failed:', e));
   }, [expenses, ready]);
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.income, JSON.stringify(income))
+    writeStored(STORAGE_KEYS.income, JSON.stringify(income))
       .catch((e) => console.warn('Save income failed:', e));
   }, [income, ready]);
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.investments, JSON.stringify(investments))
+    writeStored(STORAGE_KEYS.investments, JSON.stringify(investments))
       .catch((e) => console.warn('Save investments failed:', e));
   }, [investments, ready]);
 

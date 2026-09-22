@@ -21,7 +21,7 @@ import {
   useState,
 } from 'react';
 import { AppState } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 import {
   STORAGE_KEYS,
   DEFAULT_ASSET_CATEGORIES,
@@ -83,18 +83,20 @@ export function NetWorthProvider({ children }) {
     (async () => {
       try {
         const [assetsRaw, liabRaw, histRaw, hiddenRaw] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.assets),
-          AsyncStorage.getItem(STORAGE_KEYS.liabilities),
-          AsyncStorage.getItem(STORAGE_KEYS.networth_history),
-          AsyncStorage.getItem(STORAGE_KEYS.portfolio_sync_hidden_symbols),
+          readStoredJson(STORAGE_KEYS.assets),
+          readStoredJson(STORAGE_KEYS.liabilities),
+          readStoredJson(STORAGE_KEYS.networth_history),
+          readStoredJson(STORAGE_KEYS.portfolio_sync_hidden_symbols),
         ]);
         if (assetsRaw) {
           const parsed = JSON.parse(assetsRaw);
-          setAssets(Array.isArray(parsed) ? parsed.map((a) => normalizeBSRow(a, 'value')) : []);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
+          setAssets(parsed.map((a) => normalizeBSRow(a, 'value')));
         }
         if (liabRaw) {
           const parsed = JSON.parse(liabRaw);
-          setLiabilities(Array.isArray(parsed) ? parsed.map((l) => normalizeBSRow(l, 'outstanding')) : []);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
+          setLiabilities(parsed.map((l) => normalizeBSRow(l, 'outstanding')));
         }
         if (histRaw) {
           try {
@@ -118,6 +120,14 @@ export function NetWorthProvider({ children }) {
         }
       } catch (e) {
         console.warn('Failed to load net worth:', e);
+        // Also block history and hidden symbols: they load after assets and
+        // liabilities, so a throw above leaves them unread and empty here.
+        blockWrites([
+          STORAGE_KEYS.assets,
+          STORAGE_KEYS.liabilities,
+          STORAGE_KEYS.networth_history,
+          STORAGE_KEYS.portfolio_sync_hidden_symbols,
+        ]);
       } finally {
         setReady(true);
       }
@@ -127,25 +137,25 @@ export function NetWorthProvider({ children }) {
   // ---- Auto-persist ----
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.assets, JSON.stringify(assets))
+    writeStored(STORAGE_KEYS.assets, JSON.stringify(assets))
       .catch((e) => console.warn('Save assets failed:', e));
   }, [assets, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.liabilities, JSON.stringify(liabilities))
+    writeStored(STORAGE_KEYS.liabilities, JSON.stringify(liabilities))
       .catch((e) => console.warn('Save liabilities failed:', e));
   }, [liabilities, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.networth_history, JSON.stringify(history))
+    writeStored(STORAGE_KEYS.networth_history, JSON.stringify(history))
       .catch((e) => console.warn('Save NW history failed:', e));
   }, [history, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.portfolio_sync_hidden_symbols,
       JSON.stringify(portfolioSyncHiddenSymbols),
     ).catch((e) => console.warn('Save portfolio hidden symbols failed:', e));
