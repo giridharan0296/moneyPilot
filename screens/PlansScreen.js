@@ -1,4 +1,11 @@
-// Unified Plans screen — Budgets and Goals tabs with a shared create flow.
+// Budgets and Goals — each arrives here with an explicit `tab` intent
+// (Plan landing page, Home's shortcuts, and the dedicated Budgets/Goals
+// routes all pass one — see resolveInitialTab below), so this screen shows
+// ONLY that one, with no switcher to the other. It used to show both as a
+// side-by-side tab pair; that was removed because nothing in the app ever
+// actually arrives without already knowing which one it wants; the pane
+// components (BudgetPane / GoalsPane) are still shared for a single "+" add
+// flow, they're just not both reachable from either screen anymore.
 
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
@@ -18,11 +25,6 @@ import { GoalsPane } from '../screens/GoalsScreen';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { HELP_PLAN_CHOOSER } from '../lib/helpContent';
 import { radii, spacing } from '../lib/theme';
-
-const TABS = [
-  { id: 'budgets', label: 'Budgets' },
-  { id: 'goals', label: 'Goals' },
-];
 
 const CREATE_OPTIONS = [
   {
@@ -126,6 +128,28 @@ export default function PlansScreen({ navigation, route }) {
     [createSignal],
   );
 
+  const handleCreateChoice = (option) => {
+    setCreatePickerVisible(false);
+    setLockGoalKind(!!option.lockKind);
+    setCreateSignal({ ...option.signal, key: Date.now() });
+  };
+
+  // Only this screen's own tab's create options — Budgets has exactly one
+  // (a spending limit), so tapping "+" there skips the picker entirely and
+  // opens the budget form directly; Goals has two (save toward a target vs
+  // cap spending for a period), so the picker still earns its place there.
+  const createOptionsForTab = useMemo(
+    () => CREATE_OPTIONS.filter((option) => option.tab === tab),
+    [tab],
+  );
+  const openCreatePicker = () => {
+    if (createOptionsForTab.length === 1) {
+      handleCreateChoice(createOptionsForTab[0]);
+      return;
+    }
+    setCreatePickerVisible(true);
+  };
+
   // Header reflects the ACTIVE TAB, not just which route name was used to
   // get here — every route that lands on this shared screen (Plans,
   // PlanChooser, Budgets, Goals) was rendering the same "Plans" title with
@@ -143,7 +167,7 @@ export default function PlansScreen({ navigation, route }) {
       headerRight: () =>
         !formOpen ? (
           <TouchableOpacity
-            onPress={() => setCreatePickerVisible(true)}
+            onPress={openCreatePicker}
             hitSlop={12}
             style={{ paddingHorizontal: 8 }}
             accessibilityRole="button"
@@ -158,44 +182,23 @@ export default function PlansScreen({ navigation, route }) {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, formOpen, tab, colors.text.primary, colors.accent.expense, colors.accent.income]);
-
-  const handleCreateChoice = (option) => {
-    setCreatePickerVisible(false);
-    setTab(option.tab);
-    setLockGoalKind(!!option.lockKind);
-    setCreateSignal({ ...option.signal, key: Date.now() });
-  };
+  }, [navigation, formOpen, tab, createOptionsForTab, colors.text.primary, colors.accent.expense, colors.accent.income]);
 
   return (
     <View style={styles.screen}>
       {!formOpen ? (
         <View style={styles.introWrap}>
           <ScreenHelpIntro
-            title="Plans & limits"
-            subtitle="Budgets repeat; goals track a savings target or a one-time spend window."
+            title={tab === 'budgets' ? 'Budgets' : 'Goals'}
+            subtitle={
+              tab === 'budgets'
+                ? 'A repeating spending limit per category or overall — resets each week, month, or year.'
+                : 'A savings target or a one-time spending cap, tracked to a deadline.'
+            }
             help={HELP_PLAN_CHOOSER}
           />
         </View>
       ) : null}
-
-      <View style={styles.tabWrap}>
-        <View style={styles.tabSwitch}>
-          {TABS.map(({ id, label }) => {
-            const active = tab === id;
-            return (
-              <TouchableOpacity
-                key={id}
-                onPress={() => setTab(id)}
-                style={[styles.tabSegment, active && styles.tabSegmentActive]}
-                activeOpacity={0.75}
-              >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
 
       <View style={styles.pane}>
         {tab === 'budgets' ? (
@@ -231,11 +234,13 @@ export default function PlansScreen({ navigation, route }) {
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setCreatePickerVisible(false)}>
           <Pressable style={styles.modalCard} onPress={(event) => event.stopPropagation()}>
-            <Text style={styles.modalTitle}>What do you want to plan?</Text>
+            <Text style={styles.modalTitle}>
+              {tab === 'budgets' ? 'What kind of budget?' : 'What kind of goal?'}
+            </Text>
             <Text style={styles.modalLead}>
               Pick the type that matches your intent — you can add more anytime.
             </Text>
-            {CREATE_OPTIONS.map((option) => (
+            {createOptionsForTab.map((option) => (
               <MenuRow
                 key={option.id}
                 icon={option.icon}
@@ -264,38 +269,6 @@ const makeStyles = (c) => ({
   introWrap: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
-  },
-  tabWrap: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xs,
-  },
-  tabSwitch: {
-    flexDirection: 'row',
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: radii.pill,
-    padding: 3,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-  },
-  tabSegment: {
-    flex: 1,
-    paddingVertical: 9,
-    borderRadius: radii.pill,
-    alignItems: 'center',
-  },
-  tabSegmentActive: {
-    backgroundColor: c.bg.surface,
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0, 0, 0, 0.06)' }],
-    elevation: 1,
-  },
-  tabText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: c.text.secondary,
-  },
-  tabTextActive: {
-    color: c.text.primary,
   },
   pane: { flex: 1 },
   modalBackdrop: {
