@@ -52,10 +52,16 @@ import {
   computeRateChange,
   compareBalanceTransfer,
 } from '../lib/emi';
+import { currencyMeta } from '../lib/currency';
+import { currencySymbolForLoans, getLoanCurrency } from '../lib/loans';
 
+// Amounts use the app's base currency (LoansProvider keeps lib/loans in step
+// with Settings). The plain-language notes further down (Sec 24(b), LTCG, RBI
+// repo rate) describe Indian rules and are left as they are.
 function formatMoney(n) {
   if (!isFinite(n) || n == null) return '—';
-  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const meta = currencyMeta(getLoanCurrency());
+  return `${meta.symbol} ` + Number(n).toLocaleString(meta.locale ?? 'en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function formatPct(n, digits = 2) {
   if (!isFinite(n) || n == null) return '—';
@@ -88,7 +94,8 @@ function mapLoanKindToCalcType(loanKind) {
 
 function formatMoneyShort(n) {
   if (!isFinite(n) || n == null) return '—';
-  return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const meta = currencyMeta(getLoanCurrency());
+  return currencySymbolForLoans() + Number(n).toLocaleString(meta.locale ?? 'en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +306,7 @@ export default function EMICalculatorScreen({ route }) {
           label="Loan Amount"
           value={amount}
           onChangeText={setAmount}
-          prefix="₹"
+          prefix={currencySymbolForLoans().trim()}
           placeholder="500000"
         />
         <CalculatorField
@@ -849,7 +856,7 @@ function PastPrepaymentsSection({ entries, setEntries, elapsedInt }) {
           value={draftAmount}
           onChangeText={setDraftAmount}
           placeholder="Amount"
-          prefix="₹"
+          prefix={currencySymbolForLoans().trim()}
           flex={1}
         />
         <TouchableOpacity
@@ -974,7 +981,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
         label="Lump-sum amount"
         value={lumpSum}
         onChangeText={setLumpSum}
-        prefix="₹"
+        prefix={currencySymbolForLoans().trim()}
         placeholder="100000"
       />
       <CalculatorField
@@ -991,7 +998,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
         label="Amount per instalment"
         value={recurringAmt}
         onChangeText={setRecurringAmt}
-        prefix="₹"
+        prefix={currencySymbolForLoans().trim()}
         placeholder="50000"
       />
       <Text style={styles.miniLabelInline}>Frequency</Text>
@@ -1056,7 +1063,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
           value={newAmount}
           onChangeText={setNewAmount}
           placeholder="Amount"
-          prefix="₹"
+          prefix={currencySymbolForLoans().trim()}
           flex={1}
         />
         <TouchableOpacity
@@ -1075,6 +1082,14 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
             label="Strategy"
             value={strategy === 'tenure' ? 'Shorten tenure' : 'Reduce EMI'}
           />
+          {sim.ignoredExtras?.length > 0 ? (
+            <Text style={styles.tinyHint}>
+              {sim.ignoredExtras.length === 1
+                ? 'One prepayment falls after the loan is already repaid, so it was not counted.'
+                : `${sim.ignoredExtras.length} prepayments fall after the loan is already repaid, so they were not counted.`}
+            </Text>
+          ) : null}
+
           <View style={styles.miniDivider} />
 
           {strategy === 'tenure' ? (
@@ -1206,7 +1221,7 @@ function BestTimeSection({ inputs, baseResult, isInProgress }) {
         label="Prepayment amount (what-if)"
         value={amount}
         onChangeText={setAmount}
-        prefix="₹"
+        prefix={currencySymbolForLoans().trim()}
         placeholder="500000"
       />
 
@@ -1316,7 +1331,7 @@ function PrepayVsInvestSection({ inputs, baseResult }) {
         label="Amount to deploy"
         value={amount}
         onChangeText={setAmount}
-        prefix="₹"
+        prefix={currencySymbolForLoans().trim()}
         placeholder="500000"
       />
       <CalculatorField
@@ -1452,13 +1467,17 @@ function MoratoriumSection({ inputs }) {
   );
 
   // After moratorium, the new (higher) principal is amortized normally.
+  // `result` is null for unusable input (e.g. a blank rate or an absurd
+  // moratorium), in which case there is nothing to recalculate.
   const postMoratorium = useMemo(
     () =>
-      computeReducingBalanceEMI({
-        principal: result.effectivePrincipal,
-        annualRatePct: inputs.annualRatePct,
-        months: inputs.months,
-      }),
+      result
+        ? computeReducingBalanceEMI({
+          principal: result.effectivePrincipal,
+          annualRatePct: inputs.annualRatePct,
+          months: inputs.months,
+        })
+        : null,
     [result, inputs.annualRatePct, inputs.months],
   );
 
@@ -1633,7 +1652,7 @@ function BalanceTransferSection({
         label="Outstanding balance"
         value={balance}
         onChangeText={setBalance}
-        prefix="₹"
+        prefix={currencySymbolForLoans().trim()}
       />
       <CalculatorField
         label="Current rate"

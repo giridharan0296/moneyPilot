@@ -21,7 +21,6 @@ import {
   DeviceEventEmitter,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   SectionList,
   StyleSheet,
@@ -29,6 +28,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
 import TransferForm from '../components/TransferForm';
@@ -50,6 +50,7 @@ import { groupItemsByDay } from '../lib/transactionDayGroups';
 import { sortByCreatedAtDesc } from '../lib/transactionSort';
 import { elevation, radii, spacing } from '../lib/theme';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { accountCurrencyMismatchMessage, formatMoney as formatLoanMoney } from '../lib/loans';
 import { openTransactionsTab } from '../lib/navigationTabReset';
 
 const TRANSFER_ACCENT = '#0ea5e9';
@@ -65,7 +66,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
   const { assets, liabilities } = useNetWorth();
   const { showToast, showUndoableToast } = useToast();
   const { confirm } = useConfirmSheet();
-  const { filterByRange, rangeLabel, isAllTime } = useDateFilter();
+  const { filterByRange, label: rangeLabel, isAllTime } = useDateFilter();
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null); // full transfer object OR null
@@ -156,9 +157,11 @@ export default function TransfersScreen({ navigation, embedded = false }) {
         amount: values.amount,
         note: values.note,
         accountId: values.accountId,
+        // Keep the interest the user entered instead of re-deriving it.
+        statementInterest: Number(values.interestAmount) > 0 ? values.interestAmount : undefined,
       });
       if (!loanResult.ok) {
-        showToast(errorMessage(loanResult.reason), { variant: 'error' });
+        showToast(errorMessage(loanResult.reason, loanResult), { variant: 'error', duration: 3500 });
         return;
       }
       setCreating(false);
@@ -704,9 +707,12 @@ function EmptyState() {
 // Helpers
 // ----------------------------------------------------------------------------
 
-function errorMessage(reason) {
+function errorMessage(reason, result) {
   return {
     invalid_amount:       'Enter a positive amount.',
+    amount_exceeds_balance: `That is more than the loan requires. The most you can repay on this date is ${formatLoanMoney(result?.maxPayable ?? 0)}.`,
+    account_currency_mismatch: accountCurrencyMismatchMessage(result),
+    transfer_failed:      'The payment could not be applied to your account, so nothing was recorded.',
     invalid_kind:         'Unknown transfer kind.',
     invalid_account_pair: 'Choose two different accounts.',
     missing_linked:       'Pick which asset / liability this affects.',
@@ -786,27 +792,28 @@ const makeStyles = (c) => ({
   },
 
   totalCard: {
-    backgroundColor: c.bg.hero,
-    borderRadius: radii['2xl'],
-    padding: spacing['2xl'],
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-    ...elevation.raised,
+    backgroundColor: c.bg.surface,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: spacing.lg + 2,
+    marginBottom: spacing.lg,
   },
   totalLabel: {
-    color: c.text.onHeroMuted,
-    fontSize: 12,
-    letterSpacing: 1,
+    color: c.text.secondary,
+    fontSize: 11,
+    letterSpacing: 0.8,
     fontWeight: '600',
   },
   totalAmount: {
-    color: c.text.onHero,
-    fontSize: 36,
+    color: c.text.primary,
+    fontSize: 34,
     fontWeight: '700',
-    marginTop: spacing.sm,
+    letterSpacing: -0.6,
+    marginTop: spacing.xs,
   },
   totalSub: {
-    color: c.text.onHeroMuted,
+    color: c.text.secondary,
     fontSize: 12,
     marginTop: spacing.xs,
   },

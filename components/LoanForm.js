@@ -588,11 +588,13 @@ export default function LoanForm({
               return (
                 <TouchableOpacity
                   key={d.id}
-                  onPress={() => setDirection(d.id)}
+                  onPress={() => { if (!isEdit) setDirection(d.id); }}
+                  disabled={isEdit}
                   activeOpacity={0.7}
                   style={[
                     styles.chip,
                     selected && { backgroundColor: accent, borderColor: accent },
+                    isEdit && !selected && { opacity: 0.4 },
                   ]}
                 >
                   <View style={styles.chipInnerRow}>

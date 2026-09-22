@@ -65,7 +65,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 
 import { STORAGE_KEYS } from '../constants';
 import { useNetWorth } from './NetWorthContext';
@@ -146,13 +146,15 @@ export function TransfersProvider({ children }) {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.transfers);
+        const raw = await readStoredJson(STORAGE_KEYS.transfers);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
           if (Array.isArray(parsed)) setTransfers(parsed.map(normalize));
         }
       } catch (e) {
         console.warn('Failed to load transfers:', e);
+        blockWrites(STORAGE_KEYS.transfers);
       } finally {
         setReady(true);
       }
@@ -162,7 +164,7 @@ export function TransfersProvider({ children }) {
   // ---- Auto-persist ----
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.transfers, JSON.stringify(transfers))
+    writeStored(STORAGE_KEYS.transfers, JSON.stringify(transfers))
       .catch((e) => console.warn('Save transfers failed:', e));
   }, [transfers, ready]);
 
@@ -661,6 +663,10 @@ export function TransfersProvider({ children }) {
               note: 'Restored after undoing Repay Received (no snapshot)',
             });
           }
+        } else if (t.kind === 'loan_repayment' && t.loanArchived) {
+          // History left behind by a deleted loan (see LoansContext.deleteLoan):
+          // the loan and its liability are gone on purpose, so deleting the row
+          // must not bring a liability back.
         } else if (t.kind === 'loan_repayment') {
           const principal = amt - int;
           const existing = t.linkedNetWorthId ? findLiability(t.linkedNetWorthId) : null;

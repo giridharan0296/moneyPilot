@@ -27,12 +27,12 @@ import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
-  SafeAreaView,
   ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
 import { useLoans } from '../contexts/LoansContext';
@@ -120,16 +120,26 @@ export default function LoansScreen({ navigation, embedded = false }) {
   const handleDelete = (loan) => {
     Alert.alert(
       `Delete "${loan.name}"?`,
-      'This removes the loan, all its events, and the linked liability in Net Worth. This cannot be undone.',
+      'This removes the loan, all its events, and the linked liability in Net Worth. EMIs, interest and the loan credit already booked stay in your accounts and reports as ordinary entries, unless you also delete those. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Delete loan',
           style: 'destructive',
           onPress: () => {
             const res = deleteLoan(loan.id);
             if (res.ok) {
               showToast(`Deleted ${loan.name}`, { variant: 'success', duration: 1500 });
+            }
+          },
+        },
+        {
+          text: 'Delete loan and its payments',
+          style: 'destructive',
+          onPress: () => {
+            const res = deleteLoan(loan.id, { purgeHistory: true });
+            if (res.ok) {
+              showToast(`Deleted ${loan.name} and its payments`, { variant: 'success', duration: 1500 });
             }
           },
         },
@@ -162,7 +172,7 @@ export default function LoansScreen({ navigation, embedded = false }) {
           <VisualEmptyState
             icon="landmark"
             title="No loans tracked yet"
-            body="HDFC home loan → Bank / EMI. ₹5,000 to Rahul → Person. Outstanding, payments, and payoff all stay on this screen."
+            body={`HDFC home loan → Bank / EMI. ${formatMoney(5000).replace(/\.00$/, '')} to Rahul → Person. Outstanding, payments, and payoff all stay on this screen.`}
             actionLabel="Add first loan"
             onAction={() => openLoan({ mode: 'new' })}
             tint="#dc2626"

@@ -29,7 +29,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -37,6 +36,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import DateTimePicker from '../components/DatePicker';
 import LoanForm from '../components/LoanForm';
@@ -61,6 +61,7 @@ import {
   formatMoney,
   formatMoneyDetail,
   formatSchedule,
+  accountCurrencyMismatchMessage,
   interestProfileDescription,
   resolveInterestProfile,
 } from '../lib/loans';
@@ -261,7 +262,7 @@ export default function LoanDetailScreen({ route, navigation }) {
   const handleCreate = (values) => {
     const res = addLoan(values);
     if (!res.ok) {
-      Alert.alert('Could not create loan', errorMessage(res.reason));
+      Alert.alert('Could not create loan', errorMessage(res.reason, res));
       return;
     }
     setLoanId(res.loan.id);
@@ -273,7 +274,7 @@ export default function LoanDetailScreen({ route, navigation }) {
     if (!loan) return;
     const res = updateLoan(loan.id, values);
     if (!res.ok) {
-      Alert.alert('Could not update loan', errorMessage(res.reason));
+      Alert.alert('Could not update loan', errorMessage(res.reason, res));
       return;
     }
     setEditModal(false);
@@ -284,7 +285,7 @@ export default function LoanDetailScreen({ route, navigation }) {
     if (!loan) return;
     const res = fixLoanSetup(loan.id, { principal, ratePct, disburseDate });
     if (!res.ok) {
-      Alert.alert('Could not fix loan setup', errorMessage(res.reason));
+      Alert.alert('Could not fix loan setup', errorMessage(res.reason, res));
       return;
     }
     setFixSetupModal(false);
@@ -295,14 +296,22 @@ export default function LoanDetailScreen({ route, navigation }) {
     if (!loan) return;
     Alert.alert(
       `Delete "${loan.name}"?`,
-      'Removes the loan, its ledger, and the linked liability. Cannot be undone.',
+      'Removes the loan, its ledger, and the linked liability in Net Worth. EMIs, interest and the loan credit already booked stay in your accounts and reports as ordinary entries, unless you also delete those. Cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Delete loan',
           style: 'destructive',
           onPress: () => {
             deleteLoan(loan.id);
+            navigation.goBack();
+          },
+        },
+        {
+          text: 'Delete loan and its payments',
+          style: 'destructive',
+          onPress: () => {
+            deleteLoan(loan.id, { purgeHistory: true });
             navigation.goBack();
           },
         },
@@ -422,6 +431,10 @@ export default function LoanDetailScreen({ route, navigation }) {
     if (!confirmed) return;
 
     const result = backfillPaidEmis(loan.id);
+    if (result && result.ok === false && result.reason === 'account_currency_mismatch') {
+      Alert.alert('Could not record EMIs', errorMessage(result.reason, result));
+      return;
+    }
     const n = result?.recorded || 0;
     showToast(
       n > 0 ? `${n} EMI${n === 1 ? '' : 's'} recorded` : 'No EMIs recorded',
@@ -674,7 +687,7 @@ export default function LoanDetailScreen({ route, navigation }) {
                       onPress: () => {
                         const res = deleteEvent(loan.id, evt.id);
                         if (!res.ok) {
-                          Alert.alert('Cannot delete', errorMessage(res.reason));
+                          Alert.alert('Cannot delete', errorMessage(res.reason, res));
                         }
                       },
                     },
@@ -703,7 +716,7 @@ export default function LoanDetailScreen({ route, navigation }) {
         onSubmit={({ amount, date, note, accountId, statementInterest }) => {
           const res = logEmi(loan.id, { amount, date, note, accountId, statementInterest });
           if (!res.ok) {
-            Alert.alert('Could not log EMI', errorMessage(res.reason));
+            Alert.alert('Could not log EMI', errorMessage(res.reason, res));
             return;
           }
           setEmiModal(false);
@@ -731,7 +744,7 @@ export default function LoanDetailScreen({ route, navigation }) {
             amount, date, note, adjustmentMode, accountId, interestCreditDate,
           });
           if (!res.ok) {
-            Alert.alert('Could not log prepayment', errorMessage(res.reason));
+            Alert.alert('Could not log prepayment', errorMessage(res.reason, res));
             return;
           }
           setPlannedPrepayAmount(null);
@@ -753,7 +766,7 @@ export default function LoanDetailScreen({ route, navigation }) {
             newRatePct, effectiveDate, adjustmentMode, note,
           });
           if (!res.ok) {
-            Alert.alert('Could not update rate', errorMessage(res.reason));
+            Alert.alert('Could not update rate', errorMessage(res.reason, res));
             return;
           }
           setRateModal(false);
@@ -1050,11 +1063,11 @@ function AmountModal({
                   value={statementInterest}
                   onChangeText={setStatementInterest}
                   keyboardType="numeric"
-                  placeholder="e.g. 20439"
+                  placeholder="e.g. 20439.35"
                   placeholderTextColor="#9ca3af"
                 />
                 <Text style={styles.modalHint}>
-                  Enter the interest portion from YONO/statement for a rupee-perfect match with SBI.
+                  Enter the interest portion from your bank statement, paise included (e.g. 9862.73), to match it exactly. The rest of the payment is principal.
                 </Text>
               </>
             )}
@@ -1643,13 +1656,14 @@ function buildCalcSeed(loan) {
   };
 }
 
-function errorMessage(reason) {
+function errorMessage(reason, result) {
   return {
     invalid_amount:      'Enter a positive amount.',
     invalid_principal:   'Principal must be positive.',
     invalid_name:        'Give the loan a name.',
     invalid_rate:        'Enter a valid non-negative rate.',
     invalid_date:        'The disburse date must be on or before every recorded EMI / prepayment / rate-change event.',
+    account_currency_mismatch: accountCurrencyMismatchMessage(result),
     principal_credit_account_required: 'Choose the account that received the loan principal.',
     principal_credit_before_account_opening: 'The loan date is before this account’s opening-balance date. Change the loan date, choose another account, or select “No, keep it as loan-only” to avoid counting money twice.',
     principal_credit_liability_failed: 'The loan liability could not be created, so the account was not credited.',
@@ -1659,6 +1673,14 @@ function errorMessage(reason) {
     not_found:           'Loan not found.',
     event_not_found:     'Event not found.',
     cannot_delete_disburse: 'You cannot delete the initial disbursement event.',
+    loan_closed:         'This loan is already closed.',
+    before_disburse:     'The date cannot be before the loan was disbursed.',
+    amount_exceeds_balance: `That is more than is owed. The most you can pay on this date is ${formatMoney(result?.maxPayable ?? 0)} (what is outstanding plus that day's interest). To pay a lump sum off early, log it as a prepayment.`,
+    over_repay:          'The linked Net Worth liability is lower than this payment. Correct or restore it in Net Worth, then try again.',
+    linked_not_found:    'The linked Net Worth liability for this loan was deleted, so the payment could not be applied. Recreate it in Net Worth or re-add the loan.',
+    transfer_failed:     'The payment could not be applied to your account, so nothing was recorded.',
+    direction_locked:    'The loan type and direction cannot be changed after creation. Delete the loan and add it again.',
+    adjusted_terms_locked: 'EMI and tenure have been adjusted by a rate change or prepayment, so they cannot be edited directly. Delete that event first, or use Fix loan setup.',
   }[reason] ?? 'Something went wrong.';
 }
 
