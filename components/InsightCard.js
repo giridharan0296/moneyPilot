@@ -21,6 +21,7 @@ import { Text, TouchableOpacity, View } from 'react-native';
 
 import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { elevation } from '../lib/theme';
 
 // Per-severity visual language. Colours chosen from the same palette
 // used elsewhere for status semantics (red = danger, amber = warn,
@@ -138,10 +139,12 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surface,
     borderRadius: 14,
     marginBottom: 12,
-    // Softer shadow than the tool-menu cards — insights are a busy
-    // list and a heavy shadow becomes visual noise.
-    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 4, color: 'rgba(0, 0, 0, 0.04)' }],
-    elevation: 1,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    // Matches the app-wide card language — a hairline border plus the
+    // same very light `elevation.card` shadow Home/Transactions use,
+    // not a heavier ad hoc shadow.
+    ...elevation.card,
     overflow: 'hidden',
   },
   cardCompact: {

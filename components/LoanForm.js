@@ -44,14 +44,23 @@ import {
   computeFirstEmiSplit,
   enumerateEmiDueDates,
   firstScheduledEmiDate,
-  formatMoney,
+  getLoanCurrency,
   interestProfileDescription,
   resolveInterestProfile,
   splitPrincipalInterestAtDate,
 } from '../lib/loans';
+import { formatMoneyDisplay } from '../lib/currency';
 import { isOnOrAfterAccountOpeningDate } from '../lib/accountBalances';
+import { moneyText } from '../lib/theme';
 import { StatusBadge } from './UiPrimitives';
 import QuickAddPickerItem from './QuickAddPickerItem';
+
+// Loans are tracked to the paisa (see lib/loans.js), so amounts here always
+// show their exact decimals — formatMoneyDisplay's `exact` mode just drops a
+// redundant ".00" on whole amounts, it never rounds away real paise.
+function formatMoney(n) {
+  return formatMoneyDisplay(n, getLoanCurrency(), { exact: true });
+}
 
 const DIRECTIONS = [
   { id: 'owed_by_me', label: 'I owe (borrower)',    icon: 'download' },
@@ -1209,7 +1218,7 @@ const makeStyles = (c) => ({
   accountImpactLabel: { alignSelf: 'flex-start', color: c.accent.primary, backgroundColor: c.accent.primary + '18', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11, fontWeight: '800' },
   outstandingPreview: { width: '100%', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.border.subtle, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
   outstandingLabel: { flex: 1, color: c.text.secondary, fontSize: 11, lineHeight: 15 },
-  outstandingValue: { fontSize: 19, fontWeight: '900' },
+  outstandingValue: { ...moneyText.tile, fontSize: 19 },
   trackingEmpty: { color: c.text.muted, fontSize: 11, lineHeight: 16, marginTop: 8 },
 
   buttonRow: { flexDirection: 'row', gap: 10, marginTop: 20 },

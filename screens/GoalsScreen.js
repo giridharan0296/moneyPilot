@@ -35,8 +35,16 @@ import {
   filterAccountsForGoalPicker,
   filterOtherAssetsForGoalPicker,
 } from '../lib/goals';
-import { radii, spacing } from '../lib/theme';
-import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { radii, spacing, moneyText } from '../lib/theme';
+import { formatMoneyDisplay } from '../lib/currency';
+
+// Goal progress is derived from linked Net Worth assets, which can carry
+// genuine paise (a synced bank balance). `exact: true` drops a redundant
+// ".00" on whole amounts (a round target like ₹5,00,000) without rounding
+// away a real fractional balance.
+function formatMoneyCurrency(n, code) {
+  return formatMoneyDisplay(n, code, { exact: true });
+}
 
 const GOAL_TEMPLATES = [
   { id: 'emergency', name: 'Emergency Fund', emoji: '🚨', targetAmount: 300000 },
@@ -615,8 +623,7 @@ const makeStyles = (c) => ({
     marginTop: 6,
   },
   progressCurrent: {
-    fontSize: 16,
-    fontWeight: '800',
+    ...moneyText.tile,
     color: c.text.primary,
   },
   progressTarget: {

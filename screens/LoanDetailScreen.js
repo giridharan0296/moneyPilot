@@ -58,15 +58,23 @@ import {
   enumerateEmiDueDates,
   firstScheduledEmiDate,
   formatDate,
-  formatMoney,
-  formatMoneyDetail,
   formatSchedule,
+  getLoanCurrency,
   accountCurrencyMismatchMessage,
   interestProfileDescription,
   resolveInterestProfile,
 } from '../lib/loans';
-import { radii, spacing } from '../lib/theme';
+import { formatMoneyDisplay } from '../lib/currency';
+import { radii, spacing, moneyText } from '../lib/theme';
 import { isOnOrAfterAccountOpeningDate } from '../lib/accountBalances';
+
+// Loans are tracked to the paisa (see lib/loans.js), so amounts here always
+// show their exact decimals — formatMoneyDisplay's `exact` mode just drops a
+// redundant ".00" on whole amounts, it never rounds away real paise.
+function formatMoney(n) {
+  return formatMoneyDisplay(n, getLoanCurrency(), { exact: true });
+}
+const formatMoneyDetail = formatMoney;
 
 // Vector-icon meta for each ledger event kind. `icon` names refer to
 // entries in components/AppIcon.js. `color` doubles as the event's
@@ -1706,7 +1714,7 @@ const makeStyles = (c) => ({
   heroName: { fontSize: 18, fontWeight: '700', color: c.text.primary },
   heroSub: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
   heroOutstandingLabel: { fontSize: 10, fontWeight: '700', color: c.text.muted, letterSpacing: 0.6 },
-  heroOutstandingValue: { fontSize: 28, fontWeight: '800', color: c.text.primary, marginTop: 2 },
+  heroOutstandingValue: { ...moneyText.hero, fontSize: 28, color: c.text.primary, marginTop: 2 },
   progressTrack: {
     marginTop: spacing.md, height: 8, backgroundColor: c.bg.surfaceAlt,
     borderRadius: 4, overflow: 'hidden',

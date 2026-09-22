@@ -47,7 +47,7 @@ import { COLOR_PALETTE } from '../constants';
 // from '../constants' silently returned `undefined`, which only blew
 // up when the user opened the add/edit account form — the currency
 // chip row runs `CURRENCIES.map(...)` under `showCurrency: true`.
-import { CURRENCIES } from '../lib/currency';
+import { CURRENCIES, formatMoneyDisplay } from '../lib/currency';
 import { computeAccountBalances } from '../lib/accountBalances';
 
 // Swipe-to-delete tuning — kept identical to CategoriesScreen so the
@@ -555,12 +555,12 @@ function SwipeableAccountRow({ account, baseCurrency, currentBalance, onEdit, on
                 </Text>
               </View>
               <Text style={styles.currentBalanceText}>
-                Current balance {accCurrency} {(Number(currentBalance) || 0).toLocaleString('en-IN')}
+                Current balance {formatMoneyDisplay(currentBalance, accCurrency, { exact: true })}
               </Text>
             </View>
             {hasOpeningBalance ? (
               <Text style={styles.openingBalanceText}>
-                Opening balance {accCurrency} {(Number(account.openingBalance) || 0).toLocaleString('en-IN')}
+                Opening balance {formatMoneyDisplay(account.openingBalance, accCurrency, { exact: true })}
                 {` · ${formatShortDate(account.openingBalanceDate)}`}
               </Text>
             ) : null}

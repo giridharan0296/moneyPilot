@@ -46,9 +46,17 @@ import {
   computePayoffPercent,
   computePayoffProjection,
   formatDate,
-  formatMoney,
+  getLoanCurrency,
 } from '../lib/loans';
-import { radii, spacing, elevation } from '../lib/theme';
+import { formatMoneyDisplay } from '../lib/currency';
+import { radii, spacing, elevation, moneyText } from '../lib/theme';
+
+// Loans are tracked to the paisa (see lib/loans.js), so amounts here always
+// show their exact decimals — formatMoneyDisplay's `exact` mode just drops a
+// redundant ".00" on whole amounts, it never rounds away real paise.
+function formatMoney(n) {
+  return formatMoneyDisplay(n, getLoanCurrency(), { exact: true });
+}
 
 const GROUPS = [
   { id: 'owed_by_me', title: 'I owe',       direction: 'owed_by_me',   emptyHint: 'Add a bank loan or money you borrowed from someone.' },
@@ -172,7 +180,7 @@ export default function LoansScreen({ navigation, embedded = false }) {
           <VisualEmptyState
             icon="landmark"
             title="No loans tracked yet"
-            body={`HDFC home loan → Bank / EMI. ${formatMoney(5000).replace(/\.00$/, '')} to Rahul → Person. Outstanding, payments, and payoff all stay on this screen.`}
+            body={`HDFC home loan → Bank / EMI. ${formatMoney(5000)} to Rahul → Person. Outstanding, payments, and payoff all stay on this screen.`}
             actionLabel="Add first loan"
             onAction={() => openLoan({ mode: 'new' })}
             tint="#dc2626"
@@ -350,7 +358,7 @@ const makeStyles = (c) => ({
   rowMetaRow: { marginTop: 4 },
   rowMetaText: { fontSize: 11, lineHeight: 15, color: c.text.muted, flexShrink: 1 },
   rowAmountBlock: { alignItems: 'flex-end', flexShrink: 0, minWidth: 64 },
-  rowAmount: { fontSize: 14, fontWeight: '700', color: c.text.primary },
+  rowAmount: { ...moneyText.row, color: c.text.primary },
   rowAmountSub: { fontSize: 10, color: c.text.muted, marginTop: 2, paddingHorizontal: 1 },
 
   toggleClosed: {

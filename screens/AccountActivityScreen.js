@@ -33,9 +33,16 @@ import {
   computeAccountPeriodActivity,
   computeAllAccountsPeriodActivity,
 } from '../lib/accountBalances';
-import { formatMoney } from '../lib/currency';
+import { formatMoneyDisplay } from '../lib/currency';
 import '../lib/motion';
-import { radii, spacing } from '../lib/theme';
+import { radii, spacing, moneyText } from '../lib/theme';
+
+// Account movements can carry genuine paise (a synced bank balance, a
+// fractional EMI split flowing through as a transfer). `exact: true` drops
+// a redundant ".00" on whole amounts without rounding away real fractions.
+function formatMoney(n, code) {
+  return formatMoneyDisplay(n, code, { exact: true });
+}
 
 const CHART_WIDTH = Dimensions.get('window').width - 64;
 
@@ -471,7 +478,7 @@ const makeStyles = (c) => ({
     borderRadius: radii.lg,
   },
   metricLabel: { color: c.text.secondary, fontWeight: '700', fontSize: 10, textTransform: 'uppercase' },
-  metricValue: { marginTop: 4, fontSize: 16, fontWeight: '800' },
+  metricValue: { ...moneyText.tile, marginTop: 4 },
   sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, fontSize: 15, fontWeight: '800', color: c.text.primary },
   balanceHint: { marginTop: spacing.sm, fontSize: 11, color: c.text.secondary, fontStyle: 'italic' },
   chartsLabel: {

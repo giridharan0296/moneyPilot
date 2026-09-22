@@ -464,6 +464,8 @@ const makeStyles = (c) => ({
     marginTop: 24,
     backgroundColor: c.bg.surface,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
   },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: c.text.primary, marginTop: 12 },
   emptyBody:  { fontSize: 13, color: c.text.secondary, textAlign: 'center', marginTop: 6, lineHeight: 18 },
