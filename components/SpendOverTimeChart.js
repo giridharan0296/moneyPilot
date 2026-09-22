@@ -427,10 +427,7 @@ const makeStyles = (c) => ({
   },
   modeChipActive: {
     backgroundColor: c.bg.surface,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 4, color: 'rgba(15, 23, 42, 0.08)' }],
     elevation: 1,
   },
   modeText: { fontSize: 11, fontWeight: '600', color: c.text.muted },

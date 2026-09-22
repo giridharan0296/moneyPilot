@@ -273,10 +273,7 @@ const makeStyles = (c) => ({
   },
   tabSegmentActive: {
     backgroundColor: c.bg.surface,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
+    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 4, color: 'rgba(0, 0, 0, 0.06)' }],
     elevation: 1,
   },
   tabText: {

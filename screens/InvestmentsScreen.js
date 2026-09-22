@@ -16,7 +16,6 @@
 import { useEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
-  Platform,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -97,13 +96,7 @@ const makeStyles = (c) => ({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 30,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    boxShadow: [{ offsetX: 0, offsetY: 4, blurRadius: 10, color: 'rgba(0, 0, 0, 0.25)' }],
     elevation: 6,
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0 4px 14px rgba(0,0,0,0.25)' }
-      : null),
   },
 });

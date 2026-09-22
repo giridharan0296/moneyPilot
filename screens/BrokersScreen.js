@@ -681,10 +681,7 @@ const makeStyles = (c) => ({
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: c.border.subtle,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    boxShadow: [{ offsetX: 0, offsetY: 4, blurRadius: 12, color: 'rgba(0, 0, 0, 0.12)' }],
     elevation: 6,
   },
   menuItem: {

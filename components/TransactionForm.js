@@ -2349,7 +2349,7 @@ export default function TransactionForm({
         />
       )}
       </ScrollView>
-      <View style={styles.micRail} pointerEvents="box-none">
+      <View style={[styles.micRail, { pointerEvents: 'box-none' }]}>
         <SpeakToFillButton
           onTranscript={applyTranscript}
           onNeedsManualInput={() => setManualTranscript('')}

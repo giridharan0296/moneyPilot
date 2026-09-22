@@ -159,9 +159,9 @@ export default function CategoryPieChart({
             height: hubHeight,
             left: (canvasSize - hubWidth) / 2,
             top: (canvasSize - hubHeight) / 2,
+            pointerEvents: 'none',
           },
         ]}
-        pointerEvents="none"
       >
         <View
           style={[
@@ -221,8 +221,7 @@ export default function CategoryPieChart({
       <Svg
         width={canvasSize}
         height={canvasSize}
-        style={{ position: 'absolute', top: 0, left: 0 }}
-        pointerEvents="box-none"
+        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'box-none' }}
       >
         <Rect
           x={0}

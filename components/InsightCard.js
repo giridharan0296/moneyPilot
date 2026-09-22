@@ -140,10 +140,7 @@ const makeStyles = (c) => ({
     marginBottom: 12,
     // Softer shadow than the tool-menu cards — insights are a busy
     // list and a heavy shadow becomes visual noise.
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 4, color: 'rgba(0, 0, 0, 0.04)' }],
     elevation: 1,
     overflow: 'hidden',
   },

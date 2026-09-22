@@ -86,7 +86,7 @@ export default function QuickAddSheet({ visible, onClose, onSelect }) {
           accessibilityLabel="Close add menu"
         />
 
-        <View style={[styles.anchor, { top: insets.top + 6 }]} pointerEvents="box-none">
+        <View style={[styles.anchor, { top: insets.top + 6, pointerEvents: 'box-none' }]}>
           {OPTIONS.map((option, index) => {
             const tint = option.tint ?? colors.accent[option.tintKey];
             const delayedProgress = progress.interpolate({

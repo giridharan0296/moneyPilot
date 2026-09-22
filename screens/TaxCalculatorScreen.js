@@ -1412,7 +1412,7 @@ const makeStyles = (c) => ({
     gap: spacing.md,
     // Slight lift so it doesn't feel flat on top of the scrim.
     ...(Platform.OS === 'ios'
-      ? { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 16 }
+      ? { boxShadow: [{ offsetX: 0, offsetY: 8, blurRadius: 16, color: 'rgba(0, 0, 0, 0.2)' }] }
       : { elevation: 8 }),
   },
   modalTitle: {
