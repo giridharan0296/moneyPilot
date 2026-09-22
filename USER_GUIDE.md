@@ -10,7 +10,7 @@ FinanceIQ is an app for recording daily money activity, tracking investments and
 2. Open **Settings → Accounts**. Create your bank accounts, wallets, cash wallets, and credit cards.
 3. When adding an account, enter its current **opening balance** if you want its activity balance to start from the amount already present.
 4. Add income, expenses, and investments from the corresponding bottom tabs.
-5. Use **More → Reports**, **Account Activity**, and **Net Worth** to review your progress.
+5. Use **Home**, the **Wealth** tab (Net Worth) and **More → Reports** to review your progress.
 
 ### Try the app with sample data
 
@@ -25,15 +25,19 @@ Export a backup before loading demo data if you need to keep current records.
 
 ## Main navigation
 
-### Dashboard
+### Home
 
-The Dashboard gives a high-level view of the selected date range:
+Home is always about the **current month**. It answers three questions:
 
-- Income, expenses, investments, available balance, and savings rate
-- Month-close and month-over-month spending signals
-- Category spending, upcoming recurring bills, budgets, goals, net worth, and recent activity
+- **Where do I stand?** Your net worth, and how much it moved this month.
+- **What should I do next?** Up to three suggestions based on your own data — a budget that is over or close to its limit, bills due in the next three days, spending running ahead of last month, a savings goal that is behind schedule, or setup that is missing. These work without an AI key.
+- **Where did the money go?** Saved, Spent and Invested for the month, spending pace against the same point last month, your top categories, and a spending trend.
 
-Use the date control at the top to change the period. Dashboard cashflow is a **period view**; it is not the same thing as an individual bank-account balance.
+Below that are upcoming bills, plans (budgets, goals, loans and lending), and recent activity.
+
+**Saved** is income minus expenses, and the savings rate is Saved as a share of income. Money you put into investments or loan principal still counts as saved.
+
+Use the ⋮ menu in the header to hide sections you don't need. To look at other periods, use the date control on Transactions and Reports; Home does not follow it.
 
 ### Transactions
 
@@ -134,11 +138,11 @@ Use it for bank accounts, wallets, physical cash, and credit cards.
 
 ### Budgets
 
-Open **More → Budgets** to set category or overall spending limits. Progress is calculated from expense transactions in the budget period.
+Open the **Plan** tab and choose **Budgets** to set category or overall spending limits. Progress is calculated from expense transactions in the budget period.
 
 ### Goals
 
-Open **More → Goals** to create:
+Open the **Plan** tab and choose **Goals** to create:
 
 - **Savings goals** — target amount, deadline, and optional linked assets
 - **Spend-cap goals** — spending target for selected categories
@@ -175,7 +179,9 @@ The financial-year section uses the Indian April–March definition. For example
 
 ## Net worth, loans, and portfolio
 
-### Net Worth
+### Net Worth (Wealth tab)
+
+The **Wealth** tab opens on Net Worth. The investment log, Portfolio, Rebalance and Market mix are listed just below the headline figure.
 
 Net Worth is a separate balance sheet for assets and liabilities:
 
@@ -259,7 +265,7 @@ The app sends an aggregate financial summary to your selected provider; individu
 
 ### Without an API key
 
-Open the Insights tab and tap **View sample insights**. These are local example cards only. They do not analyze your finances and do not send data anywhere.
+Open **Plan → AI insights** and tap **View sample insights**. These are local example cards only. They do not analyze your finances and do not send data anywhere.
 
 ## Expense splits
 

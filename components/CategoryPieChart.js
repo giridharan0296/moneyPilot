@@ -3,7 +3,7 @@ import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { G, Path, Rect } from 'react-native-svg';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
-import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { formatMoney as formatMoneyCurrency, formatMoneyDisplay } from '../lib/currency';
 import { radii, spacing } from '../lib/theme';
 
 // Interactive donut chart — tap a slice (or legend row) to pop it out and
@@ -44,12 +44,10 @@ function formatPercent(pct) {
   return `${Math.round(pct)}%`;
 }
 
+// The hub is narrow and web ignores adjustsFontSizeToFit, so switch to
+// lakh/crore (or K/M) once the whole-unit figure would overflow.
 function formatCenterAmount(value, baseCurrency) {
-  const full = formatMoneyCurrency(value, baseCurrency);
-  if (full.length > 11) {
-    return formatMoneyCurrency(value, baseCurrency, { compact: true });
-  }
-  return full;
+  return formatMoneyDisplay(value, baseCurrency, { compactFrom: 1e5 });
 }
 
 function buildSegments(data, cx, cy, innerR, outerR, gapDeg = SEGMENT_GAP) {
@@ -340,7 +338,7 @@ export function PieLegendList({
                   style={[styles.legendAmount, selected && styles.legendAmountSelected]}
                   numberOfLines={1}
                 >
-                  {formatMoneyCurrency(r.value, baseCurrency)}
+                  {formatMoneyDisplay(r.value, baseCurrency, { exact: true })}
                 </Text>
               </View>
               <View style={styles.legendPercentCol}>

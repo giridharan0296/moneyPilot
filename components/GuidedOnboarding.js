@@ -14,7 +14,7 @@ const STEPS = [
     title: 'See your complete money picture',
     body: `${APP_DISPLAY_NAME} brings daily cash flow, investments, loans, goals, and net worth into one place.`,
     points: [
-      ['home', 'Dashboard', 'Your useful summary, controlled by the date filter.'],
+      ['home', 'Home', 'Your net worth, what to do next, and where your money went this month.'],
       ['plus', 'Quick add', 'Use + to record income, expenses, and investments.'],
       ['layout-grid', 'More', 'Find reports, loans, imports, calculators, and settings.'],
     ],

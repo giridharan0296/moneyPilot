@@ -1,7 +1,7 @@
 import { Text, TouchableOpacity, View } from 'react-native';
 
 import AppIcon from './AppIcon';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { withAlpha } from '../lib/colorAlpha';
 
 const HUB_ITEMS = [
@@ -10,33 +10,30 @@ const HUB_ITEMS = [
     route: 'NetWorth',
     icon: 'gem',
     label: 'Net Worth',
-    color: '#14b8a6',
   },
   {
     key: 'balance',
     route: 'PortfolioBalance',
     icon: 'target',
     label: 'Balance',
-    color: '#6366f1',
   },
   {
     key: 'market',
     route: 'MarketAllocation',
     icon: 'bar-chart-2',
     label: 'Market mix',
-    color: '#0891b2',
   },
   {
     key: 'portfolio',
     route: 'Portfolio',
     icon: 'bar-chart-2',
     label: 'Portfolio',
-    color: '#7c3aed',
   },
 ];
 
 export default function InvestHub({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const accent = useThemeColors().accent.primary;
 
   return (
     <View style={styles.wrap}>
@@ -54,8 +51,8 @@ export default function InvestHub({ navigation }) {
             accessibilityRole="button"
             accessibilityLabel={`Open ${item.label}`}
           >
-            <View style={[styles.iconBadge, { backgroundColor: withAlpha(item.color, 0.14) }]}>
-              <AppIcon name={item.icon} size={20} color={item.color} strokeWidth={2.1} />
+            <View style={[styles.iconBadge, { backgroundColor: withAlpha(accent, 0.1) }]}>
+              <AppIcon name={item.icon} size={20} color={accent} strokeWidth={2.1} />
             </View>
             <Text style={styles.chipLabel} numberOfLines={1}>
               {item.label}

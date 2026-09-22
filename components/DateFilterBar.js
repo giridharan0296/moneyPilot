@@ -10,7 +10,7 @@ import AppIcon from './AppIcon';
 import PressableScale from './PressableScale';
 import { useDateFilter } from '../contexts/DateFilterContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
-import { elevation, radii, spacing } from '../lib/theme';
+import { radii, spacing } from '../lib/theme';
 
 // ----------------------------------------------------------------------------
 // DateFilterBar — slim period control shared by Dashboard + Transactions.
@@ -132,9 +132,6 @@ export default function DateFilterBar() {
         />
       )}
 
-      <Text style={styles.scopeNote}>
-        Filters Dashboard, transactions, and Reports. Budgets and goals use their own periods.
-      </Text>
     </View>
   );
 }
@@ -209,7 +206,6 @@ const makeStyles = (c) => ({
     padding: 3,
     borderWidth: 1,
     borderColor: c.border.subtle,
-    ...elevation.card,
   },
   segment: {
     flex: 1,
@@ -303,13 +299,5 @@ const makeStyles = (c) => ({
     color: c.text.primary,
     fontWeight: '600',
     marginTop: 2,
-  },
-
-  scopeNote: {
-    fontSize: 11,
-    lineHeight: 15,
-    color: c.text.muted,
-    textAlign: 'center',
-    paddingHorizontal: 4,
   },
 });

@@ -1,26 +1,27 @@
 // ----------------------------------------------------------------------------
 // App.js — top-level navigation shell.
 //
-// Structure (5 bottom tabs — down from 6):
+// Structure (5 bottom tabs):
 //
 //   NavigationContainer
 //     └── Tab.Navigator  (bottom tabs)
 //           ├── Home           → DashboardScreen (single screen)
 //           ├── Transactions   → in-screen top tabs (Income | Expense)
 //           │                    with a contextual "+" FAB
-//           ├── Invest         → InvestmentsStack (nested!)
-//           │       ├── InvestmentsHome
-//           │       ├── Portfolio
-//           │       ├── ImportHoldings
-//           │       └── NetWorth       (assets + liabilities balance sheet)
-//           ├── Insights       → InsightsStack (nested!)
-//           │       └── InsightsHome    (AI-generated financial coach)
+//           ├── Wealth         → InvestmentsStack (route 'Invest'; nested)
+//           │       ├── NetWorth       (landing: assets − liabilities)
+//           │       ├── InvestmentsHome (investment log)
+//           │       ├── Portfolio · PortfolioBalance · MarketAllocation
+//           │       └── ImportHoldings
+//           ├── Plan           → InsightsStack (route 'Insights'; nested)
+//           │       ├── PlanHome        (landing: do-this-next + budgets/goals)
+//           │       ├── Plans · Budgets · Goals · PlanChooser
+//           │       └── InsightsHome    (optional AI review)
 //           └── More           → MoreStack (nested!)
-//                   ├── MoreMenu        (sectioned hub — Analyze / Track
-//                   │                    & rules / Import / Calculators
-//                   │                    / App)
+//                   ├── MoreMenu        (sectioned hub — Analyze / Track /
+//                   │                    Import / Explore / App)
 //                   ├── Reports · CashFlow · ActivityTimeline  (Analyze)
-//                   ├── Plans · Loans · Recurring
+//                   ├── Loans · Recurring
 //                   │   · Transfers → Transactions tab (legacy redirect)
 //                   ├── ImportBankStatement
 //                   │   · ImportTransactions               (Import)
@@ -30,7 +31,7 @@
 //                   ├── LoanDetail                          (loan drill-in)
 //                   └── Settings                            (App)
 //
-// Nested-stack pattern (Invest / Insights / More): the tab hosts a stack,
+// Nested-stack pattern (Wealth / Plan / More): the tab hosts a stack,
 // the tab's own header is hidden, and the inner stack manages headers
 // and back-navigation.
 //
@@ -38,9 +39,13 @@
 //   v1 — 7 tabs (Income + Expense split).
 //   v2 — 6 tabs (merged into Transactions with top-tabs).
 //   v3 — 6 tabs + Analysis promoted from Tools.
-//   v4 (this) — 5 tabs. Analysis + Tools + Settings folded into a single
+//   v4 — 5 tabs. Analysis + Tools + Settings folded into a single
 //               "More" hub with a sectioned menu, so daily-use tabs
 //               (Home, Transactions, Invest, Insights) stay hero.
+//   v5 (this) — same 5 tabs, reframed around "improve your position":
+//               Invest → Wealth (lands on Net Worth), Insights → Plan (lands
+//               on do-this-next + budgets/goals; AI Insights is one row in it).
+//               Route names Invest / Insights are kept so deep links still work.
 // ----------------------------------------------------------------------------
 
 import { useEffect } from 'react';
@@ -86,6 +91,7 @@ import ImportTransactionsScreen  from './screens/ImportTransactionsScreen';
 import ImportBankStatementScreen from './screens/ImportBankStatementScreen';
 import RecurringTransactionsScreen from './screens/RecurringTransactionsScreen';
 import PlansScreen               from './screens/PlansScreen';
+import PlanScreen                from './screens/PlanScreen';
 import TransfersRedirectScreen   from './screens/TransfersRedirectScreen';
 import ReportsScreen             from './screens/ReportsScreen';
 import InsurancePoliciesScreen   from './screens/InsurancePoliciesScreen';
@@ -135,135 +141,29 @@ const Stack = createNativeStackNavigator();
 
 // Vector-icon renderer for the tab bar.
 //
-// Colour behaviour:
-//   Icons are ALWAYS rendered in their tab's signature colour — no
-//   "grey when inactive, coloured when focused" flip. Users think of
-//   the strip as a fixed set of colourful landmarks (Home is blue,
-//   Income is green, ...) so recognising and reaching for a tab
-//   should never depend on which tab happens to be active.
-//
-// Focus indicator:
-//   Instead of the icon flipping colour, we lean on TWO subtler cues:
-//     1. A small size + stroke bump on the focused icon (24 px / 2.4
-//        stroke vs 22 / 1.9) — it "leans in" slightly.
-//     2. The label colour, which react-navigation drives via
-//        `tabBarActiveTintColor` set per-screen below.
-//   Together that keeps "you are here" obvious without hiding the
-//   other tabs' identity behind a wall of grey.
-function tabIcon(name, tint) {
-  return ({ focused }) => (
+// Icons take the colour react-navigation resolves for the tab: the theme
+// accent when focused, muted text otherwise. Colour is reserved for meaning
+// elsewhere in the app (green/red = money direction), so the strip stays
+// neutral and the active tab is the only coloured item. Focus is also shown
+// by a small size + stroke bump.
+function tabIcon(name) {
+  return ({ focused, color }) => (
     <AppIcon
       name={name}
       size={focused ? 24 : 22}
-      color={tint}
+      color={color}
       strokeWidth={focused ? 2.4 : 2}
     />
   );
 }
 
-// Sugar helper for the ~20 stack screens' `headerTitle`. Emits a render
-// function that plugs the given icon + label + tint into
-// HeaderTitleWithIcon. Keeps the per-screen `options` blocks short:
+// Sugar helper for the stack screens' headerTitle: icon + label, with the icon
+// in the theme's neutral text colour (no per-screen tint).
 //
-//   options={{ headerTitle: hdr('wallet', 'Income', TAB_TINTS.Income) }}
-//
-// versus the alternative of writing an inline `() => <HeaderTitleWithIcon
-// icon="..." label="..." tint="..." />` for each one.
-function hdr(icon, label, tint) {
-  return () => <HeaderTitleWithIcon icon={icon} label={label} tint={tint} />;
+//   options={{ headerTitle: hdr('wallet', 'Income') }}
+function hdr(icon, label) {
+  return () => <HeaderTitleWithIcon icon={icon} label={label} />;
 }
-
-// Signature colours for the five bottom tabs. Picked to match the semantic
-// mental model each tab represents:
-//   Dashboard    → blue    (neutral/informational)
-//   Transactions → slate   (neutral bucket — Income/Expense have their own
-//                             green/red tints on the top-tab strip inside)
-//   Invest       → violet  (growth/portfolio)
-//   Insights     → indigo  (AI / exploration — same tint as the previous
-//                             Analysis tab so muscle memory transfers)
-//   More         → amber   (utilities / catch-all)
-// Chosen from the same palette family so the strip reads cohesive
-// (no neon greens, no candy pinks) — high enough contrast for both
-// light and dark themes without needing per-mode overrides.
-const TAB_TINTS = {
-  Dashboard:    '#3b82f6',
-  Transactions: '#0891b2',   // cyan — sits between Dashboard blue and
-                             // Invest violet without competing, and stays
-                             // chromatically clear of the green/red top-
-                             // tabs rendered inside the Transactions
-                             // screen. Prior near-black (#0f172a) read
-                             // as flat / lifeless next to the coloured
-                             // tabs around it.
-  Invest:       '#7c3aed',
-  Insights:     '#6366f1',   // indigo — new headline feature, kept the
-                             // same tint the old Analysis tab used so the
-                             // eye still finds it in the same "slot".
-  More:         '#f59e0b',   // amber — replaces the previous Tools tint;
-                             // still reads as "utilities / open drawer".
-};
-
-// Per-stack-screen accent colours. Kept in one place so every stack
-// header pulls from the same palette rather than each screen picking
-// its own. Grouped by which stack owns the screen.
-const HEADER_TINTS = {
-  // Transactions (top-level tab, no nested stack)
-  Transactions:  TAB_TINTS.Transactions,
-
-  // InvestmentsStack
-  Investments:   TAB_TINTS.Invest,    // violet
-  Portfolio:     '#7c3aed',            // violet family
-  PortfolioBalance: '#6366f1',        // indigo — allocation rebalance
-  MarketAllocation: '#0891b2',      // cyan — stocks/MF/ETF mix
-  ImportHoldings:'#8b5cf6',            // lighter violet
-  NetWorth:      '#14b8a6',            // teal — feels like "wealth"
-
-  // InsightsStack
-  Insights:      TAB_TINTS.Insights,   // indigo
-
-  // MoreStack — absorbs the old Analysis + Tools + Settings sub-screens.
-  More:          TAB_TINTS.More,       // amber — the hub itself
-  // (Analyze) — from the old AnalysisStack
-  Search:        '#0891b2',            // teal-cyan
-  Reports:       '#7c3aed',            // violet
-  CashFlow:      '#14b8a6',            // teal
-  // (Track & rules)
-  Budgets:       '#dc2626',            // red
-  Loans:         '#dc2626',            // red
-  LoanDetail:    '#dc2626',            // red — inherits Loans identity
-  Goals:         '#059669',            // emerald
-  PlanChooser:   '#6366f1',            // indigo — budget vs goal wizard
-  Insurance:     '#0d9488',            // teal
-  Recurring:     '#f59e0b',            // amber
-  Transfers:     '#0ea5e9',            // cyan
-  // (Import)
-  ImportTransactions:  '#8b5cf6',      // violet
-  ImportBankStatement: '#8b5cf6',      // violet — same family
-  // (Calculators)
-  FinancialTools: '#2563eb',      // unified calculator and research hub
-  EMICalculator: '#3b82f6',            // blue
-  SIPCalculator: '#10b981',            // emerald
-  TaxCalculator: '#f97316',            // orange
-  FireCalculator:'#ef4444',            // red-orange
-  SWPCalculator: '#10b981',            // monthly income / withdrawals
-  MISCalculator: '#0d9488',            // fixed-income monthly interest
-  GratuityCalculator: '#059669',        // employment benefit
-  FundamentalAnalysis: '#7c3aed',      // violet — stock research
-  StockMarket: '#0f766e',              // teal — live market overview
-  StockHistory: '#0891b2',             // cyan — price history
-  MarketIndices: '#0f766e',
-  MarketGainers: '#059669',
-  MarketLosers: '#dc2626',
-  // (App)
-  Settings:      '#64748b',            // slate — quiet system chrome
-  Categories:    '#0891b2',            // cyan — matches the "tag" glyph and
-                                       // sits visually apart from Settings.
-  Accounts:      '#0ea5e9',            // sky blue — feels like "banking" and
-                                       // pairs with the wallet/credit-card
-                                       // iconography used on the hub card.
-  Brokers:       '#f97316',            // orange — pairs with Zerodha's brand
-                                       // tone and visually separates broker
-                                       // (investment) from account (cash).
-};
 
 // Shared header look for both stacks — computed from the active theme so
 // dark mode picks up dark headers / titles without any per-screen edits.
@@ -292,69 +192,110 @@ function TransactionsStack() {
       <Stack.Screen
         name="TransactionsHome"
         component={TransactionsScreen}
-        options={{ headerTitle: hdr('arrow-down-up', 'Transactions', HEADER_TINTS.Transactions) }}
+        options={{ headerTitle: hdr('arrow-down-up', 'Transactions') }}
       />
       <Stack.Screen
         name="LoanDetail"
         component={LoanDetailScreen}
-        options={{ headerTitle: hdr('landmark', 'Loan', HEADER_TINTS.LoanDetail) }}
+        options={{ headerTitle: hdr('landmark', 'Loan') }}
+      />
+      {/* 'Open in Calc' on a loan opened from this tab. */}
+      <Stack.Screen
+        name="EMICalculator"
+        component={EMICalculatorScreen}
+        options={{ headerTitle: hdr('calculator', 'EMI Calculator') }}
       />
     </Stack.Navigator>
   );
 }
 
+// Wealth tab (route name 'Invest' is historical). Lands on Net Worth — the
+// answer to 'how much do I have?' — with the investment log, portfolio and
+// allocation tools one tap away from there.
 function InvestmentsStack() {
   const { colors, fontFamilyBold, isDark } = useTheme();
   return (
-    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
+    <Stack.Navigator
+      initialRouteName="NetWorth"
+      screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}
+    >
       <Stack.Screen
         name="InvestmentsHome"
         component={InvestmentsScreen}
-        options={{ headerTitle: hdr('pie-chart', 'Investments', HEADER_TINTS.Investments) }}
+        options={{ headerTitle: hdr('pie-chart', 'Investments') }}
       />
       <Stack.Screen
         name="Portfolio"
         component={PortfolioScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Portfolio', HEADER_TINTS.Portfolio) }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Portfolio') }}
       />
       <Stack.Screen
         name="PortfolioBalance"
         component={PortfolioBalanceScreen}
-        options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio', HEADER_TINTS.PortfolioBalance) }}
+        options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio') }}
       />
       <Stack.Screen
         name="MarketAllocation"
         component={MarketAllocationScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Market Allocation', HEADER_TINTS.MarketAllocation) }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Market Allocation') }}
       />
       <Stack.Screen
         name="ImportHoldings"
         component={ImportHoldingsScreen}
-        options={{ headerTitle: hdr('download', 'Import Holdings', HEADER_TINTS.ImportHoldings) }}
+        options={{ headerTitle: hdr('download', 'Import Holdings') }}
       />
       <Stack.Screen
         name="NetWorth"
         component={NetWorthScreen}
-        options={{ headerTitle: hdr('gem', 'Net Worth', HEADER_TINTS.NetWorth) }}
+        options={{ headerTitle: hdr('gem', 'Net Worth') }}
       />
     </Stack.Navigator>
   );
 }
 
-// Insights tab — the AI-generated financial coach. Wrapped in its own
-// small Stack (rather than a bare Tab.Screen) so:
-//   1. The header gets the same icon+label+tint treatment as every
-//      other stack via `hdr('sparkles', ...)`.
-//   2. Future detail screens (per-insight drill-down, insight history,
-//      etc.) can be pushed onto this stack without touching App.js.
+// Plan tab (route name 'Insights' is historical — the tab is now labelled Plan).
+// Landing is PlanScreen: what to do next, budgets/goals status, and links to
+// manage them. Budgets/Goals editors (PlansScreen) and AI Insights are pushed
+// on top of it.
 function InsightsStack() {
   const { colors, fontFamilyBold, isDark } = useTheme();
   return (
-    <Stack.Navigator screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}>
+    <Stack.Navigator
+      initialRouteName="PlanHome"
+      screenOptions={makeStackScreenOptions(colors, fontFamilyBold, isDark)}
+    >
+      <Stack.Screen
+        name="PlanHome"
+        component={PlanScreen}
+        options={{ headerTitle: hdr('target', 'Plan') }}
+      />
+      <Stack.Screen
+        name="Plans"
+        component={PlansScreen}
+        options={{ headerTitle: hdr('compass', 'Plans') }}
+      />
+      <Stack.Screen
+        name="PlanChooser"
+        component={PlansScreen}
+        initialParams={{ promptCreate: true }}
+        options={{ headerTitle: hdr('compass', 'Plans') }}
+      />
+      <Stack.Screen
+        name="Budgets"
+        component={PlansScreen}
+        initialParams={{ tab: 'budgets' }}
+        options={{ headerTitle: hdr('target', 'Plans') }}
+      />
+      <Stack.Screen
+        name="Goals"
+        component={PlansScreen}
+        initialParams={{ tab: 'goals' }}
+        options={{ headerTitle: hdr('flag', 'Plans') }}
+      />
       <Stack.Screen
         name="InsightsHome"
         component={InsightsScreen}
-        options={{ headerTitle: hdr('sparkles', 'AI Insights', HEADER_TINTS.Insights) }}
+        options={{ headerTitle: hdr('sparkles', 'AI Insights') }}
       />
     </Stack.Navigator>
   );
@@ -373,200 +314,177 @@ function MoreStack() {
       <Stack.Screen
         name="MoreMenu"
         component={MoreMenuScreen}
-        options={{ headerTitle: hdr('layout-grid', 'More', HEADER_TINTS.More) }}
+        options={{ headerTitle: hdr('layout-grid', 'More') }}
       />
 
       {/* ---- Analyze (was AnalysisStack) ---- */}
       <Stack.Screen
         name="DataHealth"
         component={DataHealthScreen}
-        options={{ headerTitle: hdr('activity', 'Data check', '#059669') }}
+        options={{ headerTitle: hdr('activity', 'Data check') }}
       />
       <Stack.Screen
         name="ActivityTimeline"
         component={ActivityTimelineScreen}
-        options={{ headerTitle: hdr('activity', 'Activity & search', '#0ea5e9') }}
+        options={{ headerTitle: hdr('activity', 'Activity & search') }}
       />
       <Stack.Screen
         name="Reports"
         component={ReportsScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Reports', HEADER_TINTS.Reports) }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Reports') }}
       />
       <Stack.Screen
         name="CashFlow"
         component={CashFlowScreen}
-        options={{ headerTitle: hdr('activity', 'Cash Flow Forecast', HEADER_TINTS.CashFlow) }}
+        options={{ headerTitle: hdr('activity', 'Cash Flow Forecast') }}
       />
       <Stack.Screen
         name="Search"
         component={ActivityTimelineScreen}
         initialParams={{ mode: 'search' }}
-        options={{ headerTitle: hdr('search', 'Activity & search', '#0ea5e9') }}
+        options={{ headerTitle: hdr('search', 'Activity & search') }}
       />
 
       {/* ---- Track & rules (was ToolsStack) ---- */}
       <Stack.Screen
-        name="Plans"
-        component={PlansScreen}
-        options={{ headerTitle: hdr('compass', 'Plans', '#6366f1') }}
-      />
-      <Stack.Screen
-        name="PlanChooser"
-        component={PlansScreen}
-        initialParams={{ promptCreate: true }}
-        options={{ headerTitle: hdr('compass', 'Plans', '#6366f1') }}
-      />
-      <Stack.Screen
-        name="Budgets"
-        component={PlansScreen}
-        initialParams={{ tab: 'budgets' }}
-        options={{ headerTitle: hdr('target', 'Plans', '#6366f1') }}
-      />
-      <Stack.Screen
         name="Loans"
         component={LoansRedirectScreen}
-        options={{ headerTitle: hdr('landmark', 'Loans', HEADER_TINTS.Loans) }}
+        options={{ headerTitle: hdr('landmark', 'Loans') }}
       />
       <Stack.Screen
         name="LoanDetail"
         component={LoanDetailScreen}
-        options={{ headerTitle: hdr('landmark', 'Loan', HEADER_TINTS.LoanDetail) }}
-      />
-      <Stack.Screen
-        name="Goals"
-        component={PlansScreen}
-        initialParams={{ tab: 'goals' }}
-        options={{ headerTitle: hdr('flag', 'Plans', '#6366f1') }}
+        options={{ headerTitle: hdr('landmark', 'Loan') }}
       />
       <Stack.Screen
         name="InsurancePolicies"
         component={InsurancePoliciesScreen}
-        options={{ headerTitle: hdr('shield', 'Insurance', HEADER_TINTS.Insurance) }}
+        options={{ headerTitle: hdr('shield', 'Insurance') }}
       />
       <Stack.Screen
         name="RecurringTransactions"
         component={RecurringTransactionsScreen}
-        options={{ headerTitle: hdr('repeat', 'Recurring', HEADER_TINTS.Recurring) }}
+        options={{ headerTitle: hdr('repeat', 'Recurring') }}
       />
       <Stack.Screen
         name="Transfers"
         component={TransfersRedirectScreen}
-        options={{ headerTitle: hdr('arrow-right-left', 'Transfers', HEADER_TINTS.Transfers) }}
+        options={{ headerTitle: hdr('arrow-right-left', 'Transfers') }}
       />
 
       {/* ---- Import ---- */}
       <Stack.Screen
         name="ImportBankStatement"
         component={ImportBankStatementScreen}
-        options={{ headerTitle: hdr('landmark', 'Bank Statement Import', HEADER_TINTS.ImportBankStatement) }}
+        options={{ headerTitle: hdr('landmark', 'Bank Statement Import') }}
       />
       <Stack.Screen
         name="ImportTransactions"
         component={ImportTransactionsScreen}
-        options={{ headerTitle: hdr('download', 'Import Transactions', HEADER_TINTS.ImportTransactions) }}
+        options={{ headerTitle: hdr('download', 'Import Transactions') }}
       />
 
       {/* ---- Financial tools ---- */}
       <Stack.Screen
         name="FinancialTools"
         component={FinancialToolsScreen}
-        options={{ headerTitle: hdr('calculator', 'Financial Tools', HEADER_TINTS.FinancialTools) }}
+        options={{ headerTitle: hdr('calculator', 'Financial Tools') }}
       />
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
-        options={{ headerTitle: hdr('calculator', 'EMI Calculator', HEADER_TINTS.EMICalculator) }}
+        options={{ headerTitle: hdr('calculator', 'EMI Calculator') }}
       />
       <Stack.Screen
         name="SIPCalculator"
         component={SIPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-up', 'SIP Calculator', HEADER_TINTS.SIPCalculator) }}
+        options={{ headerTitle: hdr('trending-up', 'SIP Calculator') }}
       />
       <Stack.Screen
         name="TaxCalculator"
         component={TaxCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Tax Calculator', HEADER_TINTS.TaxCalculator) }}
+        options={{ headerTitle: hdr('receipt', 'Tax Calculator') }}
       />
       <Stack.Screen
         name="FireCalculator"
         component={FireCalculatorScreen}
-        options={{ headerTitle: hdr('flame', 'FIRE Calculator', HEADER_TINTS.FireCalculator) }}
+        options={{ headerTitle: hdr('flame', 'FIRE Calculator') }}
       />
       <Stack.Screen
         name="SWPCalculator"
         component={SWPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-down', 'SWP Calculator', HEADER_TINTS.SWPCalculator) }}
+        options={{ headerTitle: hdr('trending-down', 'SWP Calculator') }}
       />
       <Stack.Screen
         name="MISCalculator"
         component={MISCalculatorScreen}
-        options={{ headerTitle: hdr('wallet', 'MIS Calculator', HEADER_TINTS.MISCalculator) }}
+        options={{ headerTitle: hdr('wallet', 'MIS Calculator') }}
       />
       <Stack.Screen
         name="GratuityCalculator"
         component={GratuityCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator', HEADER_TINTS.GratuityCalculator) }}
+        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator') }}
       />
       <Stack.Screen
         name="FundamentalAnalysis"
         component={FundamentalAnalysisScreen}
-        options={{ headerTitle: hdr('search', 'Fundamentals', HEADER_TINTS.FundamentalAnalysis) }}
+        options={{ headerTitle: hdr('search', 'Fundamentals') }}
       />
       <Stack.Screen
         name="StockMarket"
         component={StockMarketScreen}
-        options={{ headerTitle: hdr('trending-up', 'Stock Market', HEADER_TINTS.StockMarket) }}
+        options={{ headerTitle: hdr('trending-up', 'Stock Market') }}
       />
       <Stack.Screen
         name="StockHistory"
         component={StockHistoryScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Price History', HEADER_TINTS.StockHistory) }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Price History') }}
       />
       <Stack.Screen
         name="MarketIndices"
         component={MarketBoardScreen}
         initialParams={{ board: 'indices' }}
-        options={{ headerTitle: hdr('bar-chart-2', 'Nifty Indices', HEADER_TINTS.MarketIndices) }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Nifty Indices') }}
       />
       <Stack.Screen
         name="MarketGainers"
         component={MarketBoardScreen}
         initialParams={{ board: 'gainers' }}
-        options={{ headerTitle: hdr('trending-up', 'Top Gainers', HEADER_TINTS.MarketGainers) }}
+        options={{ headerTitle: hdr('trending-up', 'Top Gainers') }}
       />
       <Stack.Screen
         name="MarketLosers"
         component={MarketBoardScreen}
         initialParams={{ board: 'losers' }}
-        options={{ headerTitle: hdr('trending-down', 'Top Losers', HEADER_TINTS.MarketLosers) }}
+        options={{ headerTitle: hdr('trending-down', 'Top Losers') }}
       />
 
       {/* ---- App ---- */}
       <Stack.Screen
         name="Settings"
         component={SettingsHubScreen}
-        options={{ headerTitle: hdr('settings', 'Settings', HEADER_TINTS.Settings) }}
+        options={{ headerTitle: hdr('settings', 'Settings') }}
       />
       <Stack.Screen
         name={'SettingsAppearance'}
         component={SettingsAppearanceScreen}
-        options={{ headerTitle: hdr('sun', 'Appearance', '#7c3aed') }}
+        options={{ headerTitle: hdr('sun', 'Appearance') }}
       />
       <Stack.Screen
         name={'SettingsAccountsData'}
         component={SettingsAccountsDataScreen}
-        options={{ headerTitle: hdr('wallet', 'Accounts & data', '#0ea5e9') }}
+        options={{ headerTitle: hdr('wallet', 'Accounts & data') }}
       />
       <Stack.Screen
         name={'SettingsAI'}
         component={SettingsAIScreen}
-        options={{ headerTitle: hdr('sparkles', 'AI', '#0891b2') }}
+        options={{ headerTitle: hdr('sparkles', 'AI') }}
       />
       <Stack.Screen
         name={'SettingsAdvanced'}
         component={AdvancedSettingsScreen}
         initialParams={{ section: 'advanced' }}
-        options={{ headerTitle: hdr('wrench', 'Advanced', '#f97316') }}
+        options={{ headerTitle: hdr('wrench', 'Advanced') }}
       />
       {/* Categories were extracted out of Settings in the v4 polish
           pass — Settings now shows a compact hub card that pushes
@@ -575,7 +493,7 @@ function MoreStack() {
       <Stack.Screen
         name="Categories"
         component={CategoriesScreen}
-        options={{ headerTitle: hdr('tag', 'Categories', HEADER_TINTS.Categories) }}
+        options={{ headerTitle: hdr('tag', 'Categories') }}
       />
       {/* Accounts got the same treatment as Categories — the two-level
           group-card UI moved out of Settings into its own screen with
@@ -584,12 +502,12 @@ function MoreStack() {
       <Stack.Screen
         name="Accounts"
         component={AccountsScreen}
-        options={{ headerTitle: hdr('wallet', 'Accounts', HEADER_TINTS.Accounts) }}
+        options={{ headerTitle: hdr('wallet', 'Accounts') }}
       />
       <Stack.Screen
         name="AccountActivity"
         component={AccountActivityScreen}
-        options={{ headerTitle: hdr('activity', 'Account Activity', '#0ea5e9') }}
+        options={{ headerTitle: hdr('activity', 'Account Activity') }}
       />
       {/* Brokers — the same v4-polish pattern applied to broker
           management. Accounts hold CASH (HDFC Savings, Cash wallet);
@@ -601,7 +519,7 @@ function MoreStack() {
       <Stack.Screen
         name="Brokers"
         component={BrokersScreen}
-        options={{ headerTitle: hdr('trending-up', 'Brokers', HEADER_TINTS.Brokers) }}
+        options={{ headerTitle: hdr('trending-up', 'Brokers') }}
       />
     </Stack.Navigator>
   );
@@ -666,10 +584,7 @@ function ThemedApp() {
         <Tab.Navigator
           screenOptions={{
             lazy: true,
-            // Global default — every tab OVERRIDES `tabBarActiveTintColor`
-            // in its own `options` below so the icon + label light up in
-            // that tab's signature colour on focus. This global value only
-            // applies if a tab forgets to set its own.
+            // One accent for the active tab, muted text for the rest.
             tabBarActiveTintColor:   colors.accent.primary,
             tabBarInactiveTintColor: colors.text.secondary,
             tabBarLabelStyle: {
@@ -708,10 +623,9 @@ function ThemedApp() {
             name="Dashboard"
             component={DashboardScreen}
             options={{
-              headerTitle: hdr('home', 'Dashboard', TAB_TINTS.Dashboard),
+              headerTitle: hdr('home', 'Home'),
               tabBarLabel: 'Home',
-              tabBarActiveTintColor: TAB_TINTS.Dashboard,
-              tabBarIcon: tabIcon('home', TAB_TINTS.Dashboard),
+              tabBarIcon: tabIcon('home'),
               safeAreaInsets: {
                 top: Math.max(
                   insets.top,
@@ -729,25 +643,23 @@ function ThemedApp() {
             options={{
               headerShown: false,
               tabBarLabel: 'Transactions',
-              tabBarActiveTintColor: TAB_TINTS.Transactions,
               // A scalloped receipt glyph — one clear silhouette that
               // reads as "your ledger of entries" at 24 dp. Chosen over
               // the previous `arrow-down-up` (two thin arrows) because
               // the double-arrow was fiddly at tab-bar size and got
               // visually lost next to the bolder single-glyph icons on
               // the other tabs (home, pie-chart, sparkles, layout-grid).
-              tabBarIcon: tabIcon('receipt', TAB_TINTS.Transactions),
+              tabBarIcon: tabIcon('receipt'),
             }}
           />
           <Tab.Screen
             name="Invest"
             component={InvestmentsStack}
-            listeners={stackTabListeners('InvestmentsHome')}
+            listeners={stackTabListeners('NetWorth')}
             options={{
               headerShown: false,
-              tabBarLabel: 'Invest',
-              tabBarActiveTintColor: TAB_TINTS.Invest,
-              tabBarIcon: tabIcon('pie-chart', TAB_TINTS.Invest),
+              tabBarLabel: 'Wealth',
+              tabBarIcon: tabIcon('gem'),
             }}
           />
           {/* Insights — AI-generated financial coach. Kept as its own
@@ -758,11 +670,11 @@ function ThemedApp() {
           <Tab.Screen
             name="Insights"
             component={InsightsStack}
+            listeners={stackTabListeners('PlanHome')}
             options={{
               headerShown: false,
-              tabBarLabel: 'Insights',
-              tabBarActiveTintColor: TAB_TINTS.Insights,
-              tabBarIcon: tabIcon('sparkles', TAB_TINTS.Insights),
+              tabBarLabel: 'Plan',
+              tabBarIcon: tabIcon('target'),
             }}
           />
           {/* More — the catch-all hub. Absorbs the old Analysis + Tools +
@@ -777,8 +689,7 @@ function ThemedApp() {
             options={{
               headerShown: false,
               tabBarLabel: 'More',
-              tabBarActiveTintColor: TAB_TINTS.More,
-              tabBarIcon: tabIcon('layout-grid', TAB_TINTS.More),
+              tabBarIcon: tabIcon('layout-grid'),
             }}
           />
         </Tab.Navigator>

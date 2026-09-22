@@ -44,6 +44,7 @@ export default function SpendOverTimeChart({
   height = DEFAULT_HEIGHT,
   lineColor = '#dc2626',
   defaultRangeId = '30d',
+  compact = false, // range chips + plot only: no mode toggle, no stat tiles
 }) {
   const styles = useThemedStyles(makeStyles);
   const [rangeId, setRangeId] = useState(defaultRangeId);
@@ -94,6 +95,7 @@ export default function SpendOverTimeChart({
             );
           })}
         </View>
+        {compact ? null : (
         <View style={styles.modeRow}>
           <TouchableOpacity
             onPress={() => setMode('daily')}
@@ -112,9 +114,10 @@ export default function SpendOverTimeChart({
             </Text>
           </TouchableOpacity>
         </View>
+        )}
       </View>
 
-      <View style={styles.plotShell}>
+      <View style={compact ? null : styles.plotShell}>
         <ChartBody
           series={series}
           width={width}
@@ -125,7 +128,7 @@ export default function SpendOverTimeChart({
         />
       </View>
 
-      {stats && hasSpend ? (
+      {!compact && stats && hasSpend ? (
         <View style={styles.statsRow}>
           <Stat label={`Total · ${activeRange.label}`} value={compactMoney(stats.total)} />
           <Stat
@@ -324,10 +327,15 @@ function smoothBezierPath(points) {
     const p2 = points[i + 1];
     const p3 = points[i + 2] || p2;
 
+    // Clamp each control point's y between its two anchor points so the
+    // curve can't overshoot — an unclamped spline dips below the zero
+    // baseline right before a spike, which reads as negative spending.
+    const lo = Math.min(p1[1], p2[1]);
+    const hi = Math.max(p1[1], p2[1]);
     const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp1y = Math.min(hi, Math.max(lo, p1[1] + (p2[1] - p0[1]) / 6));
     const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    const cp2y = Math.min(hi, Math.max(lo, p2[1] - (p3[1] - p1[1]) / 6));
 
     d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2[0]} ${p2[1]}`;
   }

@@ -15,7 +15,8 @@
     "electron:build:mac": "expo export --platform web && electron-builder --config electron-builder.json --mac",
     "electron:build:linux": "expo export --platform web && electron-builder --config electron-builder.json --linux",
     "screenshots:marketing": "node scripts/capture-marketing-screenshots.mjs",
-    "screenshots:marketing:dark": "node scripts/capture-marketing-screenshots.mjs --dark"
+    "screenshots:marketing:dark": "node scripts/capture-marketing-screenshots.mjs --dark",
+    "test": "node --no-warnings --import ./tests/register.mjs --test \"tests/**/*.test.js\""
   },
   "dependencies": {
     "@expo-google-fonts/cascadia-code": "^0.4.1",

@@ -41,9 +41,9 @@ import { openTransactionsTab } from '../lib/navigationTabReset';
 // rather than its old dedicated tab. Route names inside the More stack
 // were preserved so this table is a one-line swap per entry.
 const ROUTE_TO_TAB = {
-  Budgets:                'More',
+  Budgets:                'Insights',
   Loans:                  'Transactions',
-  Goals:                  'More',
+  Goals:                  'Insights',
   RecurringTransactions:  'More',
   Transfers:              'Transactions',
   Portfolio:              'Invest',

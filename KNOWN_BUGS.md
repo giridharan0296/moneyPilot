@@ -1,6 +1,6 @@
 # Known bugs — review 2026-08-24
 
-Tracked for a future fix pass. Ledger integrity script passes; items below are UX/logic defects found in code review.
+Tracked for a future fix pass. The ledger checks now run as part of `npm test` (tests/ledger.test.js); items below are UX/logic defects found in code review.
 
 ---
 

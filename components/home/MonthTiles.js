@@ -1,0 +1,82 @@
+import { Text, View } from 'react-native';
+
+import HomeCard from './HomeCard';
+import PressableScale from '../PressableScale';
+import { useThemedStyles, useThemeColors } from '../../contexts/ThemeContext';
+import { formatMoneyDisplay } from '../../lib/currency';
+import { moneyText, spacing } from '../../lib/theme';
+
+// ----------------------------------------------------------------------------
+// MonthTiles — this month at a glance: Saved · Spent · Invested.
+// "Saved" is income − expenses (see lib/monthClose.js), so the rate here is the
+// same number the AI summary and Reports headline use.
+// ----------------------------------------------------------------------------
+export default function MonthTiles({ month, lastMonth, pace, baseCurrency, onOpenReports }) {
+  const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
+  const money = (n, opts) => formatMoneyDisplay(n, baseCurrency, { compactFrom: 1e5, ...opts });
+
+  const savedColor = month.saved >= 0 ? colors.accent.income : colors.accent.expense;
+
+  // Spending up is bad (red), down is good (green).
+  const paceUp = pace ? pace.delta > 0 : false;
+  const paceColor = !pace || pace.delta === 0
+    ? colors.text.secondary
+    : paceUp ? colors.accent.expense : colors.accent.income;
+
+  return (
+    <HomeCard
+      title={month.monthLabel}
+      meta={month.daysLeft === 0 ? 'Last day' : `${month.daysLeft} days left`}
+    >
+      <PressableScale onPress={onOpenReports} scaleTo={0.99} accessibilityLabel={`${month.monthLabel} summary. Open reports.`}>
+        <View style={styles.row}>
+          <Tile
+            label="Saved"
+            value={money(month.saved)}
+            color={savedColor}
+            sub={month.savingsRate != null ? `${Math.round(month.savingsRate)}% of income` : 'No income yet'}
+            subColor={colors.text.secondary}
+          />
+          <Tile
+            label="Spent"
+            value={money(month.expense)}
+            color={colors.text.primary}
+            sub={pace && pace.prevSum > 0
+              ? `${paceUp ? '+' : pace.delta < 0 ? '−' : ''}${Math.abs(Math.round(pace.percent))}% vs ${pace.prevLabel}`
+              : lastMonth.expense > 0 ? `Last month ${money(lastMonth.expense)}` : ' '}
+            subColor={pace && pace.prevSum > 0 ? paceColor : colors.text.secondary}
+          />
+          <Tile
+            label="Invested"
+            value={money(month.invested)}
+            color={colors.accent.investment}
+            sub={lastMonth.invested > 0 ? `Last month ${money(lastMonth.invested)}` : month.invested > 0 ? ' ' : 'None yet'}
+            subColor={colors.text.secondary}
+          />
+        </View>
+      </PressableScale>
+    </HomeCard>
+  );
+}
+
+function Tile({ label, value, color, sub, subColor }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.tile}>
+      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.value, { color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+        {value}
+      </Text>
+      <Text style={[styles.sub, { color: subColor }]} numberOfLines={1}>{sub}</Text>
+    </View>
+  );
+}
+
+const makeStyles = (c) => ({
+  row: { flexDirection: 'row', gap: spacing.md },
+  tile: { flex: 1, minWidth: 0 },
+  label: { color: c.text.secondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
+  value: { ...moneyText.tile, marginTop: 4 },
+  sub: { fontSize: 11, fontWeight: '500', marginTop: 3 },
+});

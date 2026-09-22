@@ -28,10 +28,11 @@ import { useToast } from '../contexts/ToastContext';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { deleteVoiceNote } from '../lib/voiceNotes';
-import { radii, spacing, elevation } from '../lib/theme';
+import { radii, spacing, elevation, moneyText } from '../lib/theme';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
+  formatMoneyDisplay,
   isForeign,
 } from '../lib/currency';
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
@@ -818,9 +819,7 @@ export default function TransactionsList({
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={[styles.rowAmount, { color: resolvedAmountColor }]}>
               {amountPrefix}
-              {rowIsForeign
-                ? formatMoneyCurrency(item.amount, rowCurrency)
-                : formatMoney(item.amount)}
+              {formatMoneyDisplay(item.amount, rowCurrency, { exact: true })}
             </Text>
             {rowIsForeign && (
               <Text style={styles.rowAmountSub}>
@@ -901,7 +900,7 @@ export default function TransactionsList({
             <View style={styles.totalCard}>
               <Text style={styles.totalLabel}>{t.totalLabel}</Text>
               <Text style={styles.totalAmount}>
-                {formatMoneyCurrency(total, baseCurrency)}
+                {formatMoneyDisplay(total, baseCurrency)}
               </Text>
               <Text style={styles.totalSub}>
                 {filteredItems.length}{' '}
@@ -1286,12 +1285,12 @@ const makeStyles = (c) => ({
   listContent: { padding: spacing.xl, paddingBottom: 60 },
 
   totalCard: {
-    backgroundColor: c.bg.hero,
-    borderRadius: radii['2xl'],
-    padding: spacing['2xl'],
-    alignItems: 'center',
-    marginBottom: spacing.xl,
-    ...elevation.raised,
+    backgroundColor: c.bg.surface,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: spacing.lg + 2,
+    marginBottom: spacing.lg,
   },
 
   brokerFilterRow: {
@@ -1311,11 +1310,9 @@ const makeStyles = (c) => ({
   brokerChipInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   brokerChipText: { fontSize: 12, color: c.text.secondary, fontWeight: '600' },
   brokerChipTextSelected: { color: c.text.inverse },
-  // Hero card is always dark (both themes) — use `text.onHero*` so labels
-  // stay light in dark mode instead of collapsing into the background.
-  totalLabel: { color: c.text.onHeroMuted, fontSize: 12, letterSpacing: 1, fontWeight: '600' },
-  totalAmount: { color: c.text.onHero, fontSize: 36, fontWeight: '700', marginTop: spacing.sm },
-  totalSub: { color: c.text.onHeroMuted, fontSize: 12, marginTop: spacing.xs },
+  totalLabel: { color: c.text.secondary, fontSize: 11, letterSpacing: 0.8, fontWeight: '600' },
+  totalAmount: { ...moneyText.hero, color: c.text.primary, marginTop: spacing.xs },
+  totalSub: { color: c.text.secondary, fontSize: 12, marginTop: spacing.xs },
 
   chartCard: {
     backgroundColor: c.bg.surface,

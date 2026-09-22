@@ -24,7 +24,7 @@
 // ----------------------------------------------------------------------------
 
 import React, { useEffect, useMemo, useState } from 'react';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker from '../components/DatePicker';
 import {
   ScrollView,
   View,
@@ -48,13 +48,17 @@ import NetWorthChart from '../components/NetWorthChart';
 import { applyRealEstateHistory } from '../lib/netWorthHistory';
 import ScreenHelpIntro from '../components/ScreenHelpIntro';
 import { StatusBadge } from '../components/UiPrimitives';
+import MenuRow, { MenuGroup } from '../components/MenuRow';
 import { HELP_NET_WORTH } from '../lib/helpContent';
 import {
   CURRENCIES,
   currencyMeta,
   formatMoney as formatMoneyCurrency,
+  formatMoneyDisplay,
   lookupRateOrOne,
 } from '../lib/currency';
+import { moneyText } from '../lib/theme';
+import { useNavigation } from '@react-navigation/native';
 import {
   EPF_ASSET_CATEGORY,
   EPF_INVESTMENT_SUB_CATEGORY,
@@ -80,6 +84,7 @@ function formatMoney(n) {
 }
 
 export default function NetWorthScreen() {
+  const navigation = useNavigation();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const {
@@ -168,29 +173,30 @@ export default function NetWorthScreen() {
         />
 
         {/* HERO — Net Worth */}
-        <View
-          style={[
-            styles.heroCard,
-            { backgroundColor: netWorthPositive ? themeColors.bg.heroGreen : themeColors.bg.heroRed },
-          ]}
-        >
+        <View style={styles.heroCard}>
           <Text style={styles.heroLabel}>NET WORTH</Text>
-          <Text style={styles.heroValue}>
-            {netWorthPositive ? '' : '−'}
-            {formatMoneyCurrency(Math.abs(summary.netWorth), baseCurrency)}
+          <Text
+            style={[
+              styles.heroValue,
+              { color: netWorthPositive ? themeColors.text.primary : themeColors.accent.expense },
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
+            {formatMoneyDisplay(summary.netWorth, baseCurrency)}
           </Text>
           <View style={styles.heroBreakdownRow}>
             <View style={styles.heroPill}>
               <Text style={styles.heroPillLabel}>Assets</Text>
-              <Text style={styles.heroPillValue}>
-                {formatMoneyCurrency(summary.totalAssets, baseCurrency)}
+              <Text style={[styles.heroPillValue, { color: themeColors.accent.income }]}>
+                {formatMoneyDisplay(summary.totalAssets, baseCurrency)}
               </Text>
             </View>
-            <Text style={styles.heroMinus}>−</Text>
             <View style={styles.heroPill}>
               <Text style={styles.heroPillLabel}>Liabilities</Text>
-              <Text style={styles.heroPillValue}>
-                {formatMoneyCurrency(summary.totalLiabilities, baseCurrency)}
+              <Text style={[styles.heroPillValue, { color: themeColors.accent.expense }]}>
+                {formatMoneyDisplay(summary.totalLiabilities, baseCurrency)}
               </Text>
             </View>
           </View>
@@ -199,16 +205,52 @@ export default function NetWorthScreen() {
         <View style={styles.classificationCard}>
           <View style={styles.classificationItem}>
             <Text style={styles.classificationLabel}>Movable assets</Text>
-            <Text style={styles.classificationValue}>{formatMoneyCurrency(assetClassification.movable, baseCurrency)}</Text>
+            <Text style={styles.classificationValue}>{formatMoneyDisplay(assetClassification.movable, baseCurrency)}</Text>
             <Text style={styles.classificationHint}>Cash, investments, vehicles and physical metals</Text>
           </View>
           <View style={styles.classificationDivider} />
           <View style={styles.classificationItem}>
             <Text style={styles.classificationLabel}>Immovable assets</Text>
-            <Text style={styles.classificationValue}>{formatMoneyCurrency(assetClassification.immovable, baseCurrency)}</Text>
+            <Text style={styles.classificationValue}>{formatMoneyDisplay(assetClassification.immovable, baseCurrency)}</Text>
             <Text style={styles.classificationHint}>Land and real estate</Text>
           </View>
         </View>
+
+        {/* INVESTMENTS — the Wealth tab lands here, so the investing tools
+            live one tap below the headline number. */}
+        <Text style={styles.groupTitle} accessibilityRole="header">Investments</Text>
+        <MenuGroup>
+          <MenuRow
+            grouped
+            first
+            icon="pie-chart"
+            title="Investment log"
+            description="Contributions by month, with a breakdown by asset."
+            onPress={() => navigation.navigate('InvestmentsHome')}
+          />
+          <MenuRow
+            grouped
+            icon="briefcase"
+            title="Portfolio"
+            description="Holdings, current value and daily change."
+            onPress={() => navigation.navigate('Portfolio')}
+          />
+          <MenuRow
+            grouped
+            icon="scale"
+            title="Rebalance"
+            description="Compare your allocation with your targets."
+            onPress={() => navigation.navigate('PortfolioBalance')}
+          />
+          <MenuRow
+            grouped
+            icon="bar-chart-2"
+            title="Market mix"
+            description="Stocks, funds and ETFs at a glance."
+            onPress={() => navigation.navigate('MarketAllocation')}
+          />
+        </MenuGroup>
+        <View style={styles.groupGap} />
 
         {/* HISTORY CHART — daily NW snapshots. On a fresh install this
             shows a "come back tomorrow" prompt; the context auto-samples
@@ -1420,12 +1462,15 @@ const makeStyles = (c) => ({
 
   // Hero
   heroCard: {
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 20,
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: 18,
+    marginBottom: 16,
   },
-  heroLabel: { color: c.text.onHeroFaint, fontSize: 12, letterSpacing: 1, fontWeight: '600' },
-  heroValue: { color: c.text.onHero, fontSize: 36, fontWeight: '800', marginTop: 6 },
+  heroLabel: { color: c.text.secondary, fontSize: 11, letterSpacing: 0.8, fontWeight: '600' },
+  heroValue: { ...moneyText.hero, color: c.text.primary, marginTop: 4 },
   heroBreakdownRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -1435,14 +1480,13 @@ const makeStyles = (c) => ({
   heroPill: {
     flex: 1,
     minWidth: 0,
-    backgroundColor: c.bg.heroOverlay,
+    backgroundColor: c.bg.surfaceAlt,
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
-  heroPillLabel: { color: c.text.onHeroSoft, fontSize: 11, fontWeight: '600' },
-  heroPillValue: { color: c.text.onHero, fontSize: 15, fontWeight: '700', marginTop: 2 },
-  heroMinus:    { color: c.text.onHero, fontSize: 22, fontWeight: '700', alignSelf: 'center', flexShrink: 0 },
+  heroPillLabel: { color: c.text.secondary, fontSize: 11, fontWeight: '600' },
+  heroPillValue: { ...moneyText.row, marginTop: 2 },
   classificationCard: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -1487,6 +1531,8 @@ const makeStyles = (c) => ({
     gap: 8,
   },
   sectionTitle:    { fontSize: 16, fontWeight: '700', color: c.text.primary },
+  groupTitle:      { fontSize: 12, fontWeight: '600', color: c.text.secondary, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8, paddingHorizontal: 4 },
+  groupGap:        { height: 16 },
   sectionSubtitle: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
   sectionTotal:    { fontSize: 16, fontWeight: '800' },
   sectionAddBtn: {
