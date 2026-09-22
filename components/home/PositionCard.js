@@ -64,7 +64,12 @@ export default function PositionCard({
   const up = change ? change.delta > 0 : false;
   const flat = !change || Math.abs(change.delta) < 1;
   const heroBg = flat ? colors.bg.hero : up ? colors.bg.heroGreen : colors.bg.heroRed;
-  const trendColor = flat ? colors.text.onHeroMuted : up ? colors.accent.income : colors.accent.expense;
+  // Semantic colour drawn on the hero card itself (icon, delta text, spark
+  // line) — always the dark-surface-calibrated onHeroPositive/Negative, NOT
+  // the ambient accent.income/expense, which are tuned for text on a light
+  // surface and read as muddy low-contrast green/red on this dark card in
+  // light theme (see the token's note in lib/theme.js).
+  const trendColor = flat ? colors.text.onHeroMuted : up ? colors.text.onHeroPositive : colors.text.onHeroNegative;
   const sinceLabel = change
     ? change.fromPriorMonth
       ? 'this month'
