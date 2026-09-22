@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -62,8 +62,13 @@ export default function MarketBoardScreen({ route, navigation }) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [segment, setSegment] = useState('large');
+  // Guards against a slow response from a previous board/segment landing
+  // after a newer one (e.g. tapping segments quickly), and against setting
+  // state after the screen has been navigated away from mid-fetch.
+  const reqId = useRef(0);
 
   const refresh = useCallback(async () => {
+    const id = ++reqId.current;
     setLoading(true);
     setError(null);
     try {
@@ -71,16 +76,21 @@ export default function MarketBoardScreen({ route, navigation }) {
         resolvedBoard,
         resolvedBoard === 'indices' ? {} : { segment },
       );
+      if (id !== reqId.current) return;
       setRows(result.rows || []);
       setFetchedAt(result.fetchedAt);
     } catch (e) {
+      if (id !== reqId.current) return;
       setError(e?.message || 'Could not load market data.');
     } finally {
-      setLoading(false);
+      if (id === reqId.current) setLoading(false);
     }
   }, [resolvedBoard, segment]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    refresh();
+    return () => { reqId.current += 1; };
+  }, [refresh]);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>

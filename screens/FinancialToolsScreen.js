@@ -78,6 +78,13 @@ const TOOL_GROUPS = [
         description: 'Estimate gratuity from wages and years of service.',
         accent: 'income',
       },
+      {
+        route: 'FundamentalAnalysis',
+        icon: 'search',
+        name: 'Fundamental Analysis',
+        description: 'Look up valuation, quality, growth, peers, and risk for a stock.',
+        accent: 'investment',
+      },
     ],
   },
 ];

@@ -32,6 +32,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { useTransactions } from '../contexts/TransactionsContext';
+import { useSettings } from '../contexts/SettingsContext';
 import { computePortfolioSummary } from '../lib/portfolioHoldings';
 import {
   fetchFundamentals,
@@ -288,11 +289,15 @@ function PortfolioRiskCard({ risk, loading, styles, colors }) {
   );
 }
 
-function InvestGuide({ data, suggestion, styles, colors, onLogPress }) {
+function InvestGuide({ data, suggestion, styles, colors, onLogPress, baseCurrency }) {
   const thesis = data?.thesis;
   if (!thesis) return null;
   const pal = thesisPalette(thesis.key);
-  const cur = data.currency || 'INR';
+  // Suggested amount, cap target, holding value and cash come from the
+  // user's portfolio/Cash & Bank (base-currency figures) — NOT the
+  // analyzed stock's own quote currency, which can differ (e.g. looking up
+  // AAPL/USD while holding an INR portfolio). Format them in base currency.
+  const moneyCur = baseCurrency || 'INR';
   const rangePos = thesis.week52Pos;
   const canLog = typeof onLogPress === 'function'
     && suggestion?.amount != null
@@ -341,11 +346,11 @@ function InvestGuide({ data, suggestion, styles, colors, onLogPress }) {
         <View style={styles.suggestBox}>
           <Text style={styles.suggestLabel}>Suggested invest amount</Text>
           {suggestion?.amount != null && suggestion.amount > 0 ? (
-            <Text style={styles.suggestAmount}>{formatMoney(suggestion.amount, cur)}</Text>
+            <Text style={styles.suggestAmount}>{formatMoney(suggestion.amount, moneyCur)}</Text>
           ) : (
             <Text style={styles.suggestAmountMuted}>
               {suggestion?.status === 'skip' || suggestion?.status === 'full' || suggestion?.status === 'no_cash'
-                ? '₹0'
+                ? formatMoney(0, moneyCur)
                 : '—'}
             </Text>
           )}
@@ -357,18 +362,18 @@ function InvestGuide({ data, suggestion, styles, colors, onLogPress }) {
                 <Text style={styles.suggestMetaText}>
                   Cap {Math.round(suggestion.maxPortfolioPct * 100)}% of equity
                   {suggestion.targetValue != null
-                    ? ` (≈ ${formatMoney(suggestion.targetValue, cur)})`
+                    ? ` (≈ ${formatMoney(suggestion.targetValue, moneyCur)})`
                     : ''}
                 </Text>
               ) : null}
               {suggestion.holdingValue > 0 ? (
                 <Text style={styles.suggestMetaText}>
-                  You already hold {formatMoney(suggestion.holdingValue, cur)}
+                  You already hold {formatMoney(suggestion.holdingValue, moneyCur)}
                 </Text>
               ) : null}
               {suggestion.cashAvailable != null && suggestion.cashAvailable > 0 ? (
                 <Text style={styles.suggestMetaText}>
-                  Cash & Bank {formatMoney(suggestion.cashAvailable, cur)}
+                  Cash & Bank {formatMoney(suggestion.cashAvailable, moneyCur)}
                   {suggestion.maxCashPct > 0
                     ? ` · uses up to ${Math.round(suggestion.maxCashPct * 100)}%`
                     : ''}
@@ -388,7 +393,7 @@ function InvestGuide({ data, suggestion, styles, colors, onLogPress }) {
           >
             <AppIcon name="plus" size={16} color="#fff" strokeWidth={2.4} />
             <Text style={styles.logInvestBtnText}>
-              Log {formatMoney(suggestion.amount, cur)}
+              Log {formatMoney(suggestion.amount, moneyCur)}
             </Text>
           </TouchableOpacity>
         ) : null}
@@ -408,6 +413,7 @@ export default function FundamentalAnalysisScreen({ route }) {
   const { holdings } = usePortfolio();
   const { investments } = useTransactions();
   const { assets, isPortfolioSymbolHidden } = useNetWorth();
+  const { baseCurrency } = useSettings();
   const portfolioSummary = useMemo(
     () => computePortfolioSummary(holdings, investments, {}, { isSymbolHidden: isPortfolioSymbolHidden }),
     [holdings, investments, isPortfolioSymbolHidden],
@@ -478,10 +484,12 @@ export default function FundamentalAnalysisScreen({ route }) {
       portfolioValue: portfolioSummary.totalValue || 0,
       holdingValue: holdingValueForSymbol(displayHoldings, data.symbol),
       cashAvailable,
-      currency: data.currency || 'INR',
+      // portfolioValue/cashAvailable are base-currency figures, not the
+      // analyzed stock's own quote currency — round using the same unit.
+      currency: baseCurrency || 'INR',
       risk,
     });
-  }, [data, displayHoldings, portfolioSummary.totalValue, cashAvailable, risk]);
+  }, [data, displayHoldings, portfolioSummary.totalValue, cashAvailable, risk, baseCurrency]);
 
   // Price history for the chart — refetch when symbol or range changes.
   useEffect(() => {
@@ -792,6 +800,7 @@ export default function FundamentalAnalysisScreen({ route }) {
               styles={styles}
               colors={colors}
               onLogPress={logSuggestedInvestment}
+              baseCurrency={baseCurrency}
             />
 
             <PortfolioRiskCard
