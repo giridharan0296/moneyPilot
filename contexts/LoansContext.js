@@ -317,6 +317,8 @@ export function LoansProvider({ children }) {
   const [customLoanKinds, setCustomLoanKinds] = useState([]);
   const { accounts, baseCurrency } = useSettings();
   const [ready, setReady] = useState(false);
+  // Bumped by restoreState — see the mirror-liability sync effect below.
+  const [restoreEpoch, setRestoreEpoch] = useState(0);
   // Loan amounts are read as base-currency amounts, so every loan screen
   // formats with the base symbol. Set during render (idempotent) so children
   // never paint one frame with the previous currency.
@@ -449,6 +451,11 @@ export function LoansProvider({ children }) {
   }, [customLoanKinds]);
 
   // After load/heal, keep mirror liabilities aligned with recomputed outstanding.
+  // Also re-runs after restoreState (restoreEpoch bumps) — a restored backup
+  // sets `loans` directly rather than through the mutators that normally keep
+  // each mirror liability's `outstanding` in step, so without this a restore
+  // could leave net worth showing a stale pre-restore balance until the app
+  // was fully reloaded.
   useEffect(() => {
     if (!ready) return;
     for (const loan of loans) {
@@ -457,9 +464,11 @@ export function LoansProvider({ children }) {
         outstanding: loan.currentOutstanding,
       });
     }
-    // Intentionally once when the store becomes ready — mutators sync mirrors themselves.
+    // Deliberately NOT depending on `loans`/`updateLiability` — this should
+    // fire once when the store becomes ready and once per restore, not on
+    // every ordinary loan edit (mutators already sync their own mirror).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, restoreEpoch]);
 
   // ---- Read helpers ----
   const findLoan = useCallback(
@@ -1750,6 +1759,10 @@ export function LoansProvider({ children }) {
           : [],
       );
     }
+    // Re-run the mirror-liability sync effect once the restored `loans`
+    // land — restoring bypasses every mutator that normally keeps a linked
+    // liability's outstanding in step (see that effect for the full why).
+    setRestoreEpoch((n) => n + 1);
   }, []);
 
   // Derived — total outstanding by direction. Used by the LoansScreen hero.

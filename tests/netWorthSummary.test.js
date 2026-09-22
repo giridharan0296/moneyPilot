@@ -224,6 +224,53 @@ describe('buildFinancialSummary', () => {
     assert.equal(s.cash_flow.income_previous, 80000);
     assert.equal(s.cash_flow.expense_previous, 5000);
     assert.equal(s.expenses_by_category_current[0].amount, 20880);
+
+    // `now` is the 22nd, so the previous-month "same period" comparison
+    // cuts off at 22 Aug — the Aug-20 expense is inside that window, the
+    // Aug-31 income is not.
+    assert.equal(s.cash_flow.days_elapsed_current, 22);
+    assert.equal(s.cash_flow.expense_previous_same_period, 5000);
+    assert.equal(s.cash_flow.income_previous_same_period, 0);
+  });
+
+  it('a partial current month is compared against the SAME point last month, not the full month', () => {
+    // Both months spend exactly ₹1,000/day through day 22 — a real "no
+    // change" scenario. Comparing the partial current month against the
+    // full 30-day previous month would read as a ~27% drop that never
+    // happened; the same-period figures must agree with the current month.
+    const s = base({
+      transactions: {
+        income: [],
+        expenses: [
+          { categoryId: 'food', amount: 22000, createdAt: at(2026, 9, 22) }, // this month so far
+          { categoryId: 'food', amount: 22000, createdAt: at(2026, 8, 22) }, // last month, same day
+          { categoryId: 'food', amount: 8000, createdAt: at(2026, 8, 30) },  // last month, after the cutoff
+        ],
+        investments: [],
+      },
+    });
+    assert.equal(s.cash_flow.expense_current, 22000);
+    assert.equal(s.cash_flow.expense_previous, 30000); // full month — NOT the comparison basis
+    assert.equal(s.cash_flow.expense_previous_same_period, 22000); // matches — correctly "no change"
+  });
+
+  it('same-period cutoff falls back to the end of a shorter previous month', () => {
+    // now = 31 May; April only has 30 days, so "day 31 of April" doesn't
+    // exist — the cutoff should land on 30 Apr, not silently include all
+    // of May 1st's worth of extra time or throw.
+    const may31 = new Date(2026, 4, 31, 12);
+    const s = buildFinancialSummary({
+      settings: { baseCurrency: 'INR', fxRates: {}, categories: { expense: [{ id: 'food', label: 'Food' }] } },
+      transactions: {
+        income: [],
+        expenses: [
+          { categoryId: 'food', amount: 500, createdAt: new Date(2026, 3, 30, 23, 0).toISOString() }, // 30 Apr
+        ],
+        investments: [],
+      },
+    }, may31);
+    assert.equal(s.cash_flow.days_elapsed_current, 31);
+    assert.equal(s.cash_flow.expense_previous_same_period, 500);
   });
 
   it('investment totals exclude historical (opening) rows', () => {

@@ -30,7 +30,7 @@ export default function SettingsAIScreen() {
         keyEncrypted={aiKeyBackingEncrypted}
         onChange={setAiConfig}
       />
-      <WhisperKeySection apiKey={whisperApiKey} onSave={setWhisperApiKey} />
+      <WhisperKeySection apiKey={whisperApiKey} onSave={setWhisperApiKey} keyEncrypted={aiKeyBackingEncrypted} />
     </FormScreen>
   );
 }

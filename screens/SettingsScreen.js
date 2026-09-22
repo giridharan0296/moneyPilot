@@ -844,6 +844,7 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
         <WhisperKeySection
           apiKey={whisperApiKey}
           onSave={setWhisperApiKey}
+          keyEncrypted={aiKeyBackingEncrypted}
         />
           </>
         )}
@@ -1689,7 +1690,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
 //   - Show a masked preview when a key is already set so the user knows
 //     the app is configured without leaking the full secret on screen.
 // ----------------------------------------------------------------------------
-export function WhisperKeySection({ apiKey, onSave }) {
+export function WhisperKeySection({ apiKey, onSave, keyEncrypted }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const [draft, setDraft] = useState('');
@@ -1789,6 +1790,37 @@ export function WhisperKeySection({ apiKey, onSave }) {
         </View>
       ) : (
         <View style={{ gap: 10 }}>
+          {/* Same encryption badge as the AI Insights key section — this key
+              can rack up charges on whoever holds the device, so it belongs
+              in the Keychain/Keystore, never plaintext. */}
+          <View style={[
+            styles.aiKeyBadge,
+            {
+              backgroundColor: keyEncrypted ? '#059669' + '18' : '#f59e0b' + '18',
+              borderColor:     keyEncrypted ? '#059669' + '55' : '#f59e0b' + '55',
+            },
+          ]}>
+            <AppIcon
+              name={keyEncrypted ? 'check' : 'alert-triangle'}
+              size={12}
+              color={keyEncrypted ? '#059669' : '#b45309'}
+              strokeWidth={2.4}
+            />
+            <Text style={[
+              styles.aiKeyBadgeText,
+              { color: keyEncrypted ? '#065f46' : '#7c2d12' },
+            ]}>
+              {keyEncrypted
+                ? (Platform.OS === 'ios'
+                    ? 'Encrypted · iOS Keychain'
+                    : Platform.OS === 'android'
+                      ? 'Encrypted · Android Keystore'
+                      : 'Encrypted · device secure store')
+                : Platform.OS === 'web'
+                  ? 'Browser storage — not encrypted'
+                  : 'Not encrypted — rebuild app (expo-secure-store missing)'}
+            </Text>
+          </View>
           <TextInput
             value={draft}
             onChangeText={setDraft}
@@ -1826,8 +1858,9 @@ export function WhisperKeySection({ apiKey, onSave }) {
             </TouchableOpacity>
           </View>
           <Text style={styles.whisperHelp}>
-            Stored on this device only (unencrypted AsyncStorage). Fine for a
-            personal app; if you ship this, switch to expo-secure-store.
+            {keyEncrypted
+              ? 'Stored in your device’s secure keychain, not in the app’s regular data.'
+              : 'Your browser has no secure keychain, so this is stored in ordinary browser storage.'}
           </Text>
         </View>
       )}

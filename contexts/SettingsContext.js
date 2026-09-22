@@ -701,7 +701,7 @@ export function SettingsProvider({ children }) {
   useEffect(() => {
     (async () => {
       try {
-        const [expRaw, incRaw, invRaw, accRaw, grpRaw, whisperRaw, migRaw, baseRaw, ratesRaw, brokerDefRaw, aiRaw, brokersRaw] = await Promise.all([
+        const [expRaw, incRaw, invRaw, accRaw, grpRaw, legacyWhisperRaw, migRaw, baseRaw, ratesRaw, brokerDefRaw, aiRaw, brokersRaw] = await Promise.all([
           readStoredJson(STORAGE_KEYS.settings_categories_expense),
           readStoredJson(STORAGE_KEYS.settings_categories_income),
           readStoredJson(STORAGE_KEYS.settings_categories_investment),
@@ -717,7 +717,21 @@ export function SettingsProvider({ children }) {
           readStoredJson(STORAGE_KEYS.settings_ai_config),
           readStoredJson(STORAGE_KEYS.brokers),
         ]);
-        if (whisperRaw) setWhisperApiKeyState(whisperRaw);
+
+        // Whisper key: SecureStore first, migrating a legacy plaintext
+        // AsyncStorage copy on first load after this upgrade — same
+        // priority order and one-shot migration as the AI API key below.
+        try {
+          let whisperKey = await getSecret(STORAGE_KEYS.whisper_api_key_secret);
+          if (!whisperKey && legacyWhisperRaw) {
+            await setSecret(STORAGE_KEYS.whisper_api_key_secret, legacyWhisperRaw);
+            await AsyncStorage.removeItem(STORAGE_KEYS.settings_whisper_api_key).catch(() => {});
+            whisperKey = legacyWhisperRaw;
+          }
+          if (whisperKey) setWhisperApiKeyState(whisperKey);
+        } catch (e) {
+          console.warn('Whisper key load / migrate failed:', e);
+        }
 
         // AI config: merge stored blob over DEFAULT_AI_CONFIG so any
         // NEW fields we add in future ship with sensible defaults even
@@ -1592,15 +1606,18 @@ export function SettingsProvider({ children }) {
     setBrokersState(seedBrokers());
   }, []);
 
-  // ---- Whisper API key: persist immediately (no useEffect indirection) ----
+  // ---- Whisper API key: persist immediately, SecureStore only ----
+  // Same reasoning as the AI API key below — this key can rack up charges
+  // on whoever holds the device, so it belongs in the Keychain/Keystore,
+  // never in a plaintext AsyncStorage blob.
   const setWhisperApiKey = useCallback(async (key) => {
     const trimmed = (key ?? '').trim();
     setWhisperApiKeyState(trimmed);
     try {
       if (trimmed) {
-        await AsyncStorage.setItem(STORAGE_KEYS.settings_whisper_api_key, trimmed);
+        await setSecret(STORAGE_KEYS.whisper_api_key_secret, trimmed);
       } else {
-        await AsyncStorage.removeItem(STORAGE_KEYS.settings_whisper_api_key);
+        await deleteSecret(STORAGE_KEYS.whisper_api_key_secret);
       }
     } catch (e) {
       console.warn('Save whisper key failed:', e);

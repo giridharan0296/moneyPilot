@@ -46,9 +46,15 @@ export const STORAGE_KEYS = {
   // Portfolio holdings the user removed from the balance sheet (still in Portfolio).
   portfolio_sync_hidden_symbols:  '@financeApp/networth/portfolioHidden/v1',
 
-  // API key for OpenAI Whisper (voice-note transcription). Stored locally.
-  // Consider expo-secure-store for production use.
+  // Legacy plaintext location for the Whisper (voice-note transcription)
+  // API key. Superseded by whisper_api_key_secret below — kept only as a
+  // one-shot migration source. See SettingsContext load path.
   settings_whisper_api_key:       '@financeApp/settings/whisperApiKey/v1',
+
+  // SecureStore key holding the Whisper API key. Same reasoning as
+  // ai_api_key_secret above — a separate SecureStore-only key so the
+  // value never touches AsyncStorage. Value: raw API key string.
+  whisper_api_key_secret:         '@financeApp/secrets/whisperApiKey/v1',
 
   // Recurring transaction rules (subscriptions, salary, SIPs, ...).
   recurring_rules:                '@financeApp/recurring/rules/v1',
