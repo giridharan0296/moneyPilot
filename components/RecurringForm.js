@@ -37,6 +37,8 @@ import {
   MONTHLY_MODES,
   NTH_WEEK_CHOICES,
   WEEKDAYS,
+  ruleStartDate,
+  toLocalDayKey,
 } from '../lib/recurring';
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 
@@ -81,8 +83,13 @@ export default function RecurringForm({
   const [weekday, setWeekday] = useState(
     initialValues?.weekday ?? 5,   // Friday — the most common payroll weekday
   );
+  // Seed from the rule's stored calendar day, not its ISO instant: on a device
+  // in another time zone the instant is a different day, and saving would
+  // silently move the rule.
   const [startDate, setStartDate] = useState(
-    initialValues?.startDate ? new Date(initialValues.startDate) : new Date(),
+    initialValues?.startDate || initialValues?.startDateLocal
+      ? (ruleStartDate(initialValues) ?? new Date())
+      : new Date(),
   );
   const [endDate, setEndDate] = useState(
     initialValues?.endDate ? new Date(initialValues.endDate) : null,
@@ -140,8 +147,10 @@ export default function RecurringForm({
       Alert.alert('No account', 'Add an account in Settings first.');
       return;
     }
-    if (endDate && endDate < startDate) {
-      Alert.alert('Invalid end date', 'End date must be after the start date.');
+    // Compare calendar days: the picker's end date has no time of day, the
+    // start date may (new Date()), so a same-day end was rejected as "before".
+    if (endDate && toLocalDayKey(endDate) < toLocalDayKey(startDate)) {
+      Alert.alert('Invalid end date', 'End date must not be before the start date.');
       return;
     }
     onSubmit({

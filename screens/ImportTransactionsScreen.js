@@ -43,6 +43,8 @@ const FIELDS = [
   { key: 'accountCol',     label: 'Account',       required: false, hint: 'Auto-matches by label to your accounts' },
   { key: 'noteCol',        label: 'Note',          required: false, hint: 'Any extra text — copied as-is' },
   { key: 'tagsCol',        label: 'Tags',          required: false, hint: 'Semicolon or comma separated (e.g. vacation;reimbursable)' },
+  { key: 'currencyCol',    label: 'Currency',      required: false, hint: 'Currency code for foreign rows (USD, EUR…). Blank = your base currency' },
+  { key: 'rateCol',        label: 'Exchange rate', required: false, hint: 'Rate to your base currency. Blank = the rate saved in Settings' },
 ];
 
 const TYPES = [
@@ -68,8 +70,8 @@ function formatDate(iso) {
 
 export default function ImportTransactionsScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
-  const { categories, accounts } = useSettings();
-  const { importTransactions } = useTransactions();
+  const { categories, accounts, baseCurrency, fxRates } = useSettings();
+  const { importTransactions, expenses, income, investments } = useTransactions();
 
   // ---- File state ----
   const [fileName, setFileName] = useState(null);
@@ -95,7 +97,16 @@ export default function ImportTransactionsScreen({ navigation }) {
     accountCol: null,
     noteCol: null,
     tagsCol: null,
+    currencyCol: null,
+    rateCol: null,
   });
+  // Skip rows that match a transaction you already have (same type, account,
+  // day, amount and note) — importing our own export twice used to double
+  // everything. `dateOrder` only matters for 05/06/2025-style dates.
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [dateOrder, setDateOrder] = useState('auto');
+  // Problems found while reading the file (Alert is a no-op on web, so also shown inline).
+  const [fileWarnings, setFileWarnings] = useState([]);
   const [fallbackCategoryId, setFallbackCategoryId] = useState(null);
   const [fallbackSubCategoryId, setFallbackSubCategoryId] = useState(null);
   const [fallbackAccountId, setFallbackAccountId] = useState(null);
@@ -170,6 +181,11 @@ export default function ImportTransactionsScreen({ navigation }) {
       fallbackAccountId,
       fallbackSubCategoryId,
       fallbacksByType: mixedMode ? fallbacksByType : undefined,
+      existing: { expense: expenses, income, investment: investments },
+      skipDuplicates,
+      dateOrder,
+      baseCurrency,
+      fxRates,
     });
   }, [
     rows,
@@ -183,6 +199,13 @@ export default function ImportTransactionsScreen({ navigation }) {
     fallbackAccountId,
     fallbackSubCategoryId,
     fallbacksByType,
+    expenses,
+    income,
+    investments,
+    skipDuplicates,
+    dateOrder,
+    baseCurrency,
+    fxRates,
   ]);
 
   const previewRows = useMemo(() => {
@@ -261,6 +284,11 @@ export default function ImportTransactionsScreen({ navigation }) {
       setSheetIdx(0);
       setPreviewFilter('all');
       setPreviewExpanded(false);
+      setDateOrder('auto');
+      // e.g. a stray quote that swallowed the rest of the file into one cell.
+      const warnings = ext === 'xlsx' || ext === 'xls' ? [] : (loadedSheets[0]?.warnings ?? []);
+      setFileWarnings(warnings);
+      if (warnings.length) Alert.alert('Check this file', warnings.join('\n\n'));
       // Best-effort auto-mapping by column name for the first sheet.
       setMapping(autoDetectMapping(nonEmpty[0].headers));
     } catch (e) {
@@ -368,6 +396,10 @@ export default function ImportTransactionsScreen({ navigation }) {
       </TouchableOpacity>
 
       {/* Sheet picker (visible only for multi-sheet Excel workbooks) */}
+      {fileWarnings.map((w) => (
+        <Text key={w} style={styles.warnBox}>{w}</Text>
+      ))}
+
       {sheets.length > 1 && (
         <>
           <Text style={[styles.mapLabel, { marginTop: 12 }]}>
@@ -662,7 +694,61 @@ export default function ImportTransactionsScreen({ navigation }) {
                 )}
                 <SummaryRow label="Matched to your data" value={String(result.summary.matched)} />
                 <SummaryRow label="Used fallback"        value={String(result.summary.fallback)} />
+                {result.summary.duplicates > 0 && (
+                  <SummaryRow label="Already in your data" value={String(result.summary.duplicates)} negative={skipDuplicates} />
+                )}
               </View>
+
+              {result.summary.duplicates > 0 && (
+                <View style={styles.warnList}>
+                  <Text style={styles.warnListTitle}>
+                    {result.summary.duplicates} row{result.summary.duplicates === 1 ? '' : 's'} look{result.summary.duplicates === 1 ? 's' : ''} like transactions you already have.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.chip, styles.chipSmall, skipDuplicates && styles.chipSmallActive, { alignSelf: 'flex-start', marginTop: 6 }]}
+                    onPress={() => setSkipDuplicates((v) => !v)}
+                  >
+                    <Text style={[styles.chipTextSmall, skipDuplicates && { color: '#fff', fontWeight: '700' }]}>
+                      {skipDuplicates ? 'Skipping them — tap to import them anyway' : 'Importing them — tap to skip them'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {result.summary.mixedSigns && (
+                <View style={styles.warnList}>
+                  <Text style={styles.warnListTitle}>This file has both positive and negative amounts.</Text>
+                  <Text style={styles.warnListBody}>
+                    Signs are ignored, so every row is imported as {type} (a refund becomes a second expense). Map a Type column, or use the Bank statement importer for debit / credit files.
+                  </Text>
+                </View>
+              )}
+
+              {result.summary.ambiguousDates > 0 && (
+                <View style={styles.warnList}>
+                  <Text style={styles.warnListTitle}>
+                    {result.summary.ambiguousDates} date{result.summary.ambiguousDates === 1 ? '' : 's'} could be read two ways (05/06/2025).
+                  </Text>
+                  <View style={styles.chipRow}>
+                    {[
+                      { id: 'auto', label: `Auto (${result.summary.dateOrder === 'mdy' ? 'MM/DD' : 'DD/MM'})` },
+                      { id: 'dmy', label: 'DD/MM/YYYY' },
+                      { id: 'mdy', label: 'MM/DD/YYYY' },
+                    ].map((o) => {
+                      const active = dateOrder === o.id;
+                      return (
+                        <TouchableOpacity
+                          key={o.id}
+                          style={[styles.chip, styles.chipSmall, active && styles.chipSmallActive]}
+                          onPress={() => setDateOrder(o.id)}
+                        >
+                          <Text style={[styles.chipTextSmall, active && { color: '#fff', fontWeight: '700' }]}>{o.label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
 
               {result.rowPreviews?.length > 0 && (
                 <>
@@ -1015,6 +1101,8 @@ function autoDetectMapping(headers) {
     accountCol:     find(['account', 'wallet', 'source']),
     noteCol:        find(['note', 'description', 'narration', 'memo', 'remark']),
     tagsCol:        find(['tags', 'labels']),
+    currencyCol:    find(['currency', 'ccy']),
+    rateCol:        find(['rate', 'fx rate', 'exchange rate']),
   };
 }
 

@@ -37,7 +37,7 @@ import {
 import AppIcon from '../components/AppIcon';
 import QuickAddPickerItem from '../components/QuickAddPickerItem';
 import { pickFile } from '../lib/openFile';
-import { parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
+import { csvWarnings, parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
 import { parseXLSXRaw } from '../lib/xlsx';
 import {
   BANK_PRESETS,
@@ -163,8 +163,9 @@ export default function ImportBankStatementScreen({ navigation }) {
       fallbackIncomeCategoryId:  incomeCategoryId,
       existingExpenses: listFor('expense'),
       existingIncome:   listFor('income'),
+      firstRowNum: Math.max(0, derived.headerRowIdx) + 2,
     });
-  }, [derived.rows, mapping, accountId, expenseCategoryId, incomeCategoryId, listFor]);
+  }, [derived.rows, derived.headerRowIdx, mapping, accountId, expenseCategoryId, incomeCategoryId, listFor]);
 
   const canImport =
     !!accountId &&
@@ -206,8 +207,11 @@ export default function ImportBankStatementScreen({ navigation }) {
         setFormat('xlsx');
       } else {
         const text = await picked.readText();
-        loadedSheets = [{ name: 'Sheet1', rawRows: parseCSVRaw(text) }];
+        const diag = {};
+        loadedSheets = [{ name: 'Sheet1', rawRows: parseCSVRaw(text, diag) }];
         setFormat('csv');
+        const problems = csvWarnings(diag);
+        if (problems.length) Alert.alert('Check this file', problems.join('\n\n'));
       }
 
       const nonEmpty = loadedSheets.filter((s) => s.rawRows.length > 0);

@@ -27,7 +27,7 @@ import {
 import { pickFile } from '../lib/openFile';
 
 import { BROKERS } from '../constants';
-import { parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
+import { csvWarnings, parseCSVRaw, reshapeWithHeaderRow } from '../lib/csv';
 import { parseXLSX } from '../lib/xlsx';
 import {
   parseHoldings,
@@ -140,7 +140,10 @@ export default function ImportHoldingsScreen({ navigation }) {
         });
         parsed = bestHoldingsSheet(sheets, broker);
       } else {
-        const raw = parseCSVRaw(await picked.readText());
+        const diag = {};
+        const raw = parseCSVRaw(await picked.readText(), diag);
+        const problems = csvWarnings(diag);
+        if (problems.length) Alert.alert('Check this file', problems.join('\n\n'));
         const headerIdx = findHoldingsHeaderRow(raw);
         parsed = reshapeWithHeaderRow(raw, headerIdx >= 0 ? headerIdx : 0);
       }

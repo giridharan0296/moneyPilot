@@ -31,13 +31,16 @@ import {
   useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 import { STORAGE_KEYS } from '../constants';
 import { useTransactions } from './TransactionsContext';
 import { useSettings } from './SettingsContext';
-import { lookupRateOrOne } from '../lib/currency';
 import {
+  applyRulePatch,
   generateDueOccurrences,
+  parseRuleDate,
+  planRuleSweep,
+  prepareRuleForGeneration,
   toLocalDayKey,
   transactionFromRule,
 } from '../lib/recurring';
@@ -71,7 +74,7 @@ function migrateRule(rule) {
   if (rule.startDateLocal) return rule;
 
   const patch = {};
-  const anchorFromStart = rule.startDate ? new Date(rule.startDate) : null;
+  const anchorFromStart = rule.startDate ? parseRuleDate(rule.startDate) : null;
   const anchorOk = anchorFromStart && !isNaN(anchorFromStart.getTime());
 
   // Derive startDateLocal. Prefer explicit anchor fields (they were the
@@ -108,7 +111,7 @@ function migrateRule(rule) {
 export function RecurringProvider({ children }) {
   const [rules, setRules] = useState([]);
   const [ready, setReady] = useState(false);
-  const { accounts, baseCurrency, fxRates } = useSettings();
+  const { accounts, baseCurrency, fxRates, ready: settingsReady } = useSettings();
 
   // Runtime dependencies from the transactions context.
   //
@@ -126,20 +129,25 @@ export function RecurringProvider({ children }) {
   const [lastSweep, setLastSweep] = useState(null);
   // Ref so the sweep only runs once per app session even under re-renders.
   const hasSweptRef = useRef(false);
+  // Latest rules for callbacks that must answer synchronously (updateRule).
+  const rulesRef = useRef(rules);
+  rulesRef.current = rules;
 
   // ---- Load on mount ----------------------------------------------------
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.recurring_rules);
+        const raw = await readStoredJson(STORAGE_KEYS.recurring_rules);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
           if (Array.isArray(parsed)) {
             setRules(parsed.map(migrateRule));
           }
         }
       } catch (e) {
         console.warn('Failed to load recurring rules:', e);
+        blockWrites(STORAGE_KEYS.recurring_rules);
       } finally {
         setReady(true);
       }
@@ -149,7 +157,7 @@ export function RecurringProvider({ children }) {
   // ---- Auto-persist -----------------------------------------------------
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.recurring_rules,
       JSON.stringify(rules),
     ).catch((e) => console.warn('Save recurring rules failed:', e));
@@ -157,52 +165,43 @@ export function RecurringProvider({ children }) {
 
   // ---- Sweep on startup -------------------------------------------------
   //
-  // We wait until BOTH rules and transactions have finished loading (so we
-  // don't generate duplicates on top of a still-loading list) and then run
-  // the sweep exactly once. The `hasSweptRef` guard is critical — React
+  // We wait until rules, transactions AND settings have finished loading (so we
+  // don't generate duplicates on top of a still-loading list, and don't price
+  // a rule against an empty accounts / FX table — that read a USD account as
+  // base currency and skipped foreign rules as "no rate") and then run the
+  // sweep exactly once. The `hasSweptRef` guard is critical — React
   // StrictMode double-invokes effects in dev, so this MUST be idempotent.
   //
   // Side effects (addTransaction calls) live OUTSIDE the setRules updater
   // because React may call state updaters multiple times to reconcile;
   // running them inside would risk double-adding transactions.
   useEffect(() => {
-    if (!ready || !transactionsReady || hasSweptRef.current) return;
+    if (!ready || !transactionsReady || !settingsReady || hasSweptRef.current) return;
     hasSweptRef.current = true;
 
     const now = new Date();
 
     // 1) Pure computation: figure out what transactions to add and which
     //    rules to advance. No React state touched here.
-    const toAdd = [];  // [{ type, tx }]
-    const updatedRules = rules.map((rule) => {
-      if (!rule.active) return rule;
-      const dueDates = generateDueOccurrences(rule, now);
-      if (dueDates.length === 0) return rule;
-      const account = accounts.find((item) => item.id === rule.accountId);
-      const currency = rule.currency ?? account?.currency ?? baseCurrency;
-      const fxRate = lookupRateOrOne(fxRates, currency, baseCurrency);
-      const enrichedRule = {
-        ...rule,
-        currency,
-        fxRate,
-        amountInBase: (Number(rule.amount) || 0) * fxRate,
-      };
-      for (const date of dueDates) {
-        toAdd.push({ type: rule.type, tx: transactionFromRule(enrichedRule, date) });
-      }
-      const latest = dueDates[dueDates.length - 1];
-      return { ...rule, lastRunDate: latest.toISOString() };
+    //    A rule with no exchange rate anywhere is left where it is (retried next
+    //    launch) instead of booking a foreign amount 1:1.
+    const { toAdd, updatedRules, skippedCurrencies } = planRuleSweep(rules, {
+      accounts, baseCurrency, fxRates, now,
     });
 
     // 2) Nothing to do? Bail out before touching state — avoids a needless
     //    re-render + storage write on every launch.
-    if (toAdd.length === 0) return;
+    if (toAdd.length === 0 && skippedCurrencies.length === 0) return;
 
     // 3) Commit the side effects and the state advance.
     for (const { type, tx } of toAdd) addTransaction(type, tx);
-    setRules(updatedRules);
-    setLastSweep({ generatedCount: toAdd.length, at: now.toISOString() });
-  }, [ready, transactionsReady, addTransaction, rules, accounts, baseCurrency, fxRates]);
+    if (toAdd.length > 0) setRules(updatedRules);
+    setLastSweep({
+      generatedCount: toAdd.length,
+      skippedCurrencies,
+      at: now.toISOString(),
+    });
+  }, [ready, transactionsReady, settingsReady, addTransaction, rules, accounts, baseCurrency, fxRates]);
 
   // ---- CRUD -------------------------------------------------------------
   //
@@ -217,7 +216,9 @@ export function RecurringProvider({ children }) {
     if (!data.categoryId || !data.accountId) return null;
     if (!data.startDate) return null;
 
-    const startDate = new Date(data.startDate);
+    const startDate = parseRuleDate(data.startDate);
+    if (isNaN(startDate.getTime())) return null;
+    if (data.endDate && isNaN(parseRuleDate(data.endDate).getTime())) return null;
     const frequency = data.frequency ?? 'monthly';
     const monthlyMode = data.monthlyMode ?? 'date';
 
@@ -241,6 +242,10 @@ export function RecurringProvider({ children }) {
       categoryId:    data.categoryId,
       subCategoryId: data.subCategoryId ?? null,
       accountId:     data.accountId,
+      // Currency the amount is in (may differ from the account's) and the
+      // rate at creation, kept only as a fallback if the FX table has none.
+      currency:      data.currency ? String(data.currency).toUpperCase() : null,
+      fxRate:        Number(data.fxRate) > 0 ? Number(data.fxRate) : null,
       note:          (data.note ?? '').trim(),
       frequency,
       // Monthly-only anchor mode. Older rules omit this field entirely and
@@ -255,7 +260,7 @@ export function RecurringProvider({ children }) {
       anchorMonth,
       startDate:     startDate.toISOString(),
       startDateLocal,
-      endDate:       data.endDate ? new Date(data.endDate).toISOString() : null,
+      endDate:       data.endDate ? parseRuleDate(data.endDate).toISOString() : null,
       lastRunDate:   null,
       active:        data.active !== false,
       createdAt:     new Date().toISOString(),
@@ -270,23 +275,23 @@ export function RecurringProvider({ children }) {
 
     const now = new Date();
     let generatedCount = 0;
+    let missingCurrency = null;
     if (data.backfillPast === true && newRule.active) {
       const dueDates = generateDueOccurrences(newRule, now);
       const account = accounts.find((item) => item.id === newRule.accountId);
-      const currency = newRule.currency ?? account?.currency ?? baseCurrency;
-      const fxRate = lookupRateOrOne(fxRates, currency, baseCurrency);
-      const enrichedRule = {
-        ...newRule,
-        currency,
-        fxRate,
-        amountInBase: (Number(newRule.amount) || 0) * fxRate,
-      };
-      for (const date of dueDates) {
-        addTransaction(newRule.type, transactionFromRule(enrichedRule, date));
-      }
-      generatedCount = dueDates.length;
-      if (generatedCount > 0) {
-        newRule.lastRunDate = dueDates[generatedCount - 1].toISOString();
+      const prepared = prepareRuleForGeneration(newRule, account, fxRates, baseCurrency);
+      if (prepared.ok) {
+        for (const date of dueDates) {
+          addTransaction(newRule.type, transactionFromRule(prepared.rule, date));
+        }
+        generatedCount = dueDates.length;
+        if (generatedCount > 0) {
+          newRule.lastRunDate = dueDates[generatedCount - 1].toISOString();
+        }
+      } else {
+        // No exchange rate yet: keep the rule, skip the backfill. The next
+        // sweep creates the missed entries once a rate is set.
+        missingCurrency = prepared.missingCurrency;
       }
     } else if (startDate <= now) {
       // The user explicitly declined historical transactions. Advancing the
@@ -295,37 +300,19 @@ export function RecurringProvider({ children }) {
     }
 
     setRules((prev) => [newRule, ...prev]);
-    return { ...newRule, generatedCount };
+    return { ...newRule, generatedCount, missingCurrency };
   }, [accounts, addTransaction, baseCurrency, fxRates]);
 
   const updateRule = useCallback((id, patch) => {
     if (!patch) return false;
-    let updated = false;
+    // Answer from the latest rules, not from inside the state updater: React
+    // may run the updater later, which made this return false (and the edit
+    // form stay open) for a save that did go through.
+    if (!rulesRef.current.some((r) => r.id === id)) return false;
     setRules((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r;
-        updated = true;
-        const next = { ...r, ...patch };
-        // Coerce dates in case the caller passed Date objects.
-        if (patch.startDate) {
-          const d = new Date(patch.startDate);
-          next.startDate = d.toISOString();
-          // Re-freeze the anchor from the new start date. Preserves the
-          // TZ-safety invariant even when the user edits the schedule.
-          next.anchorDay      = d.getDate();
-          next.anchorMonth    = d.getMonth();
-          // BK-H4: keep startDateLocal in lock-step with startDate so
-          // lib/recurring's getRuleAnchorDate reflects the edit
-          // immediately (not just the anchor ints).
-          next.startDateLocal = toLocalDayKey(d);
-        }
-        if (patch.endDate === null) next.endDate = null;
-        else if (patch.endDate) next.endDate = new Date(patch.endDate).toISOString();
-        if (patch.amount != null) next.amount = Number(patch.amount);
-        return next;
-      }),
+      prev.map((r) => (r.id === id ? applyRulePatch(r, patch) : r)),
     );
-    return updated;
+    return true;
   }, []);
 
   const deleteRule = useCallback((id) => {
@@ -393,11 +380,11 @@ export function RecurringProvider({ children }) {
     return count;
   }, [deleteTransaction]);
 
+  // Same path as an edit, so re-enabling a paused rule skips the paused stretch
+  // (see lastRunDateOnResume) instead of back-filling it on the next sweep.
   const setRuleActive = useCallback((id, active) => {
-    setRules((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, active } : r)),
-    );
-  }, []);
+    updateRule(id, { active });
+  }, [updateRule]);
 
   // Manually re-run the sweep. Not currently wired to any button but handy
   // for a future "run recurring now" affordance, or a Settings tool.
@@ -410,16 +397,8 @@ export function RecurringProvider({ children }) {
   // side effects once, then commit state once.
   const applyDueRulesNow = useCallback(() => {
     const now = new Date();
-    const toAdd = [];  // [{ type, tx }]
-    const updatedRules = rules.map((rule) => {
-      if (!rule.active) return rule;
-      const dueDates = generateDueOccurrences(rule, now);
-      if (dueDates.length === 0) return rule;
-      for (const date of dueDates) {
-        toAdd.push({ type: rule.type, tx: transactionFromRule(rule, date) });
-      }
-      const latest = dueDates[dueDates.length - 1];
-      return { ...rule, lastRunDate: latest.toISOString() };
+    const { toAdd, updatedRules } = planRuleSweep(rules, {
+      accounts, baseCurrency, fxRates, now,
     });
 
     if (toAdd.length === 0) return 0;
@@ -427,7 +406,7 @@ export function RecurringProvider({ children }) {
     for (const { type, tx } of toAdd) addTransaction(type, tx);
     setRules(updatedRules);
     return toAdd.length;
-  }, [addTransaction, rules]);
+  }, [addTransaction, rules, accounts, fxRates, baseCurrency]);
 
   // ---- Restore ----------------------------------------------------------
   // Clear-on-missing (see PortfolioContext.restoreState). Restored rules

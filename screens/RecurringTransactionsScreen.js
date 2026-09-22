@@ -345,13 +345,13 @@ function RuleRow({
             {rule.note?.trim() || cat?.label || 'Unknown'}
           </Text>
           <Text style={[styles.rowAmount, { color: meta.color }]}>
-            {meta.prefix}{formatMoneyCurrency(rule.amount, baseCurrency)}
+            {meta.prefix}{formatMoneyCurrency(rule.amount, rule.currency ?? acc?.currency ?? baseCurrency)}
           </Text>
         </View>
         <Text style={styles.rowSub} numberOfLines={2}>
           {cat?.label ?? 'Unknown'}
           {sub ? ` · ${sub.emoji} ${sub.label}` : ''}
-          {acc ? `  ·  ${acc.emoji} ${acc.label}` : ''}
+          {acc ? `  ·  ${acc.emoji} ${acc.label}` : '  ·  Account removed'}
         </Text>
         <View style={styles.rowMetaRow}>
           <Text style={styles.rowMeta}>{formatFrequency(rule)}</Text>
