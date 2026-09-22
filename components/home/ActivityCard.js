@@ -49,7 +49,14 @@ export default function ActivityCard({
         </HomeCard>
       ) : null}
 
-      <HomeCard title="Recent activity" actionLabel={items.length > 0 ? 'See all' : undefined} onAction={onOpenActivity} padded={false}>
+      <HomeCard
+        title="Recent activity"
+        icon="list"
+        accent={colors.accent.primary}
+        actionLabel={items.length > 0 ? 'See all' : undefined}
+        onAction={onOpenActivity}
+        padded={false}
+      >
         {items.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>

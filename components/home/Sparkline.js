@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { View } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 
-import { withAlpha } from '../../lib/colorAlpha';
-
-// Minimal trend line for cards. Deliberately NOT anchored at zero: a net
-// worth of ₹67L that moved 22% would otherwise render as a flat line.
+// Trend line for cards. Deliberately NOT anchored at zero: a net worth of
+// ₹67L that moved 22% would otherwise render as a flat line. The area under
+// the line fades from the line colour to transparent (same gradient-fill
+// technique as SpendOverTimeChart/StockPriceChart) rather than a flat tint,
+// so it reads as a glanceable "trend" shape and not just a filled block.
 export default function Sparkline({ values, color, height = 52 }) {
   const [width, setWidth] = useState(0);
+  const gradientId = `sparkline-fill-${useId()}`;
   const pts = Array.isArray(values) ? values.filter((v) => Number.isFinite(v)) : [];
   if (pts.length < 2) return null;
 
@@ -32,9 +34,16 @@ export default function Sparkline({ values, color, height = 52 }) {
     >
       {width > 0 ? (
         <Svg width={width} height={height}>
-          <Path d={area} fill={withAlpha(color, 0.12)} />
-          <Path d={line} stroke={color} strokeWidth={2} fill="none" strokeLinejoin="round" strokeLinecap="round" />
-          <Circle cx={x(last)} cy={y(pts[last])} r={3.5} fill={color} />
+          <Defs>
+            <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={color} stopOpacity="0.32" />
+              <Stop offset="1" stopColor={color} stopOpacity="0.02" />
+            </LinearGradient>
+          </Defs>
+          <Path d={area} fill={`url(#${gradientId})`} />
+          <Path d={line} stroke={color} strokeWidth={2.25} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+          <Circle cx={x(last)} cy={y(pts[last])} r={4} fill={color} />
+          <Circle cx={x(last)} cy={y(pts[last])} r={7} fill={color} opacity={0.18} />
         </Svg>
       ) : null}
     </View>

@@ -14,7 +14,7 @@ export default function NextActionsCard({ actions, onPress }) {
     good: colors.accent.income,
   };
   return (
-    <HomeCard title="Do this next" padded={false}>
+    <HomeCard title="Do this next" icon="zap" accent={colors.accent.primary} padded={false}>
       {actions.map((action, i) => (
         <HomeRow
           key={action.id}

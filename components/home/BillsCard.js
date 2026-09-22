@@ -23,7 +23,7 @@ export default function BillsCard({ bills, findCategory, baseCurrency, onOpen })
 
   if (bills.length === 0) {
     return (
-      <HomeCard title="Upcoming bills" padded={false}>
+      <HomeCard title="Upcoming bills" icon="receipt" accent={colors.accent.primary} padded={false}>
         <HomeRow
           first
           icon="calendar"
@@ -37,9 +37,17 @@ export default function BillsCard({ bills, findCategory, baseCurrency, onOpen })
 
   const shown = bills.slice(0, MAX_ROWS);
   const hidden = bills.length - shown.length;
+  const dueToday = bills.some((b) => b.days === 0);
 
   return (
-    <HomeCard title="Upcoming bills" actionLabel="See all" onAction={onOpen} padded={false}>
+    <HomeCard
+      title="Upcoming bills"
+      icon="receipt"
+      accent={dueToday ? colors.accent.expense : colors.accent.primary}
+      actionLabel="See all"
+      onAction={onOpen}
+      padded={false}
+    >
       {shown.map(({ rule, date, days, baseAmount, currency }, i) => {
         const cat = findCategory(rule.type, rule.categoryId);
         const isIncome = rule.type === 'income';

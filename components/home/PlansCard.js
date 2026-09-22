@@ -86,7 +86,7 @@ export default function PlansCard({
   }
 
   return (
-    <HomeCard title="Plans" padded={false}>
+    <HomeCard title="Plans" icon="target" accent={colors.accent.income} padded={false}>
       {rows}
     </HomeCard>
   );

@@ -8,12 +8,16 @@ import { layout, spacing } from '../../lib/theme';
 
 // ----------------------------------------------------------------------------
 // HomeCard — the one card shape on Home: a surface with a hairline border, no
-// shadow, no coloured edge. Optional header (title, quiet meta text on the
-// right, or a text action). Content sits in the padded body.
+// shadow. Optional header: title, an accent icon badge that gives the card
+// its own colour identity (`accent` + `icon` — the same tinted-badge language
+// HomeRow already uses, just at card scale), quiet meta text on the right, or
+// a text action. Content sits in the padded body.
 // ----------------------------------------------------------------------------
 export default function HomeCard({
   title,
   meta,
+  accent,
+  icon,
   actionLabel,
   onAction,
   children,
@@ -21,11 +25,20 @@ export default function HomeCard({
   style,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
+  const accentColor = accent ?? colors.accent.primary;
   return (
     <View style={[styles.card, style]}>
       {title ? (
         <View style={[styles.header, !padded && styles.headerPadded]}>
-          <Text style={styles.title} accessibilityRole="header">{title}</Text>
+          <View style={styles.titleRow}>
+            {icon ? (
+              <View style={[styles.titleIcon, { backgroundColor: withAlpha(accentColor, 0.14) }]}>
+                <AppIcon name={icon} size={14} color={accentColor} strokeWidth={2.3} />
+              </View>
+            ) : null}
+            <Text style={styles.title} accessibilityRole="header">{title}</Text>
+          </View>
           {actionLabel && onAction ? (
             <Pressable onPress={onAction} hitSlop={10} accessibilityRole="button" accessibilityLabel={`${title}: ${actionLabel}`}>
               <Text style={styles.action}>{actionLabel}</Text>
@@ -100,6 +113,8 @@ const makeStyles = (c) => ({
     paddingTop: layout.cardPadding,
   },
   headerPadded: { paddingBottom: spacing.xs },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
+  titleIcon: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   title: { color: c.text.primary, fontSize: 15, fontWeight: '700' },
   meta: { color: c.text.secondary, fontSize: 12, fontWeight: '500' },
   action: { color: c.accent.primary, fontSize: 13, fontWeight: '600' },

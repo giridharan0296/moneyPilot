@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 
 import HomeCard from './HomeCard';
 import AppIcon from '../AppIcon';
+import { PieBreakdownView } from '../CategoryPieChart';
 import SpendOverTimeChart from '../SpendOverTimeChart';
 import { useThemedStyles, useThemeColors } from '../../contexts/ThemeContext';
 import { withAlpha } from '../../lib/colorAlpha';
@@ -32,7 +33,13 @@ export default function SpendCard({
     : up ? colors.accent.expense : colors.accent.income;
 
   return (
-    <HomeCard title="Where it went" actionLabel="Reports" onAction={onOpenReports}>
+    <HomeCard
+      title="Where it went"
+      icon="pie-chart"
+      accent={colors.accent.expense}
+      actionLabel="Reports"
+      onAction={onOpenReports}
+    >
       {pace ? (
         <View style={styles.paceRow}>
           <View style={styles.paceCopy}>
@@ -58,18 +65,19 @@ export default function SpendCard({
       )}
 
       {categories.length > 0 ? (
-        <View style={styles.cats}>
-          {categories.map((c) => (
-            <View key={c.categoryId} style={styles.cat}>
-              <View style={styles.catHead}>
-                <Text style={styles.catLabel} numberOfLines={1}>{c.emoji}  {c.label}</Text>
-                <Text style={styles.catAmount}>{money(c.amount)}</Text>
-              </View>
-              <View style={styles.track}>
-                <View style={[styles.fill, { width: `${Math.min(100, Math.max(2, c.percent))}%`, backgroundColor: c.color }]} />
-              </View>
-            </View>
-          ))}
+        <View style={styles.donutWrap}>
+          <PieBreakdownView
+            rows={categories.map((c) => ({
+              label: `${c.emoji} ${c.label}`,
+              value: c.amount,
+              color: c.color,
+            }))}
+            baseCurrency={baseCurrency}
+            size={132}
+            thickness={20}
+            maxLegend={4}
+            emptyText="No spending yet"
+          />
         </View>
       ) : null}
 
@@ -100,12 +108,6 @@ const makeStyles = (c) => ({
   pill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill },
   pillText: { fontSize: 12, fontWeight: '600' },
   empty: { color: c.text.secondary, fontSize: 13 },
-  cats: { marginTop: spacing.lg, gap: spacing.md },
-  cat: { gap: 6 },
-  catHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  catLabel: { flex: 1, color: c.text.primary, fontSize: 13, fontWeight: '500' },
-  catAmount: { ...moneyText.small, color: c.text.primary },
-  track: { height: 6, borderRadius: 3, backgroundColor: c.bg.surfaceAlt, overflow: 'hidden' },
-  fill: { height: '100%', borderRadius: 3 },
+  donutWrap: { marginTop: spacing.lg },
   chart: { marginTop: spacing.lg },
 });

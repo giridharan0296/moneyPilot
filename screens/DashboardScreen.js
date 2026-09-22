@@ -40,7 +40,6 @@ import { useAiInsights } from '../contexts/AiInsightsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import {
   netWorthChange,
-  netWorthSparkline,
   topCategoriesThisMonth,
 } from '../lib/homeSummary';
 import { NAV } from '../lib/nextActions';
@@ -234,11 +233,6 @@ export default function DashboardScreen({ route }) {
     () => (hasNetWorthData ? netWorthChange(netWorth.history, netWorth.summary.netWorth) : null),
     [netWorth.history, netWorth.summary.netWorth, hasNetWorthData, isFocused],
   );
-  const nwSpark = useMemo(
-    () => netWorthSparkline(netWorth.history, 90),
-    [netWorth.history, isFocused],
-  );
-
   // Latest activity across everything, newest first, excluding future-dated rows.
   const recentActivity = useMemo(() => {
     const cutoff = Date.now();
@@ -431,7 +425,7 @@ export default function DashboardScreen({ route }) {
             assets={netWorth.summary.totalAssets}
             liabilities={netWorth.summary.totalLiabilities}
             change={nwChange}
-            spark={nwSpark}
+            netWorthHistory={netWorth.history}
             baseCurrency={baseCurrency}
             onPress={() => go(NAV.netWorth)}
           />
