@@ -19,7 +19,8 @@
       "versionCode": 3,
       "package": "com.giridharan19.expensetracker",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/worth-app-icon.png",
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png",
         "backgroundColor": "#0B1220"
       },
       "softwareKeyboardLayoutMode": "resize",
