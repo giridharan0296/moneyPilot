@@ -27,22 +27,25 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 import { STORAGE_KEYS } from '../constants';
 import { prefixedId } from '../lib/ids';
+import { applyBudgetUpdate } from '../lib/budget';
 
 const BudgetContext = createContext(null);
 
 const VALID_PERIODS = new Set(['monthly', 'weekly', 'yearly']);
 
 function normalize(budget) {
+  const amount = Number(budget.amount);
   return {
     id:         budget.id ?? prefixedId('bud'),
     categoryId: budget.categoryId ?? null,
     subCategoryId: budget.subCategoryId ?? null,
-    amount:     Number(budget.amount) || 0,
+    amount:     Number.isFinite(amount) && amount > 0 ? amount : 0,
     period:     VALID_PERIODS.has(budget.period) ? budget.period : 'monthly',
     createdAt:  budget.createdAt ?? new Date().toISOString(),
     active:     budget.active !== false,
@@ -53,27 +56,41 @@ export function BudgetProvider({ children }) {
   const [budgets, setBudgets] = useState([]);
   const [ready, setReady] = useState(false);
 
+  // Mutators read the CURRENT list from a ref and return their result
+  // synchronously. Computing the result inside a setState updater is not
+  // reliable: React may defer the updater to the next render, after the
+  // function has already returned (a false "not found" / "could not save").
+  // `commit` keeps ref and state in step within one tick.
+  const budgetsRef = useRef(budgets);
+  budgetsRef.current = budgets;
+  const commit = useCallback((next) => {
+    budgetsRef.current = next;
+    setBudgets(next);
+  }, []);
+
   // ---- Load persisted budgets on mount ----
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.budgets);
+        const raw = await readStoredJson(STORAGE_KEYS.budgets);
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) setBudgets(parsed.map(normalize));
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
+          if (Array.isArray(parsed)) commit(parsed.map(normalize));
         }
       } catch (e) {
         console.warn('Failed to load budgets:', e);
+        blockWrites(STORAGE_KEYS.budgets);
       } finally {
         setReady(true);
       }
     })();
-  }, []);
+  }, [commit]);
 
   // ---- Auto-persist ----
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets))
+    writeStored(STORAGE_KEYS.budgets, JSON.stringify(budgets))
       .catch((e) => console.warn('Save budgets failed:', e));
   }, [budgets, ready]);
 
@@ -86,7 +103,7 @@ export function BudgetProvider({ children }) {
   const findExistingId = useCallback(
     (categoryId, period, excludeId, subCategoryId = null) => {
       const sid = subCategoryId ?? null;
-      const match = budgets.find(
+      const match = budgetsRef.current.find(
         (b) =>
           b.categoryId === categoryId &&
           (b.subCategoryId ?? null) === sid &&
@@ -95,7 +112,7 @@ export function BudgetProvider({ children }) {
       );
       return match?.id ?? null;
     },
-    [budgets],
+    [],
   );
 
   // ---- CRUD ------------------------------------------------------------
@@ -112,106 +129,59 @@ export function BudgetProvider({ children }) {
       if (dupId) {
         // Update in place so the "you already have this" pattern stays
         // frictionless — the form should still warn the user before this
-        // fires, but the guard is here as a safety net.
-        setBudgets((prev) =>
-          prev.map((b) =>
-            b.id === dupId ? { ...b, amount: amt } : b,
+        // fires, but the guard is here as a safety net. A paused budget is
+        // switched back on: the user just asked for this limit.
+        commit(
+          budgetsRef.current.map((b) =>
+            b.id === dupId ? { ...b, amount: amt, active: true } : b,
           ),
         );
         return { ok: true, id: dupId, replaced: true };
       }
 
       const item = normalize({ categoryId: cid, subCategoryId: sid, amount: amt, period });
-      setBudgets((prev) => [item, ...prev]);
+      commit([item, ...budgetsRef.current]);
       return { ok: true, id: item.id, replaced: false };
     },
-    [findExistingId],
+    [findExistingId, commit],
   );
 
   // Updates a budget in place. When the patch would move the budget into
   // the same (categoryId, period) slot as another existing budget, we
   // MERGE — exactly like addBudget does on a dup — instead of leaving
   // two rows sharing a key. Two rows with the same key rendered duplicate
-  // progress bars and downstream helpers implicitly picked one.
+  // progress bars and downstream helpers implicitly picked one. The slot
+  // logic lives in lib/budget.js (applyBudgetUpdate).
   //
-  // Returns { ok, id, replaced?, merged? } to keep the failure/success
-  // shape consistent with addBudget.
+  // Returns { ok, id, merged? } to keep the failure/success shape
+  // consistent with addBudget.
   const updateBudget = useCallback((id, patch) => {
-    if (!patch) return { ok: false, reason: 'no_patch' };
-    let result = { ok: false, reason: 'not_found' };
-    setBudgets((prev) => {
-      const current = prev.find((b) => b.id === id);
-      if (!current) return prev;
-
-      const nextCid    = patch.categoryId !== undefined ? (patch.categoryId ?? null) : current.categoryId;
-      const nextSubId  = patch.subCategoryId !== undefined
-        ? (patch.subCategoryId ?? null)
-        : (current.subCategoryId ?? null);
-      const nextPeriod = patch.period != null            ? patch.period               : current.period;
-
-      // Would the patch put this budget in the same slot as ANOTHER
-      // existing budget? If so, apply the patch onto that other budget
-      // and drop the current one. Keeps the surviving row's original
-      // id + createdAt (matches addBudget's replace semantics).
-      const dup = prev.find(
-        (b) =>
-          b.id !== id &&
-          b.categoryId === nextCid &&
-          (b.subCategoryId ?? null) === nextSubId &&
-          b.period === nextPeriod,
-      );
-      if (dup) {
-        const mergedAmount = patch.amount != null
-          ? (Number(patch.amount) || 0)
-          : dup.amount;
-        const merged = {
-          ...dup,
-          categoryId: nextCid,
-          subCategoryId: nextSubId,
-          period: nextPeriod,
-          amount: mergedAmount,
-        };
-        result = { ok: true, id: dup.id, merged: true };
-        return prev
-          .filter((b) => b.id !== id)
-          .map((b) => (b.id === dup.id ? merged : b));
-      }
-
-      const next = { ...current, ...patch };
-      if (patch.amount != null) next.amount = Number(patch.amount) || 0;
-      // Normalise the period field so an invalid patch value can't sneak in.
-      if (!VALID_PERIODS.has(next.period)) next.period = current.period;
-      result = { ok: true, id, merged: false };
-      return prev.map((b) => (b.id === id ? next : b));
-    });
+    const { list, result } = applyBudgetUpdate(budgetsRef.current, id, patch);
+    if (result.ok) commit(list);
     return result;
-  }, []);
+  }, [commit]);
 
   const deleteBudget = useCallback((id) => {
-    setBudgets((prev) => prev.filter((b) => b.id !== id));
-  }, []);
+    commit(budgetsRef.current.filter((b) => b.id !== id));
+  }, [commit]);
 
   // Restore a deleted budget (undo-toast pattern). Preserves id + createdAt.
   const restoreBudget = useCallback((item) => {
     if (!item?.id) return;
-    setBudgets((prev) => {
-      if (prev.some((b) => b.id === item.id)) return prev;
-      return [item, ...prev];
-    });
-  }, []);
+    if (budgetsRef.current.some((b) => b.id === item.id)) return;
+    commit([item, ...budgetsRef.current]);
+  }, [commit]);
 
   const setBudgetActive = useCallback((id, active) => {
-    setBudgets((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, active } : b)),
-    );
-  }, []);
+    commit(budgetsRef.current.map((b) => (b.id === id ? { ...b, active } : b)));
+  }, [commit]);
 
   // Backup/restore integration. Clear-on-missing (see
   // PortfolioContext.restoreState for the full rationale).
   const restoreState = useCallback((payload) => {
     if (!payload) return;
-    setBudgets(Array.isArray(payload.budgets) ? payload.budgets.map(normalize) : []);
-  }, []);
+    commit(Array.isArray(payload.budgets) ? payload.budgets.map(normalize) : []);
+  }, [commit]);
 
   const value = useMemo(
     () => ({

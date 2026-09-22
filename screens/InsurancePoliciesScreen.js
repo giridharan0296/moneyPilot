@@ -53,6 +53,7 @@ export default function InsurancePoliciesScreen({ navigation }) {
   const [editingId, setEditingId] = useState(null);
 
   const expenseCategories = categories.expense ?? [];
+  const investmentCategories = categories.investment ?? [];
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -88,13 +89,23 @@ export default function InsurancePoliciesScreen({ navigation }) {
   const handleDelete = (policy) => {
     const removed = deletePolicy(policy.id);
     if (removed) {
-      showUndoableToast('Policy removed', () => restorePolicy(removed));
+      showUndoableToast({
+        message: `Deleted policy: ${removed.name}`,
+        onUndo: () => restorePolicy(removed),
+      });
     }
   };
 
   const openLogPremium = (policy) => {
     const { type, prefill } = expensePrefillFromPolicy(policy);
-    openTransactionsTab(navigation.getParent() ?? navigation, { initialTab: type });
+    const tabs = navigation.getParent() ?? navigation;
+    if (type === 'investment') {
+      // ULIP premiums are investments, which live on the Wealth tab — the
+      // Transactions tab has no investment list to receive the add event.
+      tabs.navigate('Invest', { screen: 'InvestmentsHome', initial: true });
+    } else {
+      openTransactionsTab(tabs, { initialTab: type });
+    }
     setTimeout(() => {
       DeviceEventEmitter.emit('transactions:openAdd', { type, prefill });
     }, 60);
@@ -110,11 +121,13 @@ export default function InsurancePoliciesScreen({ navigation }) {
 
   const renderPolicyRow = (policy) => {
     const meta = policyTypeMeta(policy.type);
-    const renewal = renewalStatus(policy.renewalDate);
+    // A paused / lapsed policy has nothing to renew, so don't flag it overdue.
+    const renewal = policy.active ? renewalStatus(policy.renewalDate) : null;
     const linkedRule = policy.recurringRuleId
       ? rules.find((r) => r.id === policy.recurringRuleId)
       : null;
-    const cat = findCategory('expense', policy.expenseCategoryId);
+    // ULIP premiums log as investments, so their category is an investment one.
+    const cat = findCategory(premiumTransactionType(policy.type), policy.expenseCategoryId);
     const sub = cat?.subCategories?.find((s) => s.id === policy.expenseSubCategoryId);
 
     return (
@@ -228,6 +241,7 @@ export default function InsurancePoliciesScreen({ navigation }) {
       {creating ? (
         <InsurancePolicyForm
           expenseCategories={expenseCategories}
+          investmentCategories={investmentCategories}
           submitLabel="Add policy"
           onCancel={() => setCreating(false)}
           onSubmit={(values) => {
@@ -246,6 +260,7 @@ export default function InsurancePoliciesScreen({ navigation }) {
         <InsurancePolicyForm
           key={editingPolicy.id}
           expenseCategories={expenseCategories}
+          investmentCategories={investmentCategories}
           initialValues={editingPolicy}
           submitLabel="Save changes"
           onCancel={() => setEditingId(null)}

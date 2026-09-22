@@ -7,6 +7,8 @@ import {
 } from 'react-native';
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 import { radii, spacing } from '../lib/theme';
+import { currencyMeta } from '../lib/currency';
+import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AmountCalculatorButton from './AmountCalculatorButton';
 import QuickAddPickerItem from './QuickAddPickerItem';
@@ -47,6 +49,7 @@ export default function BudgetForm({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const { baseCurrency } = useSettings();
   // categoryId === null means "Overall". React state uses a sentinel
   // '__overall' so we can compare to `null` unambiguously.
   const [categoryId, setCategoryId] = useState(
@@ -225,7 +228,7 @@ export default function BudgetForm({
         </>
       )}
 
-      <Text style={styles.label}>Amount (₹)</Text>
+      <Text style={styles.label}>Amount ({currencyMeta(baseCurrency).symbol})</Text>
       <AmountCalculatorButton value={amount} onChangeText={setAmount}>
         <TextInput
           style={styles.input}

@@ -30,15 +30,13 @@ import { useToast } from '../contexts/ToastContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import {
   computeGoalProgress,
+  goalInputsInBase,
   KIND_META,
   filterAccountsForGoalPicker,
   filterOtherAssetsForGoalPicker,
 } from '../lib/goals';
 import { radii, spacing } from '../lib/theme';
-import {
-  baseAmountOf,
-  formatMoney as formatMoneyCurrency,
-} from '../lib/currency';
+import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 
 const GOAL_TEMPLATES = [
   { id: 'emergency', name: 'Emergency Fund', emoji: '🚨', targetAmount: 300000 },
@@ -71,7 +69,7 @@ export function GoalsPane({
   const { goals, addGoal, updateGoal, deleteGoal, restoreGoal, setGoalActive } =
     useGoals();
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
-  const { assets } = useNetWorth();
+  const { assets, ready: netWorthReady } = useNetWorth();
   const { expenses } = useTransactions();
   const { showToast, showUndoableToast } = useToast();
 
@@ -188,19 +186,9 @@ export function GoalsPane({
   // currency, so normalise assets/expenses to base before feeding them
   // into `computeGoalProgress`. Otherwise a USD balance would be
   // compared to an INR target and always look tiny.
-  const assetsInBase = useMemo(
-    () => assets.map((a) => ({
-      ...a,
-      value: baseAmountOf(a, fxRates, baseCurrency, 'value'),
-    })),
-    [assets, fxRates, baseCurrency],
-  );
-  const expensesInBase = useMemo(
-    () => expenses.map((e) => ({
-      ...e,
-      amount: baseAmountOf(e, fxRates, baseCurrency, 'amount'),
-    })),
-    [expenses, fxRates, baseCurrency],
+  const { assets: assetsInBase, expenses: expensesInBase } = useMemo(
+    () => goalInputsInBase({ assets, expenses }, fxRates, baseCurrency),
+    [assets, expenses, fxRates, baseCurrency],
   );
   const emergencyEstimate = useMemo(() => {
     const now = Date.now();
@@ -225,10 +213,12 @@ export function GoalsPane({
   const progressById = useMemo(() => {
     const map = {};
     for (const g of goals) {
-      map[g.id] = computeGoalProgress(g, { assets: assetsInBase, expenses: expensesInBase });
+      const p = computeGoalProgress(g, { assets: assetsInBase, expenses: expensesInBase });
+      // Until Net Worth has loaded every linked asset looks "missing".
+      map[g.id] = netWorthReady ? p : { ...p, staleLinks: 0 };
     }
     return map;
-  }, [goals, assetsInBase, expensesInBase]);
+  }, [goals, assetsInBase, expensesInBase, netWorthReady]);
 
   const accountsForNewGoal = useMemo(
     () => filterAccountsForGoalPicker(accounts, assets, goals),
@@ -394,13 +384,18 @@ function GoalCard({
     [assets, goals, goal.id],
   );
   const {
-    current, target, percent, status, daysLeft, monthlyNeeded,
+    current, target, percent, status, daysLeft, monthlyNeeded, staleLinks,
   } = progress ?? {};
 
+  // A reached savings goal isn't "overdue" just because its date has passed,
+  // and a spending cap whose window closed has simply ended.
+  const isCap = goal.kind === 'spend_cap';
+  const reached = !isCap && status === 'complete';
+  const ended = daysLeft != null && daysLeft < 0;
   const daysCopy =
-    daysLeft == null ? null
-    : daysLeft < 0   ? `${Math.abs(daysLeft)}d overdue`
-    : daysLeft === 0 ? 'Today is the deadline'
+    daysLeft == null || reached ? null
+    : ended          ? (isCap ? 'Window ended' : `${Math.abs(daysLeft)}d overdue`)
+    : daysLeft === 0 ? (isCap ? 'Last day of the window' : 'Today is the deadline')
     :                  `${daysLeft} days left`;
 
   return (
@@ -444,8 +439,10 @@ function GoalCard({
       </View>
 
       <View style={styles.metaRow}>
-        {daysLeft != null ? (
-          <StatusBadge status={daysLeft < 0 ? 'overdue' : daysLeft === 0 ? 'due_today' : 'upcoming'} />
+        {daysLeft != null && !reached ? (
+          ended && isCap
+            ? <StatusBadge label="Ended" tone="neutral" />
+            : <StatusBadge status={ended ? 'overdue' : daysLeft === 0 ? 'due_today' : 'upcoming'} />
         ) : null}
         {daysCopy && (
           <View style={styles.metaItem}>
@@ -462,6 +459,13 @@ function GoalCard({
           </View>
         )}
       </View>
+
+      {staleLinks > 0 ? (
+        <Text style={styles.staleNote}>
+          {staleLinks === 1 ? 'A linked asset was' : `${staleLinks} linked assets were`} removed
+          from Net Worth and no longer count. Edit this goal to link another.
+        </Text>
+      ) : null}
 
       <View style={styles.actionsRow}>
         {!isEditing ? (
@@ -633,6 +637,12 @@ const makeStyles = (c) => ({
     fontWeight: '600',
   },
 
+  staleNote: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: c.palette.amber500,
+    fontWeight: '600',
+  },
   actionsRow: {
     flexDirection: 'row',
     gap: spacing.sm,

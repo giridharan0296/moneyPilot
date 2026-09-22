@@ -17,7 +17,10 @@ import {
   KINDS,
   assetIdForLinkedAccount,
   assetPickerTag,
+  goalDateError,
 } from '../lib/goals';
+import { currencyMeta } from '../lib/currency';
+import { useSettings } from '../contexts/SettingsContext';
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
@@ -48,6 +51,7 @@ export default function GoalForm({
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const { baseCurrency } = useSettings();
   const isEdit = !!initialValues;
 
   const [kind, setKind]       = useState(initialValues?.kind ?? 'save');
@@ -167,6 +171,8 @@ export default function GoalForm({
     if (kind === 'spend_cap' && !startDate) {
       return setError('Pick a start date so we know when the cap window began.');
     }
+    const dateError = goalDateError({ kind, startDate, deadline, isNew: !initialValues?.id });
+    if (dateError) return setError(dateError);
 
     setError(null);
     onSubmit({
@@ -273,7 +279,7 @@ export default function GoalForm({
         })}
       </ScrollView>
 
-      <Text style={styles.label}>Target amount (₹)</Text>
+      <Text style={styles.label}>Target amount ({currencyMeta(baseCurrency).symbol})</Text>
       <AmountCalculatorButton value={amount} onChangeText={setAmount}>
         <TextInput
           style={styles.input}

@@ -436,16 +436,8 @@ function SummaryHero({ summary }) {
   const themeColors = useThemeColors();
   const { total, safe, warn, over } = summary;
   const empty = total === 0;
-  const bgColor = empty
-    ? themeColors.bg.hero
-    : over > 0
-      ? themeColors.bg.heroRed
-      : warn > 0
-        ? themeColors.palette.amber700
-        : themeColors.bg.heroGreen;
-
   return (
-    <View style={[styles.hero, { backgroundColor: bgColor }]}>
+    <View style={styles.hero}>
       <Text style={styles.heroLabel}>BUDGET HEALTH</Text>
       {empty ? (
         <>
@@ -524,30 +516,31 @@ const makeStyles = (c) => ({
 
   // Hero
   hero: {
+    backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
-    padding: spacing.xl,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: spacing.lg + 2,
+    alignItems: 'flex-start',
   },
-  // Hero card is always dark (bg.hero / bg.heroGreen / bg.heroRed) — use
-  // `text.onHero*` so labels stay legible in dark mode.
   heroLabel: {
-    color: c.text.onHeroMuted,
+    color: c.text.secondary,
     fontSize: 11,
     letterSpacing: 1,
     fontWeight: '700',
     marginBottom: spacing.xs,
   },
   heroValue: {
-    color: c.text.onHero,
+    color: c.text.primary,
     fontSize: 22,
     fontWeight: '700',
-    textAlign: 'center',
+    textAlign: 'left',
   },
   heroSub: {
-    color: c.text.onHeroMuted,
+    color: c.text.secondary,
     fontSize: 13,
     marginTop: spacing.xs,
-    textAlign: 'center',
+    textAlign: 'left',
   },
   heroPillsRow: {
     flexDirection: 'row',
@@ -561,12 +554,12 @@ const makeStyles = (c) => ({
     paddingVertical: 4,
     minWidth: 60,
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: c.bg.surfaceAlt,
   },
   heroPillCount: { fontSize: 18, fontWeight: '800' },
   heroPillLabel: {
     fontSize: 10,
-    color: c.palette.n300,
+    color: c.text.secondary,
     fontWeight: '700',
     letterSpacing: 0.5,
   },

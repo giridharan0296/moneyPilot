@@ -17,9 +17,10 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 
 import { STORAGE_KEYS } from '../constants';
 import { prefixedId } from '../lib/ids';
@@ -27,12 +28,13 @@ import { prefixedId } from '../lib/ids';
 const GoalsContext = createContext(null);
 
 function normalize(g) {
+  const target = Number(g.targetAmount);
   return {
     id:                g.id ?? prefixedId('goal'),
     name:              (g.name ?? '').trim(),
     emoji:             g.emoji ?? '🎯',
     kind:              g.kind === 'spend_cap' ? 'spend_cap' : 'save',
-    targetAmount:      Number(g.targetAmount) || 0,
+    targetAmount:      Number.isFinite(target) && target > 0 ? target : 0,
     deadline:          g.deadline ?? null,
     linkedAssetIds:    Array.isArray(g.linkedAssetIds)    ? g.linkedAssetIds    : [],
     linkedCategoryIds: Array.isArray(g.linkedCategoryIds) ? g.linkedCategoryIds : [],
@@ -46,16 +48,24 @@ export function GoalsProvider({ children }) {
   const [goals, setGoals] = useState([]);
   const [ready, setReady] = useState(false);
 
+  // deleteGoal must hand back the removed goal (for the undo toast). Reading
+  // it inside a setState updater is unreliable — React may defer the updater
+  // until after we return — so read the latest list from a ref instead.
+  const goalsRef = useRef(goals);
+  goalsRef.current = goals;
+
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.goals);
+        const raw = await readStoredJson(STORAGE_KEYS.goals);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
           if (Array.isArray(parsed)) setGoals(parsed.map(normalize));
         }
       } catch (e) {
         console.warn('Failed to load goals:', e);
+        blockWrites(STORAGE_KEYS.goals);
       } finally {
         setReady(true);
       }
@@ -64,7 +74,7 @@ export function GoalsProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.goals, JSON.stringify(goals)).catch((e) =>
+    writeStored(STORAGE_KEYS.goals, JSON.stringify(goals)).catch((e) =>
       console.warn('Save goals failed:', e),
     );
   }, [goals, ready]);
@@ -83,11 +93,11 @@ export function GoalsProvider({ children }) {
   }, []);
 
   const deleteGoal = useCallback((id) => {
-    let removed = null;
-    setGoals((prev) => {
-      removed = prev.find((g) => g.id === id) ?? null;
-      return prev.filter((g) => g.id !== id);
-    });
+    const removed = goalsRef.current.find((g) => g.id === id) ?? null;
+    if (removed) {
+      goalsRef.current = goalsRef.current.filter((g) => g.id !== id);
+      setGoals((prev) => prev.filter((g) => g.id !== id));
+    }
     return removed;
   }, []);
 

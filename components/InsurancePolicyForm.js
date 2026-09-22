@@ -23,6 +23,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
 export default function InsurancePolicyForm({
   expenseCategories = [],
+  investmentCategories = [],
   initialValues = null,
   submitLabel = 'Save policy',
   onSubmit,
@@ -64,9 +65,11 @@ export default function InsurancePolicyForm({
   const typeMeta = policyTypeMeta(type);
   const txType = premiumTransactionType(type);
 
+  // ULIP premiums log as investments, so pick from investment categories.
+  const pickerCategories = typeMeta.premiumAsInvestment ? investmentCategories : expenseCategories;
   const selectedCategory = useMemo(
-    () => expenseCategories.find((c) => c.id === expenseCategoryId) ?? null,
-    [expenseCategories, expenseCategoryId],
+    () => pickerCategories.find((c) => c.id === expenseCategoryId) ?? null,
+    [pickerCategories, expenseCategoryId],
   );
   const subCategories = selectedCategory?.subCategories ?? [];
 
@@ -88,6 +91,11 @@ export default function InsurancePolicyForm({
       setError('Enter a positive premium amount.');
       return;
     }
+    const cover = coverAmount.trim() ? Number(coverAmount) : null;
+    if (cover != null && (!Number.isFinite(cover) || cover <= 0)) {
+      setError('Sum assured must be a positive number, or leave it blank.');
+      return;
+    }
     setError(null);
     onSubmit({
       name: trimmed,
@@ -97,7 +105,7 @@ export default function InsurancePolicyForm({
       premiumAmount: premium,
       premiumFrequency,
       renewalDate: renewalDate ? renewalDate.toISOString() : null,
-      coverAmount: coverAmount.trim() ? Number(coverAmount) || null : null,
+      coverAmount: cover,
       expenseCategoryId,
       expenseSubCategoryId: subCategories.length ? expenseSubCategoryId : null,
       tags,
@@ -165,20 +173,18 @@ export default function InsurancePolicyForm({
       />
 
       <Text style={styles.label}>Premium amount</Text>
-      <View style={styles.amountRow}>
+      {/* Wrapper form: the calculator button is absolutely positioned over the
+          input. Used standalone it has no size and can't be tapped. */}
+      <AmountCalculatorButton value={premiumAmount} onChangeText={setPremiumAmount}>
         <TextInput
-          style={[styles.input, styles.amountInput]}
+          style={styles.input}
           value={premiumAmount}
           onChangeText={setPremiumAmount}
           keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
           placeholder="0"
           placeholderTextColor={themeColors.text.muted}
         />
-        <AmountCalculatorButton
-          value={premiumAmount}
-          onChange={setPremiumAmount}
-        />
-      </View>
+      </AmountCalculatorButton>
 
       <Text style={styles.label}>Premium frequency</Text>
       <View style={styles.chipRow}>
@@ -239,7 +245,7 @@ export default function InsurancePolicyForm({
 
       <Text style={styles.label}>Log premium under</Text>
       <View style={styles.pickerList}>
-        {expenseCategories.map((cat) => (
+        {pickerCategories.map((cat) => (
           <QuickAddPickerItem
             key={cat.id}
             emoji={cat.emoji}
@@ -338,14 +344,6 @@ const makeStyles = (c) => ({
     fontSize: 16,
     color: c.text.primary,
     backgroundColor: c.bg.surfaceAlt,
-  },
-  amountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  amountInput: {
-    flex: 1,
   },
   notesInput: {
     minHeight: 72,

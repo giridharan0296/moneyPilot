@@ -11,9 +11,10 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 
 import { STORAGE_KEYS } from '../constants';
 import { prefixedId } from '../lib/ids';
@@ -25,18 +26,25 @@ export function InsurancePoliciesProvider({ children }) {
   const [policies, setPolicies] = useState([]);
   const [ready, setReady] = useState(false);
 
+  // See GoalsContext: deleting must return the removed policy for undo, and a
+  // setState updater may run after the return, so read the list from a ref.
+  const policiesRef = useRef(policies);
+  policiesRef.current = policies;
+
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.insurance_policies);
+        const raw = await readStoredJson(STORAGE_KEYS.insurance_policies);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
           if (Array.isArray(parsed)) {
             setPolicies(parsed.map((p) => normalizePolicy({ ...p, id: p.id ?? prefixedId('pol') })));
           }
         }
       } catch (e) {
         console.warn('Failed to load insurance policies:', e);
+        blockWrites(STORAGE_KEYS.insurance_policies);
       } finally {
         setReady(true);
       }
@@ -45,7 +53,7 @@ export function InsurancePoliciesProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.insurance_policies, JSON.stringify(policies))
+    writeStored(STORAGE_KEYS.insurance_policies, JSON.stringify(policies))
       .catch((e) => console.warn('Save insurance policies failed:', e));
   }, [policies, ready]);
 
@@ -63,11 +71,11 @@ export function InsurancePoliciesProvider({ children }) {
   }, []);
 
   const deletePolicy = useCallback((id) => {
-    let removed = null;
-    setPolicies((prev) => {
-      removed = prev.find((p) => p.id === id) ?? null;
-      return prev.filter((p) => p.id !== id);
-    });
+    const removed = policiesRef.current.find((p) => p.id === id) ?? null;
+    if (removed) {
+      policiesRef.current = policiesRef.current.filter((p) => p.id !== id);
+      setPolicies((prev) => prev.filter((p) => p.id !== id));
+    }
     return removed;
   }, []);
 
@@ -97,7 +105,9 @@ export function InsurancePoliciesProvider({ children }) {
     if (!payload) return;
     setPolicies(
       Array.isArray(payload.insurancePolicies)
-        ? payload.insurancePolicies.map((p) => normalizePolicy(p))
+        // A backup entry without an id would get id null, and every null-id
+        // policy is then the same row to edit/delete — mint one, as load does.
+        ? payload.insurancePolicies.map((p) => normalizePolicy({ ...p, id: p?.id ?? prefixedId('pol') }))
         : [],
     );
   }, []);
