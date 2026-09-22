@@ -299,11 +299,15 @@ export default function ImportTransactionsScreen({ navigation }) {
   }
 
   // Switch to a different sheet in an Excel workbook. Re-runs the auto-
-  // mapping since the new sheet almost certainly has different columns.
+  // mapping since the new sheet almost certainly has different columns,
+  // and resets a forced date order back to 'auto' — a DD/MM vs MM/DD
+  // choice made for the previous sheet has no bearing on this one and
+  // would otherwise silently keep misreading ambiguous dates here.
   function handleSheetChange(idx) {
     setSheetIdx(idx);
     setPreviewFilter('all');
     setPreviewExpanded(false);
+    setDateOrder('auto');
     setMapping(autoDetectMapping(sheets[idx]?.headers ?? []));
   }
 
