@@ -111,6 +111,22 @@ const ICONS = {
     <Circle key="b" cx="12" cy="12" r="6"  {...p} />,
     <Circle key="c" cx="12" cy="12" r="2"  {...p} />,
   ],
+  // Budgets. Was sharing `target` with the Plan tab itself and with the
+  // goal-progress ring elsewhere, which read as "these are the same
+  // thing" — a squat coin jar (lid + coin slot + a fill line marking
+  // what's inside) reads unambiguously as "a cap on spending" instead.
+  // Hand-drawn to match Lucide's stroke conventions (not a stock Lucide
+  // glyph — Lucide has no jar icon).
+  jar: (p) => [
+    <Rect key="a" x="7.5" y="2.5" width="9" height="3" rx="1" {...p} />,
+    <Path key="b" d="M11 3.4v1.2" {...p} />,
+    <Path
+      key="c"
+      d="M6 6.2h12a1 1 0 0 1 1 1V18.5a3.5 3.5 0 0 1-3.5 3.5h-7A3.5 3.5 0 0 1 5 18.5V7.2a1 1 0 0 1 1-1z"
+      {...p}
+    />,
+    <Path key="d" d="M5.3 14h13.4" {...p} />,
+  ],
   landmark: (p) => [
     // Bank / loan icon: pillared building with a base + top rail.
     <Line key="a" x1="3"  y1="22" x2="21" y2="22" {...p} />,

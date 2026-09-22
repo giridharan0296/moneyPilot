@@ -478,7 +478,7 @@ function EmptyState() {
   return (
     <View style={styles.empty}>
       <View style={styles.emptyIconWrap}>
-        <AppIcon name="target" size={44} color={themeColors.text.muted} strokeWidth={1.7} />
+        <AppIcon name="jar" size={44} color={themeColors.text.muted} strokeWidth={1.7} />
       </View>
       <Text style={styles.emptyTitle}>Start with one budget</Text>
       <Text style={styles.emptyBody}>

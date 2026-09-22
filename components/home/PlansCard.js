@@ -32,7 +32,7 @@ export default function PlansCard({
       <HomeRow
         key="budget"
         first={rows.length === 0}
-        icon="target"
+        icon="jar"
         tint={tone(worst.progress.status)}
         title={`Budgets · ${budgetSummary.safe} of ${budgetSummary.total} on track`}
         detail={`${worst.label} · ${money(worst.progress.spent)} of ${money(Number(worst.budget.amount) || 0)}`}
@@ -45,7 +45,7 @@ export default function PlansCard({
       <HomeRow
         key="budget"
         first={rows.length === 0}
-        icon="target"
+        icon="jar"
         title="Set a spending budget"
         detail="Cap overall or category spending each month"
         onPress={onOpenBudgets}

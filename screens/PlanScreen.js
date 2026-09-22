@@ -44,7 +44,7 @@ export default function PlanScreen({ navigation }) {
         <MenuRow
           grouped
           first
-          icon="target"
+          icon="jar"
           title="Budgets"
           description="Monthly limits per category or overall."
           onPress={() => navigation.navigate('Plans', { tab: 'budgets' })}

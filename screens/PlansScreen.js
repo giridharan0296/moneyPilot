@@ -29,7 +29,7 @@ import { radii, spacing } from '../lib/theme';
 const CREATE_OPTIONS = [
   {
     id: 'budget',
-    icon: 'target',
+    icon: 'jar',
     title: 'Monthly spending limit',
     description: 'Repeating cap per category or overall — resets each week, month, or year.',
     tint: '#dc2626',
@@ -162,7 +162,7 @@ export default function PlansScreen({ navigation, route }) {
     navigation.setOptions({
       headerTitle: () =>
         tab === 'budgets'
-          ? <HeaderTitleWithIcon icon="target" label="Budgets" tint={colors.accent.expense} />
+          ? <HeaderTitleWithIcon icon="jar" label="Budgets" tint={colors.accent.expense} />
           : <HeaderTitleWithIcon icon="flag" label="Goals" tint={colors.accent.income} />,
       headerRight: () =>
         !formOpen ? (
