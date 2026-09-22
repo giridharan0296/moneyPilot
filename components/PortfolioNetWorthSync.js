@@ -1,12 +1,13 @@
 // Sync each portfolio holding (stock / MF) into its own Net Worth asset.
 // Cash leaves the bank via investment transactions; these assets track market value.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 import { useNetWorth } from '../contexts/NetWorthContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
+import useCachedQuotes from '../hooks/useCachedQuotes';
 import { fetchLiveQuotes } from '../lib/fundamentals';
 import {
   aggregateHoldingsBySymbol,
@@ -15,6 +16,7 @@ import {
   holdingMarketValue,
   symbolsNeedingQuotes,
 } from '../lib/portfolioHoldings';
+import { mergeCachedQuotes } from '../lib/quoteCache';
 import {
   buildSymbolMetaMap,
   buildSyncedAssetPayload,
@@ -35,7 +37,8 @@ export default function PortfolioNetWorthSync() {
     isPortfolioSymbolHidden,
   } = useNetWorth();
 
-  const [quotes, setQuotes] = useState({});
+  // Shared cache: the Portfolio and allocation screens read the same quotes.
+  const quotes = useCachedQuotes();
   const quoteReq = useRef(0);
 
   const ready = portfolioReady && txReady && settingsReady && nwReady;
@@ -46,19 +49,16 @@ export default function PortfolioNetWorthSync() {
   );
 
   useEffect(() => {
-    if (!ready || symbolsToQuote.length === 0) {
-      setQuotes({});
-      return undefined;
-    }
+    if (!ready || symbolsToQuote.length === 0) return undefined;
     let cancelled = false;
     const id = ++quoteReq.current;
     (async () => {
       try {
         const { quotes: next } = await fetchLiveQuotes(symbolsToQuote);
         if (cancelled || id !== quoteReq.current) return;
-        setQuotes(next ?? {});
+        mergeCachedQuotes(next);
       } catch {
-        if (!cancelled && id === quoteReq.current) setQuotes({});
+        // Offline / rate-limited: keep whatever was fetched before.
       }
     })();
     return () => { cancelled = true; };

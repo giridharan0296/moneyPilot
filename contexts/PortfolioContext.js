@@ -23,6 +23,13 @@ import {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  blockWrites,
+  isWriteBlocked,
+  readStored,
+  readStoredJson,
+  writeStored,
+} from '../lib/safeStorage';
 import { STORAGE_KEYS } from '../constants';
 import {
   applyQuotesToHoldings,
@@ -39,6 +46,11 @@ function finiteNumber(value) {
 }
 
 function normalizeHolding(holding) {
+  // A row with a price but no stored value (hand-edited / older backup) is
+  // worth price x quantity; defaulting the value to 0 would wipe it out.
+  const currentValue = holding?.currentValue != null && Number.isFinite(Number(holding.currentValue))
+    ? Number(holding.currentValue)
+    : finiteNumber(holding?.currentPrice) * finiteNumber(holding?.quantity);
   return reconcileHoldingMetrics({
     ...holding,
     quantity: finiteNumber(holding?.quantity),
@@ -47,7 +59,7 @@ function normalizeHolding(holding) {
       ? finiteNumber(holding.investedValue)
       : finiteNumber(holding?.avgCost) * finiteNumber(holding?.quantity),
     currentPrice: finiteNumber(holding?.currentPrice),
-    currentValue: finiteNumber(holding?.currentValue),
+    currentValue,
   });
 }
 
@@ -67,16 +79,18 @@ export function PortfolioProvider({ children }) {
     (async () => {
       try {
         const [raw, pricesRaw] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.portfolio_holdings),
-          AsyncStorage.getItem(STORAGE_KEYS.portfolio_prices_updated_at),
+          readStoredJson(STORAGE_KEYS.portfolio_holdings),
+          readStored(STORAGE_KEYS.portfolio_prices_updated_at),
         ]);
         if (raw) {
           const parsed = JSON.parse(raw);
-          setHoldings(Array.isArray(parsed) ? parsed.map(normalizeHolding) : []);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
+          setHoldings(parsed.map(normalizeHolding));
         }
         if (pricesRaw) setPricesUpdatedAt(pricesRaw);
       } catch (e) {
         console.warn('Failed to load portfolio holdings:', e);
+        blockWrites(STORAGE_KEYS.portfolio_holdings);
       } finally {
         setReady(true);
       }
@@ -86,7 +100,7 @@ export function PortfolioProvider({ children }) {
   // Auto-persist after every change (but not during the initial load).
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(
+    writeStored(
       STORAGE_KEYS.portfolio_holdings,
       JSON.stringify(holdings),
     ).catch((e) => console.warn('Save portfolio failed:', e));
@@ -95,11 +109,11 @@ export function PortfolioProvider({ children }) {
   useEffect(() => {
     if (!ready) return;
     if (pricesUpdatedAt) {
-      AsyncStorage.setItem(
+      writeStored(
         STORAGE_KEYS.portfolio_prices_updated_at,
         pricesUpdatedAt,
       ).catch((e) => console.warn('Save pricesUpdatedAt failed:', e));
-    } else {
+    } else if (!isWriteBlocked(STORAGE_KEYS.portfolio_prices_updated_at)) {
       AsyncStorage.removeItem(STORAGE_KEYS.portfolio_prices_updated_at)
         .catch(() => {});
     }
@@ -195,12 +209,14 @@ export function PortfolioProvider({ children }) {
       return { updated: 0, resolved: 0, failed: [], fetchedAt: null };
     }
     const result = await fetchLiveQuotes(symbols);
-    const { holdings: next, updated, skipped = [] } = applyQuotesToHoldings(
+    const { updated, skipped = [] } = applyQuotesToHoldings(
       holdings,
       result.quotes,
       result.fetchedAt,
     );
-    setHoldings(next);
+    // Apply to the CURRENT rows: the fetch is slow, and rows added, removed
+    // or re-imported meanwhile must not be overwritten by the older list.
+    setHoldings((prev) => applyQuotesToHoldings(prev, result.quotes, result.fetchedAt).holdings);
     if (updated > 0) setPricesUpdatedAt(result.fetchedAt);
     return {
       updated,

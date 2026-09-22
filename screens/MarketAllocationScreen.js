@@ -24,6 +24,7 @@ import {
   computeAllocationDrift,
   suggestRebalance,
 } from '../lib/portfolioAllocation';
+import useCachedQuotes from '../hooks/useCachedQuotes';
 import { buildDisplayHoldings } from '../lib/portfolioHoldings';
 import {
   MARKET_ALLOCATION_PRESETS,
@@ -144,9 +145,11 @@ export default function MarketAllocationScreen() {
   const [draftPercents, setDraftPercents] = useState({});
   const [activePresetId, setActivePresetId] = useState(null);
 
+  // Same live quotes Net Worth and Portfolio use, so the totals agree.
+  const quotes = useCachedQuotes();
   const displayHoldings = useMemo(
-    () => buildDisplayHoldings(holdings, investments, {}, { isSymbolHidden: isPortfolioSymbolHidden }),
-    [holdings, investments, isPortfolioSymbolHidden],
+    () => buildDisplayHoldings(holdings, investments, quotes, { isSymbolHidden: isPortfolioSymbolHidden }),
+    [holdings, investments, quotes, isPortfolioSymbolHidden],
   );
 
   const { rows: currentRows, totalValue } = useMemo(
@@ -437,21 +440,23 @@ const makeStyles = (c) => ({
   content: { padding: spacing.lg, paddingBottom: spacing['4xl'], gap: spacing.xl },
 
   hero: {
-    backgroundColor: c.bg.hero,
+    backgroundColor: c.bg.surface,
     borderRadius: radii.xl,
-    padding: spacing.xl,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: spacing.lg + 2,
+    alignItems: 'flex-start',
   },
-  heroLabel: { color: c.text.onHeroMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1 },
-  heroValue: { color: c.text.onHero, fontSize: 32, fontWeight: '800', marginTop: spacing.xs },
-  heroSub: { color: c.text.onHeroMuted, fontSize: 12, marginTop: spacing.xs, textAlign: 'center' },
+  heroLabel: { color: c.text.secondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8 },
+  heroValue: { color: c.text.primary, fontSize: 28, fontWeight: '700', marginTop: spacing.xs },
+  heroSub: { color: c.text.secondary, fontSize: 12, marginTop: spacing.xs },
   heroRow: { marginTop: spacing.md },
   sumPill: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.pill },
-  sumPillOk: { backgroundColor: 'rgba(255,255,255,0.12)' },
-  sumPillWarn: { backgroundColor: 'rgba(245,158,11,0.25)' },
+  sumPillOk: { backgroundColor: c.bg.surfaceAlt },
+  sumPillWarn: { backgroundColor: c.banner.recurringBg },
   sumPillText: { fontSize: 12, fontWeight: '700' },
-  sumPillTextOk: { color: c.text.onHeroMuted },
-  sumPillTextWarn: { color: '#fde68a' },
+  sumPillTextOk: { color: c.text.secondary },
+  sumPillTextWarn: { color: c.banner.recurringTitle },
 
   section: {
     backgroundColor: c.bg.surface,

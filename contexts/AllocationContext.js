@@ -13,7 +13,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { blockWrites, readStoredJson, writeStored } from '../lib/safeStorage';
 import { STORAGE_KEYS } from '../constants';
 import { prefixedId } from '../lib/ids';
 
@@ -37,13 +37,15 @@ export function AllocationProvider({ children }) {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.allocation_targets);
+        const raw = await readStoredJson(STORAGE_KEYS.allocation_targets);
         if (raw) {
           const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) throw new Error('expected an array');
           if (Array.isArray(parsed)) setTargets(parsed.map(normalize));
         }
       } catch (e) {
         console.warn('Failed to load allocation targets:', e);
+        blockWrites(STORAGE_KEYS.allocation_targets);
       } finally {
         setReady(true);
       }
@@ -52,7 +54,7 @@ export function AllocationProvider({ children }) {
 
   useEffect(() => {
     if (!ready) return;
-    AsyncStorage.setItem(STORAGE_KEYS.allocation_targets, JSON.stringify(targets))
+    writeStored(STORAGE_KEYS.allocation_targets, JSON.stringify(targets))
       .catch((e) => console.warn('Save allocation targets failed:', e));
   }, [targets, ready]);
 
@@ -86,7 +88,15 @@ export function AllocationProvider({ children }) {
     if (!Array.isArray(entries)) return;
     const next = entries
       .filter((e) => e.categoryId && Number(e.targetPercent) > 0)
-      .map((e) => normalize({ categoryId: e.categoryId, targetPercent: e.targetPercent }));
+      // Keep id / active / createdAt when callers pass existing targets back
+      // in, so re-saving a subset does not re-enable paused targets.
+      .map((e) => normalize({
+        id: e.id,
+        categoryId: e.categoryId,
+        targetPercent: e.targetPercent,
+        active: e.active,
+        createdAt: e.createdAt,
+      }));
     setTargets(next);
   }, []);
 

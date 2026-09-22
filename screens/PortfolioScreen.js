@@ -24,12 +24,15 @@ import {
 
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useNetWorth } from '../contexts/NetWorthContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { moneyText } from '../lib/theme';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useToast } from '../contexts/ToastContext';
-import { baseAmountOf } from '../lib/currency';
+import { baseAmountOf, formatMoneyDisplay } from '../lib/currency';
+import useCachedQuotes from '../hooks/useCachedQuotes';
 import { fetchLiveQuotes } from '../lib/fundamentals';
+import { mergeCachedQuotes } from '../lib/quoteCache';
 import { instrumentDisplayLabel } from '../lib/instrumentMemory';
 import {
   computePortfolioSummary,
@@ -88,13 +91,15 @@ function formatDateTime(iso) {
 
 export default function PortfolioScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { holdings, clearAll, refreshLivePrices, pricesUpdatedAt } = usePortfolio();
   const { isPortfolioSymbolHidden, unhidePortfolioSymbol } = useNetWorth();
   const { investments, income } = useTransactions();
   const { baseCurrency, fxRates, brokers } = useSettings();
   const { showToast } = useToast();
   const [refreshing, setRefreshing] = useState(false);
-  const [transactionQuotes, setTransactionQuotes] = useState({});
+  // Shared with Net Worth's portfolio sync, which fetches these on its own.
+  const transactionQuotes = useCachedQuotes();
 
   // Lookup indexed by id — cheap to build, and every render of a broker
   // row calls this at least twice (label + color). Keeping it as a Map
@@ -387,7 +392,7 @@ export default function PortfolioScreen({ navigation }) {
       const result = await refreshLivePrices();
       const trackedSymbols = symbolsNeedingQuotes(holdings, investments, portfolioVisibility);
       const tracked = trackedSymbols.length ? await fetchLiveQuotes(trackedSymbols) : null;
-      if (tracked) setTransactionQuotes(tracked.quotes || {});
+      if (tracked) mergeCachedQuotes(tracked.quotes || {});
       result.updated += tracked?.resolved || 0;
       result.failed = [
         ...(result.failed || []),
@@ -492,16 +497,16 @@ export default function PortfolioScreen({ navigation }) {
             accessibilityLabel="Refresh live prices"
           >
             {refreshing ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <ActivityIndicator size="small" color={themeColors.text.secondary} />
             ) : (
               <>
-                <AppIcon name="refresh-cw" size={14} color="#fff" strokeWidth={2.2} />
+                <AppIcon name="refresh-cw" size={14} color={themeColors.text.primary} strokeWidth={2.2} />
                 <Text style={styles.refreshBtnText}>Refresh</Text>
               </>
             )}
           </TouchableOpacity>
         </View>
-        <Text style={styles.heroValue}>{formatMoney(displaySummary.totalValue)}</Text>
+        <Text style={styles.heroValue} numberOfLines={1}>{formatMoneyDisplay(displaySummary.totalValue, baseCurrency)}</Text>
         <View style={styles.heroPnlRow}>
           <View
             style={[
@@ -892,9 +897,11 @@ const makeStyles = (c) => ({
 
   // ---- Hero card ----
   heroCard: {
-    backgroundColor: c.bg.hero,
-    borderRadius: 18,
-    padding: 20,
+    backgroundColor: c.bg.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    padding: 18,
     marginBottom: 16,
   },
   balanceBanner: {
@@ -930,12 +937,14 @@ const makeStyles = (c) => ({
     justifyContent: 'space-between',
     gap: 12,
   },
-  heroLabel: { color: '#9ca3af', fontSize: 12, fontWeight: '600', letterSpacing: 0.5 },
+  heroLabel: { color: c.text.secondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
   refreshBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: c.bg.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
@@ -943,8 +952,8 @@ const makeStyles = (c) => ({
     justifyContent: 'center',
   },
   refreshBtnDisabled: { opacity: 0.7 },
-  refreshBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  heroValue: { color: '#fff', fontSize: 34, fontWeight: '800', marginTop: 6 },
+  refreshBtnText: { color: c.text.primary, fontSize: 12, fontWeight: '700' },
+  heroValue: { ...moneyText.hero, color: c.text.primary, marginTop: 6 },
   heroPnlRow: { flexDirection: 'row', marginTop: 10 },
   heroPnlPill: {
     flexDirection: 'row', alignItems: 'center',
@@ -953,8 +962,8 @@ const makeStyles = (c) => ({
   },
   heroPnl:    { fontSize: 14, fontWeight: '700', marginRight: 8 },
   heroPnlPct: { fontSize: 12, fontWeight: '700' },
-  heroSub:    { color: '#9ca3af', fontSize: 12, marginTop: 10 },
-  heroLive:   { color: '#a5b4fc', fontSize: 11, marginTop: 6, fontWeight: '600' },
+  heroSub:    { color: c.text.secondary, fontSize: 12, marginTop: 10 },
+  heroLive:   { color: c.text.secondary, fontSize: 11, marginTop: 4, fontWeight: '500' },
   quickActionsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
   quickAction: {
     flex: 1,
@@ -977,12 +986,8 @@ const makeStyles = (c) => ({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: c.border.subtle,
-    borderLeftWidth: 4,
-    borderLeftColor: c.accent.income,
   },
-  misIncomeCard: {
-    borderLeftColor: '#0d9488',
-  },
+  misIncomeCard: {},
   incomeHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   incomeTitle: { fontSize: 15, fontWeight: '700', color: c.text.primary },
   incomeSub: { fontSize: 11, color: c.text.secondary, marginTop: 2 },

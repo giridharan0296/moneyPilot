@@ -45,6 +45,7 @@ import { radii, spacing } from '../lib/theme';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
+  formatMoneyDisplay,
 } from '../lib/currency';
 import {
   financialYearRange,
@@ -310,9 +311,10 @@ export default function ReportsScreen() {
         </View>
         <Text style={styles.statExplain}>
           Cash left = income + loan credited − expenses − invested − loan principal repaid.
-          Loan credited is principal that landed in an account (not income).
-          Loan interest is in expenses. Moving money between your own accounts
-          is not counted here.
+          Savings rate = (income − expenses) ÷ income, so money you invest or use to repay
+          loan principal still counts as saved. Loan credited is principal that landed in
+          an account (not income). Loan interest is in expenses. Moving money between your
+          own accounts is not counted here.
         </Text>
       </ExpandableReportSection>
 
@@ -680,7 +682,7 @@ function StatCard({ label, value, color, baseCurrency, raw = false }) {
     <View style={styles.statCard}>
       <Text style={styles.statLabel}>{label}</Text>
       <Text style={[styles.statValue, { color }]} numberOfLines={1}>
-        {raw ? value : formatMoneyCurrency(value, baseCurrency)}
+        {raw ? value : formatMoneyDisplay(value, baseCurrency)}
       </Text>
     </View>
   );
@@ -692,7 +694,7 @@ function YearMetric({ label, value, color, baseCurrency }) {
     <View style={styles.financialYearMetric}>
       <Text style={styles.financialYearLabel}>{label}</Text>
       <Text style={[styles.financialYearValue, { color }]} numberOfLines={1}>
-        {formatMoneyCurrency(value, baseCurrency)}
+        {formatMoneyDisplay(value, baseCurrency)}
       </Text>
     </View>
   );
