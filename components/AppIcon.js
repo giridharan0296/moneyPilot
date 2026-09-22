@@ -113,10 +113,13 @@ const ICONS = {
   ],
   // Budgets. Was sharing `target` with the Plan tab itself and with the
   // goal-progress ring elsewhere, which read as "these are the same
-  // thing" — a squat coin jar (lid + coin slot + a fill line marking
-  // what's inside) reads unambiguously as "a cap on spending" instead.
-  // Hand-drawn to match Lucide's stroke conventions (not a stock Lucide
-  // glyph — Lucide has no jar icon).
+  // thing" — a glass coin jar (lid + coin slot, two coins visible inside,
+  // a faint vertical streak for the glass shine) reads unambiguously as
+  // "a cap on spending" instead. Hand-drawn to match Lucide's stroke
+  // conventions (not a stock Lucide glyph — Lucide has no jar icon). The
+  // shine stroke is drawn at reduced opacity via its own <Path> (not the
+  // shared `{...p}` stroke props) so it stays a subtle highlight instead
+  // of matching the jar outline's full weight.
   jar: (p) => [
     <Rect key="a" x="7.5" y="2.5" width="9" height="3" rx="1" {...p} />,
     <Path key="b" d="M11 3.4v1.2" {...p} />,
@@ -125,7 +128,9 @@ const ICONS = {
       d="M6 6.2h12a1 1 0 0 1 1 1V18.5a3.5 3.5 0 0 1-3.5 3.5h-7A3.5 3.5 0 0 1 5 18.5V7.2a1 1 0 0 1 1-1z"
       {...p}
     />,
-    <Path key="d" d="M5.3 14h13.4" {...p} />,
+    <Path key="d" d="M8.3 8v9" {...p} opacity={0.5} />,
+    <Circle key="e" cx="10.3" cy="16" r="1.9" {...p} />,
+    <Circle key="f" cx="13.7" cy="16" r="1.9" {...p} />,
   ],
   landmark: (p) => [
     // Bank / loan icon: pillared building with a base + top rail.
