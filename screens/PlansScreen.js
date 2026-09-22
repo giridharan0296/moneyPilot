@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import AppIcon from '../components/AppIcon';
+import HeaderTitleWithIcon from '../components/HeaderTitleWithIcon';
 import MenuRow from '../components/MenuRow';
 import ScreenHelpIntro from '../components/ScreenHelpIntro';
 import { BudgetPane } from '../screens/BudgetScreen';
@@ -125,8 +126,20 @@ export default function PlansScreen({ navigation, route }) {
     [createSignal],
   );
 
+  // Header reflects the ACTIVE TAB, not just which route name was used to
+  // get here — every route that lands on this shared screen (Plans,
+  // PlanChooser, Budgets, Goals) was rendering the same "Plans" title with
+  // whatever icon/tint its own static `options` happened to set, so tapping
+  // Budgets vs Goals from the Plan landing page (which both navigate here
+  // via the plain 'Plans' route) looked identical regardless of intent.
+  // Setting it here, from `tab`, makes the header correct no matter which
+  // route triggered the navigation.
   useLayoutEffect(() => {
     navigation.setOptions({
+      headerTitle: () =>
+        tab === 'budgets'
+          ? <HeaderTitleWithIcon icon="target" label="Budgets" tint={colors.accent.expense} />
+          : <HeaderTitleWithIcon icon="flag" label="Goals" tint={colors.accent.income} />,
       headerRight: () =>
         !formOpen ? (
           <TouchableOpacity
@@ -145,7 +158,7 @@ export default function PlansScreen({ navigation, route }) {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, formOpen, colors.text.primary]);
+  }, [navigation, formOpen, tab, colors.text.primary, colors.accent.expense, colors.accent.income]);
 
   const handleCreateChoice = (option) => {
     setCreatePickerVisible(false);
