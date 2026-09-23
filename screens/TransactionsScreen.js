@@ -196,7 +196,14 @@ export default function TransactionsScreen({ route }) {
             { pointerEvents: activeTab === 'transfer' ? 'auto' : 'none' },
           ]}
         >
-          <TransfersScreen embedded />
+          <TransfersScreen
+            embedded
+            route={{
+              params: {
+                focusId: activeTab === 'transfer' ? activeFocusId : null,
+              },
+            }}
+          />
         </View>
         ) : null}
         {mountedTabs.has('loan') ? (

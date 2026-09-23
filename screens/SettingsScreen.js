@@ -29,12 +29,12 @@ import {
   useTheme,
   useThemedStyles,
   useThemeColors,
-  THEME_MODES,
   FONT_OPTIONS,
 } from '../contexts/ThemeContext';
 import buildCsv from '../lib/exportCsv';
 import { CURRENCIES, currencyMeta, isBaseCurrencyLocked } from '../lib/currency';
 import { spacing } from '../lib/theme';
+import { withAlpha } from '../lib/colorAlpha';
 import { InfoCallout, StatusBadge } from '../components/UiPrimitives';
 import {
   computeVoiceNotesUsage,
@@ -178,25 +178,17 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
     accounts,
     accountGroups,
     categories,
-    // Account + Category CRUD used to live directly on this screen
-    // (via <AccountsSection> and three <Section> blocks). In the v4
-    // polish pass both moved into dedicated screens — see
-    // screens/AccountsScreen.js and screens/CategoriesScreen.js.
-    // The hub cards below just navigate; every add/edit/delete
-    // handler is pulled from SettingsContext by the child screens.
-    whisperApiKey,
-    setWhisperApiKey,
-    aiConfig,
+    // Account + Category CRUD, AI config, and theme/currency controls
+    // used to live directly on this screen. In the v4 polish pass they
+    // all moved into dedicated screens — see screens/AccountsScreen.js,
+    // CategoriesScreen.js, SettingsAccountsDataScreen.js, SettingsAIScreen.js,
+    // and SettingsAppearanceScreen.js. This screen (Advanced) only needs
+    // export/backup/restore/reset, so most of `useSettings()` isn't
+    // pulled in here anymore.
     setAiConfig,
-    aiApiKey,               // sourced from SecureStore, not AsyncStorage
-    aiKeyBackingEncrypted,  // true = real keychain; false = web fallback
     baseCurrency,
     fxRates,
-    setBaseCurrency,
-    setFxRate,
-    deleteFxRate,
     brokerDefaultsBySubCategory,
-    brokers,
     // BK-M2: static list of migration keys the current app expects to
     // be applied. Included in the backup payload so a device restoring
     // this backup can honour "already merged" state and skip redundant
@@ -248,7 +240,7 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
 
   const { applyRestore, loadDemoData } = useDemoRestore();
 
-  const { mode: themeMode, setThemeMode, fontId, setFontId } = useTheme();
+  const { mode: themeMode, fontId } = useTheme();
   // BK-M2: include theme mode + font in backup payload. Lightweight
   // user preferences — silly to make the user re-pick on every device.
 
@@ -633,223 +625,6 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
         </View>
 
         {/* ============================================================
-            YOUR DATA
-            The stuff a new install needs before it can log anything —
-            categories, accounts, brokers, currency. Placed first
-            because these are the fields the "Add" flows depend on and
-            because they're the surfaces users most often revisit.
-            ============================================================ */}
-        {section === 'accounts_data' && (
-          <>
-        <Text style={styles.groupHeader}>Your data</Text>
-
-        {/* ---- CATEGORIES HUB CARD ----
-            Categories used to be THREE full-length <Section> blocks
-            stacked here — Income, Expense, and Investment lists back-
-            to-back, each with its own header + Reset link + add
-            button. Great for editing but overwhelming when the user
-            just wants to change currency or theme (they had to swipe
-            past ~40 rows).
-
-            v4 polish: one card summarising per-type counts, tap opens
-            a dedicated CategoriesScreen with a segmented tab, swipe-
-            to-delete, and reset behind an overflow menu. Same
-            capability, ~200 fewer pixels of Settings scroll. */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('Categories')}
-          style={styles.catHub}
-          accessibilityRole="button"
-          accessibilityLabel="Manage categories"
-        >
-          <View style={[styles.catHubIcon, { backgroundColor: '#0891b222' }]}>
-            <AppIcon name="tag" size={20} color="#0891b2" strokeWidth={2.2} />
-          </View>
-          <View style={styles.catHubBody}>
-            <Text style={styles.catHubTitle}>Categories</Text>
-            <View style={styles.catHubCountRow}>
-              <View style={styles.catHubCountPill}>
-                <View style={[styles.catHubDot, { backgroundColor: '#059669' }]} />
-                <Text style={styles.catHubCountText}>
-                  {categories.income?.length ?? 0} income
-                </Text>
-              </View>
-              <View style={styles.catHubCountPill}>
-                <View style={[styles.catHubDot, { backgroundColor: '#dc2626' }]} />
-                <Text style={styles.catHubCountText}>
-                  {categories.expense?.length ?? 0} expense
-                </Text>
-              </View>
-              <View style={styles.catHubCountPill}>
-                <View style={[styles.catHubDot, { backgroundColor: '#7c3aed' }]} />
-                <Text style={styles.catHubCountText}>
-                  {categories.investment?.length ?? 0} investment
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.catHubHint}>
-              Add, edit, or reorganise categories and sub-categories.
-            </Text>
-          </View>
-          <AppIcon
-            name="chevron-right"
-            size={18}
-            color={themeColors.text.muted}
-            strokeWidth={2}
-          />
-        </TouchableOpacity>
-
-        {/* ---- ACCOUNTS HUB CARD ----
-            Accounts used to render inline as a full <AccountsSection>
-            here — every group card expanded, every account row, every
-            add form all stacked in the middle of Settings. Fine when
-            you're managing accounts, but overwhelming when you're
-            just here to change currency or theme.
-
-            v4 polish: the two-level (groups > accounts) tree moved
-            into its own screen with swipe-to-delete on account rows,
-            group edit/delete in the card header, and a header + button
-            for adding a new group. Same capability, ~200 fewer pixels
-            of Settings scroll. */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('Accounts')}
-          style={styles.acctHub}
-          accessibilityRole="button"
-          accessibilityLabel="Manage accounts"
-        >
-          <View style={[styles.acctHubIcon, { backgroundColor: '#0ea5e922' }]}>
-            <AppIcon name={'wallet'} size={20} color={'#0ea5e9'} strokeWidth={2.2} />
-          </View>
-          <View style={styles.acctHubBody}>
-            <Text style={styles.acctHubTitle}>Accounts</Text>
-            <View style={styles.acctHubCountRow}>
-              <View style={styles.acctHubCountPill}>
-                <AppIcon name="layout-grid" size={11} color={themeColors.text.secondary} strokeWidth={2.2} />
-                <Text style={styles.acctHubCountText}>
-                  {accountGroups.length} {accountGroups.length === 1 ? 'group' : 'groups'}
-                </Text>
-              </View>
-              <View style={styles.acctHubCountPill}>
-                <AppIcon name={'wallet'} size={11} color={themeColors.text.secondary} strokeWidth={2.2} />
-                <Text style={styles.acctHubCountText}>
-                  {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'}
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.acctHubHint}>
-              Manage bank accounts, cash, wallets, and multi-currency accounts.
-            </Text>
-          </View>
-          <AppIcon
-            name="chevron-right"
-            size={18}
-            color={themeColors.text.muted}
-            strokeWidth={2}
-          />
-        </TouchableOpacity>
-
-        {/* ---- BROKERS HUB CARD ----
-            Brokers were introduced as a first-class user-editable list
-            in the same v4 polish pass that gave Categories and Accounts
-            their dedicated screens. Historically brokers were a static
-            constant baked into the app — great for the 10 built-in
-            Indian brokers, useless if you invest via Fidelity or IBKR.
-
-            Accounts (above) hold CASH; Brokers (here) hold
-            INVESTMENTS. Keeping the two hub cards adjacent reinforces
-            that pairing without merging them (which would break the
-            "from account → to broker" model of an investment
-            transaction and lose broker-CSV reconciliation). See
-            screens/BrokersScreen.js. */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('Brokers')}
-          style={styles.acctHub}
-          accessibilityRole="button"
-          accessibilityLabel="Manage brokers"
-        >
-          <View style={[styles.acctHubIcon, { backgroundColor: '#f9731622' }]}>
-            <AppIcon name="trending-up" size={20} color="#f97316" strokeWidth={2.2} />
-          </View>
-          <View style={styles.acctHubBody}>
-            <Text style={styles.acctHubTitle}>Brokers</Text>
-            <View style={styles.acctHubCountRow}>
-              <View style={styles.acctHubCountPill}>
-                <AppIcon name="briefcase" size={11} color={themeColors.text.secondary} strokeWidth={2.2} />
-                <Text style={styles.acctHubCountText}>
-                  {(brokers ?? []).length} {(brokers ?? []).length === 1 ? 'broker' : 'brokers'}
-                </Text>
-              </View>
-              {(() => {
-                const custom = (brokers ?? []).filter((b) => !b.builtIn).length;
-                if (custom === 0) return null;
-                return (
-                  <View style={styles.acctHubCountPill}>
-                    <View style={[styles.catHubDot, { backgroundColor: '#f97316' }]} />
-                    <Text style={styles.acctHubCountText}>
-                      {custom} custom
-                    </Text>
-                  </View>
-                );
-              })()}
-            </View>
-            <Text style={styles.acctHubHint}>
-              Zerodha, Groww, Upstox — plus any custom platform you use
-              for investments.
-            </Text>
-          </View>
-          <AppIcon
-            name="chevron-right"
-            size={18}
-            color={themeColors.text.muted}
-            strokeWidth={2}
-          />
-        </TouchableOpacity>
-
-        {/* CURRENCY — base + FX rate table. Belongs in "Your data" too
-            because base currency is a master field every amount is
-            normalised against. Kept as the last item of the group so
-            it visually caps the master-data cluster with the more
-            complex form. */}
-        <CurrencySection
-          baseCurrency={baseCurrency}
-          fxRates={fxRates}
-          onChangeBase={setBaseCurrency}
-          onSetRate={setFxRate}
-          onDeleteRate={deleteFxRate}
-        />
-          </>
-        )}
-
-        {/* ============================================================
-            INTELLIGENCE
-            Opt-in features that add automation on top of your data.
-            Grouped together so users considering "should I enable
-            LLM / voice?" can compare them in one glance.
-            ============================================================ */}
-        {section === 'ai' && (
-          <>
-        <Text style={styles.groupHeader}>Intelligence</Text>
-
-        {/* AI INSIGHTS — LLM-backed personal-finance coach */}
-        <AiInsightsSection
-          config={aiConfig}
-          apiKey={aiApiKey}
-          keyEncrypted={aiKeyBackingEncrypted}
-          onChange={setAiConfig}
-        />
-
-        {/* VOICE TRANSCRIPTION — OpenAI Whisper API key */}
-        <WhisperKeySection
-          apiKey={whisperApiKey}
-          onSave={setWhisperApiKey}
-          keyEncrypted={aiKeyBackingEncrypted}
-        />
-          </>
-        )}
-
-        {/* ============================================================
             BACKUP & MAINTENANCE
             Data-shaped operations: portable exports, JSON round-trip
             backup, voice-note disk cleanup, and the demo seeder
@@ -1003,8 +778,9 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
               <Text style={styles.demoBtnTitle}>Load demo data</Text>
               <Text style={styles.demoBtnSub}>
                 Two financial years of transactions, portfolio holdings with
-                unit logs, synced Net Worth assets, 2 EPF UANs, 6 budgets,
-                5 goals, 5 loans, allocation targets, and full net-worth history.
+                unit logs, synced Net Worth assets, 2 EPF UANs, 7 budgets,
+                5 goals, 5 loans, 4 insurance policies, gold chit schemes,
+                allocation targets, and full net-worth history.
               </Text>
             </View>
           </TouchableOpacity>
@@ -1042,112 +818,8 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
           </>
         )}
 
-        {/* ============================================================
-            LOOK & FEEL
-            Personal preferences that don't touch data. Placed near
-            the bottom because they're the "already-a-user" tweak —
-            new installs need the master data cards above much more
-            urgently than a theme toggle.
-            ============================================================ */}
-        {section === 'appearance' && (
-          <>
-        <Text style={styles.groupHeader}>Look & feel</Text>
-
-        {/* APPEARANCE */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sectionTitle}>Appearance</Text>
-              <Text style={styles.sectionSubtitle}>
-                Match your OS or force a fixed theme.
-              </Text>
-            </View>
-          </View>
-          <View style={styles.themeRow}>
-            {THEME_MODES.map((m) => {
-              const active = m === themeMode;
-              return (
-                <TouchableOpacity
-                  key={m}
-                  onPress={() => setThemeMode(m)}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Theme: ${m}`}
-                  style={[styles.themeChip, active && styles.themeChipActive]}
-                >
-                  <View style={styles.themeChipInner}>
-                    <AppIcon
-                      name={m === 'light' ? 'sun' : m === 'dark' ? 'moon' : 'monitor'}
-                      size={14}
-                      color={
-                        active
-                          ? themeColors.text.inverse
-                          : themeColors.text.secondary
-                      }
-                      strokeWidth={2.1}
-                    />
-                    <Text
-                      style={[
-                        styles.themeChipText,
-                        active && styles.themeChipTextActive,
-                      ]}
-                    >
-                      {m === 'light' ? 'Light' : m === 'dark' ? 'Dark' : 'System'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* FONT — compact chips; name rendered in its own typeface */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sectionTitle}>Font</Text>
-              <Text style={styles.sectionSubtitle}>
-                Typeface used across the app.
-              </Text>
-            </View>
-          </View>
-          <View style={styles.fontRow}>
-            {FONT_OPTIONS.map((f) => {
-              const active = f.id === fontId;
-              const labelFamily = f.weights
-                ? (f.weights['600'] || f.weights['400'])
-                : undefined;
-              return (
-                <TouchableOpacity
-                  key={f.id}
-                  onPress={() => setFontId(f.id)}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Font: ${f.label}`}
-                  accessibilityState={{ selected: active }}
-                  style={[styles.fontChip, active && styles.fontChipActive]}
-                >
-                  <Text
-                    style={[
-                      styles.fontChipText,
-                      labelFamily ? { fontFamily: labelFamily } : null,
-                      active && styles.fontChipTextActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {f.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
         {/* DANGER ZONE — full wipe of all local data. Kept at the bottom
             of the screen and styled red so it can't be tapped accidentally. */}
-          </>
-        )}
-
         {section === 'advanced' && (
         <View style={[styles.section, styles.dangerSection]}>
           <View style={styles.sectionHeader}>
@@ -1537,8 +1209,8 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
           <View style={[
             styles.aiKeyBadge,
             {
-              backgroundColor: keyEncrypted ? '#059669' + '18' : '#f59e0b' + '18',
-              borderColor:     keyEncrypted ? '#059669' + '55' : '#f59e0b' + '55',
+              backgroundColor: withAlpha(keyEncrypted ? '#059669' : '#f59e0b', 0.094),
+              borderColor:     withAlpha(keyEncrypted ? '#059669' : '#f59e0b', 0.33),
             },
           ]}>
             <AppIcon
@@ -1567,7 +1239,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
               value={keyDraft}
               onChangeText={setKeyDraft}
               placeholder={currentPreset.keyHint || 'your-key'}
-              placeholderTextColor="#9aa0a6"
+              placeholderTextColor={themeColors.text.muted}
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry={!keyReveal}
@@ -1615,7 +1287,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
             value={config?.baseUrl ?? ''}
             onChangeText={(v) => onChange({ baseUrl: v.trim() })}
             placeholder="https://api.openai.com/v1"
-            placeholderTextColor="#9aa0a6"
+            placeholderTextColor={themeColors.text.muted}
             autoCapitalize="none"
             autoCorrect={false}
             style={styles.addInput}
@@ -1626,7 +1298,7 @@ export function AiInsightsSection({ config, apiKey, keyEncrypted, onChange }) {
             value={config?.model ?? ''}
             onChangeText={(v) => onChange({ model: v.trim() })}
             placeholder={provider === 'cursor' ? 'blank = Cursor default' : 'gpt-4o-mini'}
-            placeholderTextColor="#9aa0a6"
+            placeholderTextColor={themeColors.text.muted}
             autoCapitalize="none"
             autoCorrect={false}
             style={styles.addInput}
@@ -1796,8 +1468,8 @@ export function WhisperKeySection({ apiKey, onSave, keyEncrypted }) {
           <View style={[
             styles.aiKeyBadge,
             {
-              backgroundColor: keyEncrypted ? '#059669' + '18' : '#f59e0b' + '18',
-              borderColor:     keyEncrypted ? '#059669' + '55' : '#f59e0b' + '55',
+              backgroundColor: withAlpha(keyEncrypted ? '#059669' : '#f59e0b', 0.094),
+              borderColor:     withAlpha(keyEncrypted ? '#059669' : '#f59e0b', 0.33),
             },
           ]}>
             <AppIcon
@@ -1825,7 +1497,7 @@ export function WhisperKeySection({ apiKey, onSave, keyEncrypted }) {
             value={draft}
             onChangeText={setDraft}
             placeholder="sk-..."
-            placeholderTextColor="#9aa0a6"
+            placeholderTextColor={themeColors.text.muted}
             autoCapitalize="none"
             autoCorrect={false}
             secureTextEntry={!reveal}
@@ -2078,7 +1750,7 @@ To change it: back up your data, reset in Settings → Advanced, then set the ne
               value={addingRate}
               onChangeText={setAddingRate}
               placeholder="88.40"
-              placeholderTextColor="#9aa0a6"
+              placeholderTextColor={themeColors.text.muted}
               autoFocus
             />
             <Text style={styles.fxEquationText}>{baseCurrency}</Text>
@@ -2360,101 +2032,30 @@ const makeStyles = (c) => ({
     borderStyle: 'dashed',
   },
 
-  // ---- Group card ----
-  groupCard: {
-    backgroundColor: c.bg.surfaceAlt,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    gap: 8,
-  },
+  // groupHeader is reused as a generic section-heading style further up
+  // this screen (e.g. "Backup & maintenance") — the rest of the old
+  // inline group/item-row CRUD styles it used to belong to (groupCard,
+  // groupTitle, groupDeleteBtn, etc.) were removed in the v4 polish pass
+  // along with the JSX that rendered them (see AccountsScreen.js /
+  // CategoriesScreen.js for where that UI now lives).
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 4,
   },
-  groupTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: c.text.primary },
-  groupDeleteBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#fee2e2',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  groupDeleteText: { color: '#b91c1c', fontSize: 12, fontWeight: '700' },
-  groupEditBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 6,
-  },
-  groupEditText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },
-
-  // ---- Item row (used for both accounts and categories) ----
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: c.bg.surface,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-  },
-  itemDot: {
-    width: 8, height: 8, borderRadius: 4, marginRight: 10,
-  },
-  itemEmoji: { fontSize: 18, marginRight: 8 },
-  itemLabel: { flex: 1, fontSize: 14, color: c.text.primary, fontWeight: '500' },
   itemDelete: {
     width: 24, height: 24, borderRadius: 12,
     backgroundColor: c.bg.surfaceAlt,
     alignItems: 'center', justifyContent: 'center',
   },
-  itemDeleteText: { color: c.text.secondary, fontSize: 12, fontWeight: '700' },
   itemEdit: {
     width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#dbeafe',
+    backgroundColor: c.state.infoSurface,
     alignItems: 'center', justifyContent: 'center',
     marginRight: 6,
   },
-  itemEditText: { color: '#1d4ed8', fontSize: 12, fontWeight: '700' },
-
-  addButton: {
-    borderRadius: 10,
-    paddingVertical: 10,
-    backgroundColor: '#eef2ff',
-    alignItems: 'center',
-  },
-  addButtonText: { color: '#2563eb', fontWeight: '700', fontSize: 13 },
-  addGroupButton: { marginTop: 4 },
-
-  addAccountButton: {
-    borderRadius: 10,
-    paddingVertical: 8,
-    backgroundColor: c.bg.surface,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#c7d2fe',
-  },
-  addAccountButtonText: { color: '#2563eb', fontWeight: '600', fontSize: 12 },
 
   // Currency (F9 Tier 2) --------------------------------------------------
-  currencyBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#eef2ff',
-    marginRight: 6,
-  },
-  currencyBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#3730a3',
-    letterSpacing: 0.4,
-  },
   fxEquationRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   fxEquationInput: { flex: 1, marginBottom: 0, textAlign: 'center' },
   fxEquationText: { color: c.text.primary, fontSize: 13, fontWeight: '800' },
@@ -2818,7 +2419,7 @@ const makeStyles = (c) => ({
   },
   formBtnCancel: { backgroundColor: c.bg.surfaceAlt },
   formBtnCancelText: { color: c.text.secondary, fontWeight: '600' },
-  formBtnAdd: { backgroundColor: '#2563eb' },
+  formBtnAdd: { backgroundColor: c.accent.primary },
   formBtnAddText: { color: '#fff', fontWeight: '700' },
 
   whisperStatusRow: {
@@ -2845,7 +2446,7 @@ const makeStyles = (c) => ({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  whisperBtnPrimary: { backgroundColor: '#2563eb' },
+  whisperBtnPrimary: { backgroundColor: c.accent.primary },
   whisperBtnPrimaryText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   whisperBtnGhost: {
     backgroundColor: c.bg.surfaceAlt,
@@ -2854,11 +2455,11 @@ const makeStyles = (c) => ({
   },
   whisperBtnGhostText: { color: c.text.secondary, fontWeight: '600', fontSize: 13 },
   whisperBtnDanger: {
-    backgroundColor: '#fef2f2',
+    backgroundColor: c.state.errorSurface,
     borderWidth: 1,
-    borderColor: '#fecaca',
+    borderColor: withAlpha(c.accent.expense, 0.3),
   },
-  whisperBtnDangerText: { color: '#dc2626', fontWeight: '600', fontSize: 13 },
+  whisperBtnDangerText: { color: c.state.errorText, fontWeight: '600', fontSize: 13 },
   whisperHelp: {
     fontSize: 11,
     color: c.text.secondary,
@@ -2893,8 +2494,8 @@ const makeStyles = (c) => ({
     padding: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#6366f1' + '33',
-    backgroundColor: '#6366f1' + '10',
+    borderColor: withAlpha('#6366f1', 0.2),
+    backgroundColor: withAlpha('#6366f1', 0.063),
   },
   aiPrivacyTitle: {
     fontSize: 13,
@@ -2973,13 +2574,15 @@ const makeStyles = (c) => ({
   aiKeyBadgeText: { fontSize: 11, fontWeight: '700' },
 
   // Danger zone (Reset everything). Red border + soft red fill so it
-  // stands out at the bottom of the screen without shouting.
+  // stands out at the bottom of the screen without shouting. Uses the
+  // theme's error-surface pair so it doesn't render as a stray light-pink
+  // card in dark mode.
   dangerSection: {
-    borderColor: '#fecaca',
-    backgroundColor: '#fff5f5',
+    borderColor: withAlpha(c.accent.expense, 0.3),
+    backgroundColor: c.state.errorSurface,
   },
   dangerTitle: {
-    color: '#b91c1c',
+    color: c.state.errorText,
   },
   dangerBtn: {
     flexDirection: 'row',
@@ -2989,7 +2592,7 @@ const makeStyles = (c) => ({
     paddingHorizontal: 14,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#dc2626',
+    borderColor: c.accent.expense,
     backgroundColor: c.bg.surface,
     marginTop: 8,
   },
@@ -2997,18 +2600,19 @@ const makeStyles = (c) => ({
   dangerBtnTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#dc2626',
+    color: c.accent.expense,
   },
   dangerBtnSub: {
     fontSize: 12,
-    color: '#7f1d1d',
+    color: c.state.errorText,
     marginTop: 2,
     lineHeight: 16,
   },
 
   // "Try the app" — soft green accent so it feels inviting (vs. red for
   // Danger zone). The destructive confirm dialog handles the warning
-  // that this replaces existing data.
+  // that this replaces existing data. Uses the theme's success-surface
+  // pair for the same dark-mode reason as dangerSection above.
   demoBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3017,19 +2621,19 @@ const makeStyles = (c) => ({
     paddingHorizontal: 14,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#10b981',
-    backgroundColor: '#ecfdf5',
+    borderColor: withAlpha(c.accent.income, 0.6),
+    backgroundColor: c.state.successSurface,
     marginTop: 8,
   },
   demoBtnIconWrap: { width: 28, alignItems: 'center' },
   demoBtnTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#047857',
+    color: c.state.successSurfaceText,
   },
   demoBtnSub: {
     fontSize: 12,
-    color: '#065f46',
+    color: c.state.successSurfaceText,
     marginTop: 2,
     lineHeight: 16,
   },

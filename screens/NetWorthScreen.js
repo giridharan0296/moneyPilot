@@ -226,6 +226,7 @@ export default function NetWorthScreen() {
             icon="pie-chart"
             title="Investment log"
             description="Contributions by month, with a breakdown by asset."
+            tint={themeColors.accent.investment}
             onPress={() => navigation.navigate('InvestmentsHome')}
           />
           <MenuRow
@@ -233,6 +234,7 @@ export default function NetWorthScreen() {
             icon="briefcase"
             title="Portfolio"
             description="Holdings, current value and daily change."
+            tint={themeColors.accent.income}
             onPress={() => navigation.navigate('Portfolio')}
           />
           <MenuRow
@@ -240,6 +242,7 @@ export default function NetWorthScreen() {
             icon="scale"
             title="Rebalance"
             description="Compare your allocation with your targets."
+            tint={themeColors.accent.orange}
             onPress={() => navigation.navigate('PortfolioBalance')}
           />
           <MenuRow
@@ -247,6 +250,7 @@ export default function NetWorthScreen() {
             icon="bar-chart-2"
             title="Market mix"
             description="Stocks, funds and ETFs at a glance."
+            tint={themeColors.accent.primary}
             onPress={() => navigation.navigate('MarketAllocation')}
           />
         </MenuGroup>

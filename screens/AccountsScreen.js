@@ -49,6 +49,7 @@ import { COLOR_PALETTE } from '../constants';
 // chip row runs `CURRENCIES.map(...)` under `showCurrency: true`.
 import { CURRENCIES, formatMoneyDisplay } from '../lib/currency';
 import { computeAccountBalances } from '../lib/accountBalances';
+import { withAlpha } from '../lib/colorAlpha';
 
 // Swipe-to-delete tuning — kept identical to CategoriesScreen so the
 // gesture feel is consistent across the app.
@@ -622,11 +623,12 @@ function EditorForm({
   });
   const [showBalanceDatePicker, setShowBalanceDatePicker] = useState(false);
   const [reconciliationBalance, setReconciliationBalance] = useState(String(initialReconciliationBalance ?? ''));
+  const [formError, setFormError] = useState(null);
 
   const handleSubmit = () => {
     const trimmed = label.trim();
     if (!trimmed) {
-      Alert.alert('Missing name', 'Please enter a name.');
+      setFormError('Please enter a name.');
       return;
     }
     if (
@@ -634,9 +636,10 @@ function EditorForm({
       && reconciliationBalance.trim()
       && !Number.isFinite(Number(reconciliationBalance))
     ) {
-      Alert.alert('Invalid bank balance', 'Enter a valid number to reconcile this account.');
+      setFormError('Enter a valid number to reconcile this account.');
       return;
     }
+    setFormError(null);
     const payload = {
       label: trimmed,
       emoji: emoji.trim() || defaultEmoji || '📌',
@@ -653,13 +656,22 @@ function EditorForm({
 
   return (
     <View style={styles.editorForm}>
+      {formError ? (
+        <View style={styles.formErrorBanner} accessibilityRole="alert">
+          <AppIcon name="alert-triangle" size={16} color={styles.formErrorText.color} strokeWidth={2.2} />
+          <Text style={styles.formErrorText}>{formError}</Text>
+        </View>
+      ) : null}
       <View style={styles.editorRow}>
         <TextInput
           style={[styles.editorInput, { flex: 1 }]}
           value={label}
-          onChangeText={setLabel}
+          onChangeText={(value) => {
+            setLabel(value);
+            if (formError) setFormError(null);
+          }}
           placeholder={placeholderName}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           autoFocus
         />
         <TextInput
@@ -667,13 +679,13 @@ function EditorForm({
           value={emoji}
           onChangeText={setEmoji}
           placeholder={defaultEmoji || '📌'}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           maxLength={2}
         />
       </View>
 
       <Text style={styles.editorPickerLabel}>Color</Text>
-      <View style={styles.editorColorRow}>
+      <View style={styles.editorColorRow} accessibilityRole="radiogroup">
         {COLOR_PALETTE.map((c) => {
           const selected = c === color;
           return (
@@ -686,6 +698,9 @@ function EditorForm({
                 selected && styles.editorSwatchSelected,
               ]}
               activeOpacity={0.7}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`Color swatch ${c}`}
             />
           );
         })}
@@ -739,7 +754,7 @@ function EditorForm({
               value={openingBalance}
               onChangeText={setOpeningBalance}
               placeholder="0"
-              placeholderTextColor="#9aa0a6"
+              placeholderTextColor={themeColors.text.muted}
               keyboardType="decimal-pad"
             />
           </AmountCalculatorButton>
@@ -786,7 +801,7 @@ function EditorForm({
               value={reconciliationBalance}
               onChangeText={setReconciliationBalance}
               placeholder="0"
-              placeholderTextColor="#9aa0a6"
+              placeholderTextColor={themeColors.text.muted}
               keyboardType="decimal-pad"
             />
           </AmountCalculatorButton>
@@ -827,6 +842,26 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     marginBottom: 14,
     lineHeight: 18,
+  },
+
+  formErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.errorBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: withAlpha(c.accent.expense, 0.27),
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  formErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: c.state.errorFg,
   },
 
   emptyState: {
@@ -929,7 +964,7 @@ const makeStyles = (c) => ({
     position: 'absolute',
     top: 0, bottom: 0, right: 0,
     width: SWIPE_ACTION_WIDTH,
-    backgroundColor: '#dc2626',
+    backgroundColor: c.accent.expense,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -996,7 +1031,7 @@ const makeStyles = (c) => ({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 999,
-    backgroundColor: '#eef2ff',
+    backgroundColor: c.state.infoSurface,
   },
   currencyBadgeMuted: {
     backgroundColor: c.bg.surfaceAlt,
@@ -1004,7 +1039,7 @@ const makeStyles = (c) => ({
   currencyBadgeText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#3730a3',
+    color: c.state.infoSurfaceText,
     letterSpacing: 0.4,
   },
   currencyBadgeTextMuted: {
@@ -1111,8 +1146,8 @@ const makeStyles = (c) => ({
     alignItems: 'center',
   },
   currencyChipActive: {
-    borderColor: '#2563eb',
-    backgroundColor: '#dbeafe',
+    borderColor: c.accent.primary,
+    backgroundColor: c.state.infoSurface,
   },
   currencyChipCode: {
     fontSize: 11,
@@ -1121,7 +1156,7 @@ const makeStyles = (c) => ({
     letterSpacing: 0.4,
   },
   currencyChipCodeActive: {
-    color: '#1e40af',
+    color: c.state.infoSurfaceText,
   },
   currencyChipSymbol: {
     fontSize: 12,
@@ -1138,7 +1173,7 @@ const makeStyles = (c) => ({
   },
   editorBtnCancel:     { backgroundColor: c.bg.surfaceAlt },
   editorBtnCancelText: { color: c.text.secondary, fontWeight: '600', fontSize: 13 },
-  editorBtnSave:       { backgroundColor: '#2563eb' },
+  editorBtnSave:       { backgroundColor: c.accent.primary },
   editorBtnSaveText:   { color: '#fff', fontWeight: '700', fontSize: 13 },
 });
 

@@ -11,13 +11,14 @@ import NextActionsCard from '../components/home/NextActionsCard';
 import PlansCard from '../components/home/PlansCard';
 import { useAiInsights } from '../contexts/AiInsightsContext';
 import { useSettings } from '../contexts/SettingsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import useHomeSignals from '../hooks/useHomeSignals';
 import { openTransactionsTab } from '../lib/navigationTabReset';
 import { layout } from '../lib/theme';
 
 export default function PlanScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const { baseCurrency } = useSettings();
   const { nextActions, budgetSummary, heroGoal, lending } = useHomeSignals();
   const { configured: aiConfigured, insights } = useAiInsights();
@@ -47,6 +48,7 @@ export default function PlanScreen({ navigation }) {
           icon="jar"
           title="Budgets"
           description="Monthly limits per category or overall."
+          tint={colors.accent.expense}
           onPress={() => navigation.navigate('Plans', { tab: 'budgets' })}
         />
         <MenuRow
@@ -54,6 +56,7 @@ export default function PlanScreen({ navigation }) {
           icon="flag"
           title="Goals"
           description="Savings targets and one-time spending caps."
+          tint={colors.accent.income}
           onPress={() => navigation.navigate('Plans', { tab: 'goals' })}
         />
         <MenuRow
@@ -61,6 +64,7 @@ export default function PlanScreen({ navigation }) {
           icon="repeat"
           title="Recurring"
           description="Salary, rent, subscriptions and SIPs that repeat."
+          tint={colors.accent.primary}
           onPress={() => navigation.navigate('More', { screen: 'RecurringTransactions', initial: false })}
         />
         <MenuRow
@@ -70,6 +74,7 @@ export default function PlanScreen({ navigation }) {
           description={aiConfigured
             ? (aiCount > 0 ? `${aiCount} to review.` : 'Generate a review of your finances.')
             : 'Optional. Turn on in Settings to get an AI review.'}
+          tint={colors.accent.investment}
           onPress={() => navigation.navigate('InsightsHome')}
         />
       </MenuGroup>

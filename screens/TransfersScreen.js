@@ -16,7 +16,7 @@
 //   - swipe left → confirm, then undo-toast; reverses NetWorth + expense side effects
 // ----------------------------------------------------------------------------
 
-import { useLayoutEffect, useMemo, useState, useEffect } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react';
 import {
   DeviceEventEmitter,
   Modal,
@@ -46,16 +46,17 @@ import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { useLoans } from '../contexts/LoansContext';
 import { KIND_META, kindLabel, transferSubtitle } from '../lib/transfers';
-import { groupItemsByDay } from '../lib/transactionDayGroups';
+import { findItemInDaySections, groupItemsByDay } from '../lib/transactionDayGroups';
 import { sortByCreatedAtDesc } from '../lib/transactionSort';
 import { elevation, radii, spacing } from '../lib/theme';
 import { formatMoney as formatMoneyCurrency } from '../lib/currency';
 import { accountCurrencyMismatchMessage, formatMoney as formatLoanMoney } from '../lib/loans';
 import { openTransactionsTab } from '../lib/navigationTabReset';
+import { withAlpha } from '../lib/colorAlpha';
 
 const TRANSFER_ACCENT = '#0ea5e9';
 
-export default function TransfersScreen({ navigation, embedded = false }) {
+export default function TransfersScreen({ navigation, route, embedded = false }) {
   const tabNavigation = useNavigation();
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -67,6 +68,13 @@ export default function TransfersScreen({ navigation, embedded = false }) {
   const { showToast, showUndoableToast } = useToast();
   const { confirm } = useConfirmSheet();
   const { filterByRange, label: rangeLabel, isAllTime } = useDateFilter();
+
+  const focusId = route?.params?.focusId ?? null;
+  const listRef = useRef(null);
+  const focusedRef = useRef(false); // guard: only auto-open once per focusId
+  useEffect(() => {
+    focusedRef.current = false;
+  }, [focusId]);
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null); // full transfer object OR null
@@ -292,6 +300,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
   return (
     <>
       <SectionList
+        ref={listRef}
         style={styles.screen}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
@@ -312,6 +321,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
             transfer={item}
             accounts={accounts}
             baseCurrency={baseCurrency}
+            highlighted={focusId != null && item.id === focusId}
             onPress={() => {
               setCreating(false);
               setEditing(item);
@@ -319,6 +329,37 @@ export default function TransfersScreen({ navigation, embedded = false }) {
             onDelete={() => handleDelete(item)}
           />
         )}
+        onScrollToLocationFailed={(info) => {
+          setTimeout(() => {
+            listRef.current?.scrollToLocation({
+              sectionIndex: info.sectionIndex,
+              itemIndex: Math.min(info.index, info.highestMeasuredFrameIndex),
+              animated: true,
+              viewPosition: 0.3,
+            });
+          }, 250);
+        }}
+        onContentSizeChange={() => {
+          if (!focusId || focusedRef.current) return;
+          const loc = findItemInDaySections(daySections, focusId);
+          if (!loc) return;
+          focusedRef.current = true;
+          const focusedTransfer = daySections[loc.sectionIndex]?.data?.[loc.itemIndex];
+          setTimeout(() => {
+            listRef.current?.scrollToLocation({
+              sectionIndex: loc.sectionIndex,
+              itemIndex: loc.itemIndex,
+              animated: true,
+              viewPosition: 0.3,
+            });
+            // Same fix as TransactionsList: open it directly instead of
+            // just scrolling to + highlighting the row.
+            if (focusedTransfer) {
+              setCreating(false);
+              setEditing(focusedTransfer);
+            }
+          }, 60);
+        }}
         ListHeaderComponent={
           <>
             <View style={styles.hero}>
@@ -499,7 +540,7 @@ export default function TransfersScreen({ navigation, embedded = false }) {
 // Sub-components
 // ----------------------------------------------------------------------------
 
-function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
+function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete, highlighted }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const km = KIND_META[transfer.kind];
@@ -519,7 +560,7 @@ function TransferRow({ transfer, accounts, baseCurrency, onPress, onDelete }) {
       onDelete={onDelete}
       deleteLabel={`Delete ${kindLabel(transfer.kind)}`}
       wrapStyle={{ marginBottom: spacing.sm }}
-      contentStyle={styles.row}
+      contentStyle={[styles.row, highlighted && styles.rowHighlighted]}
     >
       {/* Colored left-edge bar — quick visual ID of kind */}
       <View style={[styles.rowBar, { backgroundColor: km?.color ?? '#9ca3af' }]} />
@@ -991,6 +1032,12 @@ const makeStyles = (c) => ({
     width: 4,
     alignSelf: 'stretch',
     marginRight: spacing.md,
+  },
+  // Applied when the row is the target of a Search/Activity-navigation
+  // focus — mirrors TransactionsList's rowHighlighted.
+  rowHighlighted: {
+    backgroundColor: withAlpha(TRANSFER_ACCENT, 0.14),
+    borderColor: TRANSFER_ACCENT,
   },
   rowEmojiWrap: {
     marginRight: spacing.sm,

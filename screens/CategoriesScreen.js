@@ -44,10 +44,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppIcon from '../components/AppIcon';
+import { EmptyState } from '../components/UiPrimitives';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { COLOR_PALETTE } from '../constants';
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
+import { withAlpha } from '../lib/colorAlpha';
 
 // The three flavours the screen can present. Order here drives the
 // segmented tab order below — Income first because "money in" is the
@@ -234,7 +236,7 @@ export default function CategoriesScreen({ navigation }) {
               activeOpacity={0.7}
               style={[
                 styles.segmentedItem,
-                active && { backgroundColor: t.tint + '15' },
+                active && { backgroundColor: withAlpha(t.tint, 0.08) },
               ]}
               accessibilityRole="tab"
               accessibilityState={{ selected: active }}
@@ -249,7 +251,7 @@ export default function CategoriesScreen({ navigation }) {
               </Text>
               <View style={[
                 styles.segmentedCount,
-                active && { backgroundColor: t.tint + '22' },
+                active && { backgroundColor: withAlpha(t.tint, 0.13) },
               ]}>
                 <Text style={[
                   styles.segmentedCountText,
@@ -280,13 +282,14 @@ export default function CategoriesScreen({ navigation }) {
 
         {/* ---- Category rows ---- */}
         {items.length === 0 && !adding && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateTitle}>No categories yet</Text>
-            <Text style={styles.emptyStateBody}>
-              Tap + in the header to add your first one, or use the overflow
-              menu (⋮) to load the built-in defaults.
-            </Text>
-          </View>
+          <EmptyState
+            icon="folder"
+            title="No categories yet"
+            body="Tap + in the header to add your first one, or use the overflow menu (⋮) to load the built-in defaults."
+            actionLabel="Add category"
+            onAction={() => setAdding(true)}
+            tint={TYPES.find((t) => t.key === activeType)?.tint}
+          />
         )}
 
         {items.map((item) =>
@@ -559,7 +562,7 @@ function SwipeableCategoryRow({
             accessibilityRole="button"
             accessibilityLabel="Edit category"
           >
-            <AppIcon name="edit-3" size={13} color="#1d4ed8" strokeWidth={2.2} />
+            <AppIcon name="edit-3" size={13} color={themeColors.state.infoSurfaceText} strokeWidth={2.2} />
           </TouchableOpacity>
 
           <AppIcon
@@ -610,11 +613,13 @@ function SwipeableCategoryRow({
                     onPress={() => setEditingSubId(sub.id)}
                     style={styles.subEdit}
                     hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Edit sub-category ${sub.label}`}
                   >
                     <AppIcon
                       name="edit-3"
                       size={12}
-                      color="#1d4ed8"
+                      color={themeColors.state.infoSurfaceText}
                       strokeWidth={2.2}
                     />
                   </TouchableOpacity>
@@ -635,6 +640,8 @@ function SwipeableCategoryRow({
                     }}
                     style={styles.subDelete}
                     hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete sub-category ${sub.label}`}
                   >
                     <AppIcon
                       name="x"
@@ -702,16 +709,19 @@ function EditorForm({
   submitLabel = 'Add',
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const [label, setLabel] = useState(initialLabel);
   const [emoji, setEmoji] = useState(initialEmoji);
   const [color, setColor] = useState(initialColor ?? defaultColor);
+  const [formError, setFormError] = useState(null);
 
   const handleSubmit = () => {
     const trimmed = label.trim();
     if (!trimmed) {
-      Alert.alert('Missing name', 'Please enter a name.');
+      setFormError('Please enter a name.');
       return;
     }
+    setFormError(null);
     onSubmit({
       label: trimmed,
       emoji: emoji.trim() || defaultEmoji || '📌',
@@ -723,13 +733,22 @@ function EditorForm({
 
   return (
     <View style={styles.editorForm}>
+      {formError ? (
+        <View style={styles.formErrorBanner} accessibilityRole="alert">
+          <AppIcon name="alert-triangle" size={16} color={styles.formErrorText.color} strokeWidth={2.2} />
+          <Text style={styles.formErrorText}>{formError}</Text>
+        </View>
+      ) : null}
       <View style={styles.editorRow}>
         <TextInput
           style={[styles.editorInput, { flex: 1 }]}
           value={label}
-          onChangeText={setLabel}
+          onChangeText={(value) => {
+            setLabel(value);
+            if (formError) setFormError(null);
+          }}
           placeholder={placeholderName}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           autoFocus
         />
         <TextInput
@@ -737,13 +756,13 @@ function EditorForm({
           value={emoji}
           onChangeText={setEmoji}
           placeholder={defaultEmoji || '📌'}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           maxLength={2}
         />
       </View>
 
       <Text style={styles.editorPickerLabel}>Color</Text>
-      <View style={styles.editorColorRow}>
+      <View style={styles.editorColorRow} accessibilityRole="radiogroup">
         {COLOR_PALETTE.map((c) => {
           const selected = c === color;
           return (
@@ -756,6 +775,9 @@ function EditorForm({
                 selected && styles.editorSwatchSelected,
               ]}
               activeOpacity={0.7}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`Color swatch ${c}`}
             />
           );
         })}
@@ -786,6 +808,26 @@ function EditorForm({
 // ----------------------------------------------------------------------------
 const makeStyles = (c) => ({
   root: { flex: 1, backgroundColor: c.bg.canvas },
+
+  formErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.errorBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: withAlpha(c.accent.expense, 0.27),
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  formErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: c.state.errorFg,
+  },
 
   // ---- Segmented top-tab ----
   segmented: {
@@ -839,28 +881,6 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     marginBottom: 14,
     lineHeight: 18,
-  },
-
-  emptyState: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    borderStyle: 'dashed',
-    padding: 20,
-    marginBottom: 12,
-    alignItems: 'center',
-  },
-  emptyStateTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: c.text.primary,
-    marginBottom: 4,
-  },
-  emptyStateBody: {
-    fontSize: 12,
-    color: c.text.secondary,
-    textAlign: 'center',
-    lineHeight: 17,
   },
 
   // ---- Swipeable row ----
@@ -932,7 +952,7 @@ const makeStyles = (c) => ({
 
   rowEditBtn: {
     width: 26, height: 26, borderRadius: 13,
-    backgroundColor: '#dbeafe',
+    backgroundColor: c.state.infoSurface,
     alignItems: 'center', justifyContent: 'center',
   },
 
@@ -974,7 +994,7 @@ const makeStyles = (c) => ({
   },
   subEdit: {
     width: 22, height: 22, borderRadius: 11,
-    backgroundColor: '#dbeafe',
+    backgroundColor: c.state.infoSurface,
     alignItems: 'center', justifyContent: 'center',
     marginRight: 2,
   },

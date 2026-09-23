@@ -4,20 +4,22 @@
 // Deliberately DOES NOT reuse TransactionForm: that form is coupled to
 // voice-note recording, transcription, and Whisper — none of which apply
 // to a scheduling rule. Instead we lean on the same styling and the same
-// chip / grouped-account patterns to keep it visually consistent.
+// chip / grouped-account patterns to keep it visually consistent. It does
+// share TransactionForm's note/tag suggestion logic via
+// useNoteTagSuggestions, so a rule's Note and Tags fields suggest from the
+// same category/sub-category-scoped transaction history.
 //
 // Props:
 //   initialValues                {type, amount, categoryId, subCategoryId,
-//                                 accountId, note, frequency, startDate,
+//                                 accountId, note, tags, frequency, startDate,
 //                                 endDate, active}
 //   submitLabel                  e.g. "Add rule" or "Save changes"
 //   onSubmit(values)             called with valid values on Save
 //   onCancel()                   optional cancel button (edit flow)
 // ----------------------------------------------------------------------------
 
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Platform,
   ScrollView,
   Switch,
@@ -30,8 +32,11 @@ import AmountCalculatorButton from './AmountCalculatorButton';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
 import QuickAddPickerItem from './QuickAddPickerItem';
+import TagInput from './TagInput';
 import { useSettings } from '../contexts/SettingsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useTransactions } from '../contexts/TransactionsContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import useNoteTagSuggestions from '../hooks/useNoteTagSuggestions';
 import {
   FREQUENCIES,
   MONTHLY_MODES,
@@ -55,8 +60,11 @@ export default function RecurringForm({
   onCancel,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { categories, accounts, accountGroups } = useSettings();
+  const { allTags, expenses, income, investments } = useTransactions();
 
+  const [formError, setFormError] = useState(null);
   const [type, setType] = useState(initialValues?.type ?? 'expense');
   const [amount, setAmount] = useState(
     initialValues?.amount != null ? String(initialValues.amount) : '',
@@ -71,6 +79,10 @@ export default function RecurringForm({
     initialValues?.accountId ?? accounts[0]?.id ?? null,
   );
   const [note, setNote] = useState(initialValues?.note ?? '');
+  const [tags, setTags] = useState(
+    Array.isArray(initialValues?.tags) ? initialValues.tags : [],
+  );
+  const tagInputRef = useRef(null);
   const [frequency, setFrequency] = useState(initialValues?.frequency ?? 'monthly');
   // Monthly-only sub-mode. Older rules omit these; we default to 'date' /
   // sensible weekday values so switching frequency on the fly Just Works.
@@ -122,6 +134,25 @@ export default function RecurringForm({
   const typeMeta = TYPES.find((t) => t.id === type);
   const accent = typeMeta?.color ?? '#2563eb';
 
+  // Same category/sub-category-scoped suggestion logic TransactionForm uses,
+  // so a rule's Note and Tags fields suggest from real transaction history
+  // instead of starting blank. Re-dated to the rule's start date, since a
+  // rule has no per-occurrence date of its own.
+  const typeTransactions = useMemo(() => {
+    if (type === 'income') return income;
+    if (type === 'investment') return investments;
+    return expenses;
+  }, [expenses, income, investments, type]);
+
+  const { noteSuggestions, tagSuggestions } = useNoteTagSuggestions({
+    transactions: typeTransactions,
+    categoryId,
+    subCategoryId,
+    note,
+    date: startDate,
+    allTags,
+  });
+
   const handleStartChange = (event, selected) => {
     setShowStartPicker(Platform.OS === 'ios');
     if (event.type === 'dismissed') return;
@@ -134,23 +165,24 @@ export default function RecurringForm({
   };
 
   const handleSubmit = () => {
+    setFormError(null);
     const parsed = parseFloat(amount);
     if (!parsed || parsed <= 0) {
-      Alert.alert('Invalid amount', 'Please enter a positive number.');
+      setFormError('Enter a positive amount.');
       return;
     }
     if (!categoryId) {
-      Alert.alert('No category', 'Add a category in Settings first.');
+      setFormError('Add a category in Settings first.');
       return;
     }
     if (!accountId) {
-      Alert.alert('No account', 'Add an account in Settings first.');
+      setFormError('Add an account in Settings first.');
       return;
     }
     // Compare calendar days: the picker's end date has no time of day, the
     // start date may (new Date()), so a same-day end was rejected as "before".
     if (endDate && toLocalDayKey(endDate) < toLocalDayKey(startDate)) {
-      Alert.alert('Invalid end date', 'End date must not be before the start date.');
+      setFormError('End date must not be before the start date.');
       return;
     }
     onSubmit({
@@ -160,6 +192,9 @@ export default function RecurringForm({
       subCategoryId,
       accountId,
       note: note.trim(),
+      // Read from the ref so a tag still sitting in the text field (not yet
+      // committed via Enter/comma/blur) is included — mirrors TransactionForm.
+      tags: tagInputRef.current?.getValue() ?? tags,
       frequency,
       // Only monthly frequency uses these — but we send them regardless so
       // the stored rule is self-describing. Non-monthly rules simply ignore
@@ -184,6 +219,13 @@ export default function RecurringForm({
 
   return (
     <View style={styles.root}>
+      {formError ? (
+        <View style={styles.formErrorBanner} accessibilityRole="alert">
+          <AppIcon name="alert-triangle" size={16} color={styles.formErrorText.color} strokeWidth={2.2} />
+          <Text style={styles.formErrorText}>{formError}</Text>
+        </View>
+      ) : null}
+
       <Text style={styles.label}>Type</Text>
       <View style={styles.chipRow}>
         {TYPES.map((t) => {
@@ -223,7 +265,10 @@ export default function RecurringForm({
         <TextInput
           style={styles.input}
           value={amount}
-          onChangeText={setAmount}
+          onChangeText={(value) => {
+            setAmount(value);
+            if (formError) setFormError(null);
+          }}
           keyboardType="decimal-pad"
           placeholder="0.00"
           placeholderTextColor="#9aa0a6"
@@ -350,6 +395,46 @@ export default function RecurringForm({
         onChangeText={setNote}
         placeholder="e.g. Netflix subscription"
         placeholderTextColor="#9aa0a6"
+      />
+
+      {noteSuggestions.length > 0 ? (
+        <View style={styles.suggestionBlock}>
+          <Text style={styles.suggestionLabel}>Previous notes</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionRow}>
+            {noteSuggestions.map(({ label, transaction }) => (
+              <TouchableOpacity
+                key={label.toLocaleLowerCase()}
+                onPress={() => {
+                  setNote(label);
+                  const priorCategory = typeCategories.find((c) => c.id === transaction.categoryId);
+                  if (priorCategory) {
+                    setCategoryId(priorCategory.id);
+                    const validSub = priorCategory.subCategories?.some(
+                      (item) => item.id === transaction.subCategoryId,
+                    );
+                    setSubCategoryId(validSub ? transaction.subCategoryId : null);
+                  }
+                }}
+                style={styles.suggestionChip}
+                activeOpacity={0.7}
+              >
+                <AppIcon name="repeat" size={12} color={accent} strokeWidth={2.1} />
+                <Text style={[styles.suggestionChipText, { color: accent }]} numberOfLines={1}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      <Text style={styles.label}>Tags (optional)</Text>
+      <TagInput
+        ref={tagInputRef}
+        value={tags}
+        onChange={setTags}
+        suggestions={tagSuggestions}
+        placeholder="e.g. subscription, essential"
       />
 
       <Text style={styles.label}>Frequency</Text>
@@ -539,7 +624,7 @@ export default function RecurringForm({
         style={styles.dateChip}
       >
         <View style={styles.dateChipInner}>
-          <AppIcon name="calendar" size={16} color="#111" strokeWidth={2} />
+          <AppIcon name="calendar" size={16} color={themeColors.text.primary} strokeWidth={2} />
           <Text style={styles.dateChipText}>{formatChipDate(startDate)}</Text>
         </View>
         <Text style={styles.dateChipHint}>Tap to change</Text>
@@ -569,8 +654,8 @@ export default function RecurringForm({
           <Switch
             value={backfillPast}
             onValueChange={setBackfillPast}
-            trackColor={{ false: '#e5e7eb', true: accent }}
-            thumbColor={'#fff'}
+            trackColor={{ false: themeColors.bg.surfaceAlt, true: accent + '88' }}
+            thumbColor={backfillPast ? accent : themeColors.bg.surface}
           />
         </View>
       )}
@@ -610,7 +695,7 @@ export default function RecurringForm({
           style={[styles.dateChip, styles.dateChipGhost]}
         >
           <View style={styles.dateChipInner}>
-            <AppIcon name="infinity" size={16} color="#6b7280" strokeWidth={2} />
+            <AppIcon name="infinity" size={16} color={themeColors.text.secondary} strokeWidth={2} />
             <Text style={styles.dateChipTextGhost}>No end date · tap to set</Text>
           </View>
         </TouchableOpacity>
@@ -635,8 +720,8 @@ export default function RecurringForm({
         <Switch
           value={active}
           onValueChange={setActive}
-          trackColor={{ false: '#e5e7eb', true: accent }}
-          thumbColor="#fff"
+          trackColor={{ false: themeColors.bg.surfaceAlt, true: accent + '88' }}
+          thumbColor={active ? accent : themeColors.bg.surface}
         />
       </View>
 
@@ -785,6 +870,26 @@ function formatChipDate(d) {
 const makeStyles = (c) => ({
   root: { paddingBottom: 16 },
 
+  formErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.errorBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.accent.expense + '44',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  formErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: c.state.errorFg,
+  },
+
   label: {
     fontSize: 12,
     fontWeight: '600',
@@ -824,6 +929,11 @@ const makeStyles = (c) => ({
   },
 
   chipRow: { paddingVertical: 4, gap: 8, flexDirection: 'row', flexWrap: 'wrap' },
+  suggestionBlock: { marginTop: 8, gap: 5 },
+  suggestionLabel: { color: c.text.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.45 },
+  suggestionRow: { gap: 7, paddingRight: 8 },
+  suggestionChip: { maxWidth: 210, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 16, backgroundColor: c.bg.surfaceAlt, borderWidth: 1, borderColor: c.border.subtle },
+  suggestionChipText: { maxWidth: 170, fontSize: 12, fontWeight: '700' },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,

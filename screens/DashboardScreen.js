@@ -361,7 +361,7 @@ export default function DashboardScreen({ route }) {
               <Text style={styles.errorTitle}>{loadNotice.title}</Text>
               <Text style={styles.errorBody}>{loadNotice.body}</Text>
               <TouchableOpacity
-                onPress={() => navigation.navigate('More', { screen: 'Settings', initial: false })}
+                onPress={() => navigation.navigate('More', { screen: 'SettingsAdvanced', initial: false })}
                 accessibilityRole="button"
               >
                 <Text style={styles.errorAction}>Open Settings</Text>
@@ -496,7 +496,7 @@ export default function DashboardScreen({ route }) {
             <TouchableOpacity
               style={styles.backupMain}
               activeOpacity={0.75}
-              onPress={() => navigation.navigate('More', { screen: 'Settings', initial: false })}
+              onPress={() => navigation.navigate('More', { screen: 'SettingsAdvanced', initial: false })}
               accessibilityRole="button"
             >
               <AppIcon name="download" size={16} color={themeColors.banner.backupIcon} strokeWidth={2.2} />

@@ -157,6 +157,7 @@ export default function LoanDetailScreen({ route, navigation }) {
     closeLoan,
     deleteEvent,
     kindIcon,
+    kindColor,
     kindLabel,
   } = useLoans();
   const { showToast } = useToast();
@@ -456,11 +457,11 @@ export default function LoanDetailScreen({ route, navigation }) {
         {/* Hero */}
         <View style={styles.hero}>
           <View style={styles.heroTop}>
-            <View style={styles.heroEmoji}>
+            <View style={[styles.heroEmoji, { backgroundColor: kindColor(loan.kind) + '1a' }]}>
               <AppIcon
                 name={kindIcon(loan.kind)}
                 size={24}
-                color="#dc2626"
+                color={kindColor(loan.kind)}
                 strokeWidth={2}
               />
             </View>

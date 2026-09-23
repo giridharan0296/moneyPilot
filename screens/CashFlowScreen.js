@@ -48,6 +48,11 @@ const HORIZONS = [
   { id: 180, label: '180 days' },
 ];
 
+// Below this many leftover (non-recurring, non-loan) transactions, the
+// "typical" daily drip is an average over too little data to trust —
+// flag it rather than presenting it with the same confidence as a rule.
+const LOW_SAMPLE_THRESHOLD = 5;
+
 export default function CashFlowScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -179,7 +184,7 @@ export default function CashFlowScreen({ navigation }) {
           <TextInput
             style={styles.input}
             keyboardType="numeric"
-            placeholder={String(Math.round(autoStart))}
+            placeholder={Math.round(autoStart).toLocaleString('en-IN')}
             placeholderTextColor={themeColors.text.muted}
             value={startBalanceText}
             onChangeText={setStartBalanceText}
@@ -187,8 +192,8 @@ export default function CashFlowScreen({ navigation }) {
         </View>
         <Text style={styles.inputHint}>
           {startBalanceText.trim() === ''
-            ? `Auto-filled from Cash & Bank assets (₹${autoStart.toLocaleString('en-IN')})`
-            : `Overriding auto-fill of ₹${autoStart.toLocaleString('en-IN')}`}
+            ? `Auto-filled from Cash & Bank assets (${formatMoneyCurrency(autoStart, baseCurrency)})`
+            : `Overriding auto-fill of ${formatMoneyCurrency(autoStart, baseCurrency)}`}
         </Text>
       </View>
 
@@ -198,6 +203,9 @@ export default function CashFlowScreen({ navigation }) {
           onPress={() => setIncludeTypical(false)}
           activeOpacity={0.7}
           style={[styles.modeChip, !includeTypical && styles.chipActive]}
+          accessibilityRole="button"
+          accessibilityLabel="Rules only"
+          accessibilityState={{ selected: !includeTypical }}
         >
           <Text style={[styles.chipText, !includeTypical && styles.chipTextActive]}>Rules only</Text>
         </TouchableOpacity>
@@ -205,6 +213,9 @@ export default function CashFlowScreen({ navigation }) {
           onPress={() => setIncludeTypical(true)}
           activeOpacity={0.7}
           style={[styles.modeChip, includeTypical && styles.chipActive]}
+          accessibilityRole="button"
+          accessibilityLabel="Rules and typical spending"
+          accessibilityState={{ selected: includeTypical }}
         >
           <Text style={[styles.chipText, includeTypical && styles.chipTextActive]}>Rules + typical</Text>
         </TouchableOpacity>
@@ -213,6 +224,11 @@ export default function CashFlowScreen({ navigation }) {
         {typical.hasSignal
           ? `Last 6 months (after calendar hits): income ${formatMoneyCurrency(typical.incomeMonthly, baseCurrency)}/mo, expenses ${formatMoneyCurrency(typical.expenseMonthly, baseCurrency)}, investments ${formatMoneyCurrency(typical.investmentMonthly, baseCurrency)}. About +${formatMoneyCurrency(typical.incomeDaily, baseCurrency)} / −${formatMoneyCurrency(typical.dailyTotal, baseCurrency)} per day.`
           : 'Not enough leftover activity in the last 6 months to estimate a typical drip. Recurring rules and loan EMIs still apply.'}
+        {/* A handful of leftover transactions can swing this average a lot —
+            say so rather than presenting a thin sample with false confidence. */}
+        {typical.hasSignal && typical.sampleCount > 0 && typical.sampleCount < LOW_SAMPLE_THRESHOLD
+          ? ` Based on just ${typical.sampleCount} leftover transaction${typical.sampleCount === 1 ? '' : 's'} — treat as a rough guide.`
+          : ''}
       </Text>
 
       {/* -- Horizon chips --------------------------------------------------- */}
@@ -259,7 +275,7 @@ export default function CashFlowScreen({ navigation }) {
       {summary.isOverdrawn && (
         <View style={styles.warnBanner}>
           <View style={styles.warnTitleRow}>
-            <AppIcon name="alert-triangle" size={16} color="#b45309" strokeWidth={2.2} />
+            <AppIcon name="alert-triangle" size={16} color={themeColors.banner.recurringTitle} strokeWidth={2.2} />
             <Text style={styles.warnTitle}>Overdraft ahead</Text>
           </View>
           <Text style={styles.warnBody}>
@@ -596,8 +612,8 @@ const makeStyles = (c) => ({
   },
 
   warnBanner: {
-    backgroundColor: '#fef3c7',
-    borderColor: '#f59e0b',
+    backgroundColor: c.banner.recurringBg,
+    borderColor: c.banner.recurringBorder,
     borderWidth: 1.5,
     borderRadius: radii.lg,
     padding: spacing.md,
@@ -606,12 +622,12 @@ const makeStyles = (c) => ({
   warnTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   warnTitle: {
     fontWeight: '800',
-    color: '#92400e',
+    color: c.banner.recurringTitle,
     fontSize: 14,
   },
   warnBody: {
     fontSize: 12,
-    color: '#78350f',
+    color: c.banner.recurringSub,
     lineHeight: 17,
   },
   warnStrong: {

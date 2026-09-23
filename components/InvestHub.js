@@ -4,61 +4,71 @@ import AppIcon from './AppIcon';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { withAlpha } from '../lib/colorAlpha';
 
+// `color` keys into theme.accent — chosen to match the same destinations'
+// colors on the Wealth tab's own "Investments" list (NetWorthScreen.js),
+// since 3 of these 4 chips link to the exact same screens.
 const HUB_ITEMS = [
   {
     key: 'networth',
     route: 'NetWorth',
-    icon: 'gem',
+    icon: 'coins',
     label: 'Net Worth',
+    color: 'gold',
   },
   {
     key: 'balance',
     route: 'PortfolioBalance',
     icon: 'target',
     label: 'Balance',
+    color: 'orange',
   },
   {
     key: 'market',
     route: 'MarketAllocation',
     icon: 'bar-chart-2',
     label: 'Market mix',
+    color: 'primary',
   },
   {
     key: 'portfolio',
     route: 'Portfolio',
     icon: 'bar-chart-2',
     label: 'Portfolio',
+    color: 'income',
   },
 ];
 
 export default function InvestHub({ navigation }) {
   const styles = useThemedStyles(makeStyles);
-  const accent = useThemeColors().accent.primary;
+  const accentColors = useThemeColors().accent;
 
   return (
     <View style={styles.wrap}>
       <Text style={styles.title}>Invest hub</Text>
       <View style={styles.card}>
-        {HUB_ITEMS.map((item, index) => (
-          <TouchableOpacity
-            key={item.key}
-            onPress={() => navigation.navigate(item.route)}
-            activeOpacity={0.72}
-            style={[
-              styles.chip,
-              index < HUB_ITEMS.length - 1 && styles.chipDivider,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${item.label}`}
-          >
-            <View style={[styles.iconBadge, { backgroundColor: withAlpha(accent, 0.1) }]}>
-              <AppIcon name={item.icon} size={20} color={accent} strokeWidth={2.1} />
-            </View>
-            <Text style={styles.chipLabel} numberOfLines={1}>
-              {item.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {HUB_ITEMS.map((item, index) => {
+          const accent = accentColors[item.color] ?? accentColors.primary;
+          return (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => navigation.navigate(item.route)}
+              activeOpacity={0.72}
+              style={[
+                styles.chip,
+                index < HUB_ITEMS.length - 1 && styles.chipDivider,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${item.label}`}
+            >
+              <View style={[styles.iconBadge, { backgroundColor: withAlpha(accent, 0.1) }]}>
+                <AppIcon name={item.icon} size={20} color={accent} strokeWidth={2.1} />
+              </View>
+              <Text style={styles.chipLabel} numberOfLines={1}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </View>
   );

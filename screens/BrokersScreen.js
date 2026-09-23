@@ -56,6 +56,7 @@ import { usePortfolio } from '../contexts/PortfolioContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { COLOR_PALETTE } from '../constants';
+import { withAlpha } from '../lib/colorAlpha';
 
 // Swipe-to-delete tuning — kept identical to Categories / Accounts so
 // the gesture feel is consistent across every management screen.
@@ -270,7 +271,7 @@ export default function BrokersScreen({ navigation }) {
                   <AppIcon
                     name="rotate-ccw"
                     size={16}
-                    color="#b91c1c"
+                    color={themeColors.state.errorText}
                     strokeWidth={2.2}
                   />
                   <Text style={styles.menuItemText}>
@@ -295,6 +296,7 @@ export default function BrokersScreen({ navigation }) {
 // ----------------------------------------------------------------------------
 function SwipeableBrokerRow({ broker, usage, onEdit, onDelete }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const use = usage ?? { tx: 0, holdings: 0 };
   const isBuiltIn = !!broker.builtIn;
 
@@ -435,7 +437,7 @@ function SwipeableBrokerRow({ broker, usage, onEdit, onDelete }) {
             </View>
           </View>
           <View style={styles.rowEditBtn}>
-            <AppIcon name="edit-3" size={13} color="#1d4ed8" strokeWidth={2.2} />
+            <AppIcon name="edit-3" size={13} color={themeColors.state.infoSurfaceText} strokeWidth={2.2} />
           </View>
         </TouchableOpacity>
       </Animated.View>
@@ -460,16 +462,19 @@ function EditorForm({
   submitLabel = 'Add',
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const [label, setLabel] = useState(initialLabel);
   const [emoji, setEmoji] = useState(initialEmoji);
   const [color, setColor] = useState(initialColor ?? defaultColor);
+  const [formError, setFormError] = useState(null);
 
   const handleSubmit = () => {
     const trimmed = label.trim();
     if (!trimmed) {
-      Alert.alert('Missing name', 'Please enter a name.');
+      setFormError('Please enter a name.');
       return;
     }
+    setFormError(null);
     onSubmit({
       label: trimmed,
       emoji: emoji.trim() || defaultEmoji || '🏦',
@@ -481,13 +486,22 @@ function EditorForm({
 
   return (
     <View style={styles.editorForm}>
+      {formError ? (
+        <View style={styles.formErrorBanner} accessibilityRole="alert">
+          <AppIcon name="alert-triangle" size={16} color={styles.formErrorText.color} strokeWidth={2.2} />
+          <Text style={styles.formErrorText}>{formError}</Text>
+        </View>
+      ) : null}
       <View style={styles.editorRow}>
         <TextInput
           style={[styles.editorInput, { flex: 1 }]}
           value={label}
-          onChangeText={setLabel}
+          onChangeText={(value) => {
+            setLabel(value);
+            if (formError) setFormError(null);
+          }}
           placeholder={placeholderName}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           autoFocus
         />
         <TextInput
@@ -495,13 +509,13 @@ function EditorForm({
           value={emoji}
           onChangeText={setEmoji}
           placeholder={defaultEmoji}
-          placeholderTextColor="#9aa0a6"
+          placeholderTextColor={themeColors.text.muted}
           maxLength={2}
         />
       </View>
 
       <Text style={styles.editorPickerLabel}>Color</Text>
-      <View style={styles.editorColorRow}>
+      <View style={styles.editorColorRow} accessibilityRole="radiogroup">
         {COLOR_PALETTE.map((c) => {
           const selected = c === color;
           return (
@@ -514,6 +528,9 @@ function EditorForm({
                 selected && styles.editorSwatchSelected,
               ]}
               activeOpacity={0.7}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`Color swatch ${c}`}
             />
           );
         })}
@@ -555,6 +572,26 @@ const makeStyles = (c) => ({
     lineHeight: 18,
   },
 
+  formErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: c.state.errorBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: withAlpha(c.accent.expense, 0.27),
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  formErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: c.state.errorFg,
+  },
+
   emptyState: {
     borderRadius: 12,
     borderWidth: 1,
@@ -587,7 +624,7 @@ const makeStyles = (c) => ({
     position: 'absolute',
     top: 0, bottom: 0, right: 0,
     width: SWIPE_ACTION_WIDTH,
-    backgroundColor: '#dc2626',
+    backgroundColor: c.accent.expense,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -653,7 +690,7 @@ const makeStyles = (c) => ({
   },
   rowEditBtn: {
     width: 26, height: 26, borderRadius: 13,
-    backgroundColor: '#dbeafe',
+    backgroundColor: c.state.infoSurface,
     alignItems: 'center', justifyContent: 'center',
   },
 
@@ -749,6 +786,6 @@ const makeStyles = (c) => ({
   },
   editorBtnCancel:     { backgroundColor: c.bg.surfaceAlt },
   editorBtnCancelText: { color: c.text.secondary, fontWeight: '600', fontSize: 13 },
-  editorBtnSave:       { backgroundColor: '#2563eb' },
+  editorBtnSave:       { backgroundColor: c.accent.primary },
   editorBtnSaveText:   { color: '#fff', fontWeight: '700', fontSize: 13 },
 });

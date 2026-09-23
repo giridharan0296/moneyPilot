@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   DeviceEventEmitter,
   PanResponder,
@@ -11,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import CategoryPieChart, { PieLegendList } from './CategoryPieChart';
+import { EmptyState } from './UiPrimitives';
 import DateFilterBar from './DateFilterBar';
 import TransactionDayHeader from './TransactionDayHeader';
 import EditTransactionModal from './EditTransactionModal';
@@ -29,6 +31,7 @@ import { useRecurring } from '../contexts/RecurringContext';
 import { useConfirmSheet } from '../contexts/ConfirmSheetContext';
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { radii, spacing, elevation, moneyText } from '../lib/theme';
+import { withAlpha } from '../lib/colorAlpha';
 import {
   baseAmountOf,
   formatMoney as formatMoneyCurrency,
@@ -284,9 +287,19 @@ export default function TransactionsList({
     return sortByCreatedAtDesc(list);
   }, [dateFilteredItems, type, brokerFilter]);
 
+  // KNOWN_BUGS #3: a `historicalOnly` row (units owned before tracking
+  // started — see TransactionForm's "Historical only" entry type) never
+  // moved real money, so it must not count toward any money-flow sum, the
+  // same convention lib/reports.js's flowInvestments() already applies for
+  // Dashboard/Reports. It still APPEARS in the list (still a real record
+  // worth seeing) — only sums skip it.
+  const flowAmount = (item) => (
+    item.historicalOnly ? 0 : baseAmountOf(item, fxRates, baseCurrency, 'amount')
+  );
+
   const daySections = useMemo(
     () => groupItemsByDay(filteredItems, {
-      sumAmount: (item) => baseAmountOf(item, fxRates, baseCurrency, 'amount'),
+      sumAmount: flowAmount,
     }),
     [filteredItems, fxRates, baseCurrency],
   );
@@ -298,7 +311,7 @@ export default function TransactionsList({
   // base currency, even for multi-currency accounts.
   const total = useMemo(
     () => filteredItems.reduce(
-      (sum, e) => sum + baseAmountOf(e, fxRates, baseCurrency, 'amount'),
+      (sum, e) => sum + flowAmount(e),
       0,
     ),
     [filteredItems, fxRates, baseCurrency],
@@ -312,7 +325,7 @@ export default function TransactionsList({
   const byCategory = useMemo(() => {
     const totals = {};
     for (const e of filteredItems) {
-      const inBase = baseAmountOf(e, fxRates, baseCurrency, 'amount');
+      const inBase = flowAmount(e);
       totals[e.categoryId] = (totals[e.categoryId] ?? 0) + inBase;
     }
     const catById = new Map(categories.map((c) => [c.id, c]));
@@ -872,6 +885,7 @@ export default function TransactionsList({
           const loc = findItemInDaySections(daySections, focusId);
           if (!loc) return;
           focusedRef.current = true;
+          const focusedItem = daySections[loc.sectionIndex]?.data?.[loc.itemIndex];
           setTimeout(() => {
             listRef.current?.scrollToLocation({
               sectionIndex: loc.sectionIndex,
@@ -879,6 +893,12 @@ export default function TransactionsList({
               animated: true,
               viewPosition: 0.3,
             });
+            // Tapping a Search/Activity result used to just land here with
+            // the row highlighted, leaving a second tap to actually open
+            // it. Open it directly — the highlight still shows underneath
+            // once the sheet is dismissed, so the "here's the one you
+            // searched for" context isn't lost.
+            if (focusedItem) setEditing(focusedItem);
           }, 60);
         }}
         ListHeaderComponent={
@@ -946,18 +966,17 @@ export default function TransactionsList({
           </>
         }
         ListEmptyComponent={
-          ready ? (
-            <View style={styles.emptyState}>
-              <View style={styles.emptyIconWrap}>
-                <AppIcon
-                  name={t.emptyIcon}
-                  size={44}
-                  color={themeColors.text.muted}
-                  strokeWidth={1.7}
-                />
-              </View>
-              <Text style={styles.emptyText}>
-                {items.length === 0
+          !ready ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="small" color={themeColors.text.muted} />
+              <Text style={styles.loadingText}>Loading…</Text>
+            </View>
+          ) : (
+            <EmptyState
+              icon={t.emptyIcon}
+              tint={resolvedAccentColor}
+              title={
+                items.length === 0
                   ? t.emptyTitle
                   : (type === 'investment' && brokerFilter && dateFilteredItems.length > 0)
                     ? `No entries for ${
@@ -966,17 +985,17 @@ export default function TransactionsList({
                           : filterBrokers.find((b) => b.id === brokerFilter)?.label
                               ?? 'this broker'
                       }.`
-                    : `Nothing in ${rangeLabel}.`}
-              </Text>
-              <Text style={styles.emptySub}>
-                {items.length === 0
+                    : `Nothing in ${rangeLabel}.`
+              }
+              body={
+                items.length === 0
                   ? t.emptySub
                   : (type === 'investment' && brokerFilter && dateFilteredItems.length > 0)
                     ? 'Tap "All" above to clear the broker filter.'
-                    : 'Try a different range above.'}
-              </Text>
-            </View>
-          ) : null
+                    : 'Try a different range above.'
+              }
+            />
+          )
         }
       />
 
@@ -1390,7 +1409,7 @@ const makeStyles = (c) => ({
   // Kept subtle — an accent-tinted border + fill is enough for the eye
   // to find the row without being disruptive.
   rowHighlighted: {
-    backgroundColor: c.accent.primary + '10',
+    backgroundColor: withAlpha(c.accent.primary, 0.14),
     borderColor: c.accent.primary,
   },
   rowEmoji: { fontSize: 24, marginRight: spacing.md },
@@ -1439,8 +1458,6 @@ const makeStyles = (c) => ({
     color: c.accent.gold,
     marginTop: 2,
   },
-  emptyState: { alignItems: 'center', marginTop: spacing['2xl'] },
-  emptyIconWrap: { marginBottom: spacing.sm, opacity: 0.85 },
-  emptyText: { fontSize: 15, fontWeight: '600', color: c.text.primary },
-  emptySub: { fontSize: 13, color: c.text.secondary, marginTop: spacing.xs },
+  loadingState: { alignItems: 'center', marginTop: spacing['2xl'], gap: spacing.sm },
+  loadingText: { fontSize: 13, color: c.text.secondary },
 });

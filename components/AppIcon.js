@@ -20,7 +20,7 @@
 // ----------------------------------------------------------------------------
 
 import React from 'react';
-import Svg, { Path, Circle, Rect, Line, Polyline, Polygon } from 'react-native-svg';
+import Svg, { Path, Circle, Ellipse, Rect, Line, Polyline, Polygon } from 'react-native-svg';
 
 // ---- Icon registry ---------------------------------------------------------
 //
@@ -37,6 +37,21 @@ const ICONS = {
   // ---------- Navigation / tabs ----------
   home: (p) => [
     <Path key="a" d="M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2h-4v-8h-6v8H5a2 2 0 0 1-2-2z" {...p} />,
+  ],
+  // Wealth tab / Net Worth header — three coins stacked directly on top of
+  // each other (not side-by-side): a top rim ellipse, an outer cylinder
+  // outline down to the base, and two horizontal dividers marking where
+  // each coin meets the next. Same elliptical-arc technique Lucide's own
+  // `database` icon uses, just with two dividers instead of one so it
+  // reads as 3 discrete coins rather than one solid cylinder. Flatter
+  // rims (ry 2) with taller walls between them (5 units, was 3) so each
+  // coin reads as a distinct disc with visible edge instead of packed
+  // tight against its neighbours.
+  coins: (p) => [
+    <Ellipse key="a" cx="12" cy="4" rx="8" ry="2" {...p} />,
+    <Path key="b" d="M4 4v15a8 2 0 0 0 16 0V4" {...p} />,
+    <Path key="c" d="M4 9a8 2 0 0 0 16 0" {...p} />,
+    <Path key="d" d="M4 14a8 2 0 0 0 16 0" {...p} />,
   ],
   // Income tab / income category / recurring-income filter / EMI monthly-
   // income field. This is Lucide's canonical `wallet` glyph — a classic

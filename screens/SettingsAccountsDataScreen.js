@@ -6,6 +6,7 @@ import { SectionHeader } from '../components/UiPrimitives';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { radii, spacing } from '../lib/theme';
+import { withAlpha } from '../lib/colorAlpha';
 import { CurrencySection } from './SettingsScreen';
 import GoogleAccountSection from './SettingsAccountScreen';
 
@@ -68,8 +69,10 @@ export default function SettingsAccountsDataScreen({ navigation }) {
             activeOpacity={0.72}
             onPress={() => navigation.navigate(item.route)}
             accessibilityRole={'button'}
+            accessibilityLabel={item.title}
+            accessibilityHint={item.detail}
           >
-            <View style={[styles.iconBadge, { backgroundColor: item.tint + '22' }]}>
+            <View style={[styles.iconBadge, { backgroundColor: withAlpha(item.tint, 0.13) }]}>
               <AppIcon name={item.icon} size={21} color={item.tint} strokeWidth={2.1} />
             </View>
             <View style={styles.cardBody}>

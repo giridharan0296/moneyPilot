@@ -222,6 +222,21 @@ export default function ImportTransactionsScreen({ navigation }) {
   const previewCap = previewExpanded ? previewRows.length : 30;
   const visiblePreviewRows = previewRows.slice(0, previewCap);
 
+  // Same CSV column picked for two different fields is almost always a
+  // mistake (e.g. Date and Note both pointing at "Description") — warn
+  // instead of silently importing the same text into both.
+  const duplicateMappings = useMemo(() => {
+    const byColumn = {};
+    for (const f of FIELDS) {
+      const col = mapping[f.key];
+      if (!col) continue;
+      (byColumn[col] ??= []).push(f.label);
+    }
+    return Object.entries(byColumn)
+      .filter(([, labels]) => labels.length > 1)
+      .map(([col, labels]) => `"${col}" → ${labels.join(' + ')}`);
+  }, [mapping]);
+
   const mappingReady = !!mapping.dateCol && !!mapping.amountCol;
 
   const mixedFallbacksReady = TYPES.every(
@@ -258,18 +273,30 @@ export default function ImportTransactionsScreen({ navigation }) {
       if (picked.cancelled) { setLoading(false); return; }
 
       const ext = (picked.name ?? '').toLowerCase().split('.').pop();
+      const isSpreadsheet = ext === 'xlsx' || ext === 'xls';
 
       let loadedSheets = [];
-      if (ext === 'xlsx' || ext === 'xls') {
-        const base64 = await picked.readBase64();
-        const { sheets: parsedSheets } = parseXLSX(base64);
-        loadedSheets = parsedSheets;
-        setFormat('xlsx');
-      } else {
-        const text = await picked.readText();
-        const parsed = parseCSV(text);
-        loadedSheets = [{ name: 'Sheet1', ...parsed }];
-        setFormat('csv');
+      try {
+        if (isSpreadsheet) {
+          const base64 = await picked.readBase64();
+          const { sheets: parsedSheets } = parseXLSX(base64);
+          loadedSheets = parsedSheets;
+          setFormat('xlsx');
+        } else {
+          const text = await picked.readText();
+          const parsed = parseCSV(text);
+          loadedSheets = [{ name: 'Sheet1', ...parsed }];
+          setFormat('csv');
+        }
+      } catch {
+        // SheetJS/our CSV reader throw low-level messages ("corrupt zip",
+        // stack traces) that aren't actionable for a user — give a plain
+        // explanation of the likely cause instead.
+        throw new Error(
+          isSpreadsheet
+            ? "Couldn't open this Excel file — it may be corrupted, password-protected, or an unsupported format. Try re-saving it from Excel, or export it as CSV."
+            : "Couldn't read this CSV file — it may not be plain text or may use an unusual encoding. Try re-saving it as CSV (UTF-8).",
+        );
       }
 
       // Drop empty sheets (some workbooks have unused ones like "Sheet2").
@@ -496,6 +523,17 @@ export default function ImportTransactionsScreen({ navigation }) {
               onSelect={(col) => setColumnFor(f.key, col)}
             />
           ))}
+
+          {duplicateMappings.length > 0 && (
+            <View style={styles.warnList}>
+              <Text style={styles.warnListTitle}>
+                Same column mapped to more than one field:
+              </Text>
+              <Text style={styles.warnListBody}>
+                {duplicateMappings.join('  ·  ')}
+              </Text>
+            </View>
+          )}
 
           {/* STEP 4 */}
           <StepHeader
@@ -981,6 +1019,24 @@ function displayRaw(value) {
   return String(value);
 }
 
+// A General-formatted Excel date cell reads as a bare serial number (e.g.
+// 45672) now that xlsx.js reads raw values for precision — parseDate still
+// resolves it correctly, but showing that integer in the row preview is
+// meaningless to a user. Show the calendar date it resolves to instead.
+function displayRawDate(value) {
+  if (value == null || value === '') return '—';
+  const s = String(value);
+  if (/^\d{5}(?:\.\d+)?$/.test(s)) {
+    const serial = Number(s);
+    if (serial >= 20000 && serial < 80000) {
+      const u = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+      const d = new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+      return `${formatDate(d.toISOString())} (serial ${s})`;
+    }
+  }
+  return s;
+}
+
 function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) {
   const styles = useThemedStyles(makeStyles);
   const isValid = row.status === 'valid';
@@ -995,7 +1051,7 @@ function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) 
   const typeMeta = TYPES.find((x) => x.id === rowType);
 
   const rawParts = [];
-  if (row.raw.date != null && row.raw.date !== '') rawParts.push(`Date: ${displayRaw(row.raw.date)}`);
+  if (row.raw.date != null && row.raw.date !== '') rawParts.push(`Date: ${displayRawDate(row.raw.date)}`);
   if (row.raw.amount != null && row.raw.amount !== '') rawParts.push(`Amount: ${displayRaw(row.raw.amount)}`);
   if (row.raw.type != null && row.raw.type !== '') rawParts.push(`Type: ${displayRaw(row.raw.type)}`);
   if (row.raw.category != null && row.raw.category !== '') rawParts.push(`Category: ${displayRaw(row.raw.category)}`);

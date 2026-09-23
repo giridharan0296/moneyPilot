@@ -58,7 +58,7 @@ import {
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Platform, StatusBar as RNStatusBar, View } from 'react-native';
+import { Platform, StatusBar as RNStatusBar, Text, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 
 import { elevation } from './lib/theme';
@@ -68,7 +68,6 @@ import DashboardScreen        from './screens/DashboardScreen';
 import TransactionsScreen     from './screens/TransactionsScreen';
 import LoansRedirectScreen    from './screens/LoansRedirectScreen';
 import InvestmentsScreen      from './screens/InvestmentsScreen';
-import SettingsHubScreen      from './screens/SettingsHubScreen';
 import AdvancedSettingsScreen from './screens/SettingsScreen';
 import SettingsAppearanceScreen from './screens/SettingsAppearanceScreen';
 import SettingsAccountsDataScreen from './screens/SettingsAccountsDataScreen';
@@ -146,23 +145,53 @@ const Stack = createNativeStackNavigator();
 // elsewhere in the app (green/red = money direction), so the strip stays
 // neutral and the active tab is the only coloured item. Focus is also shown
 // by a small size + stroke bump.
-function tabIcon(name) {
+// `tint`, when given, is applied directly instead of the framework-computed
+// `color` — React Navigation's bottom-tabs (v7.18) does not honour a
+// per-screen tabBarActiveTintColor/tabBarInactiveTintColor override on web
+// (every route falls back to the navigator-level default regardless of its
+// own options), so per-tab colour identity has to be driven off `focused`
+// ourselves rather than trusting the `color` the render prop hands us.
+// Full-strength always (not dimmed when inactive) — focus is shown by the
+// icon getting a touch bigger/bolder instead, so the bar reads as colourful
+// at a glance rather than only lighting up on tap.
+function tabIcon(name, tint) {
   return ({ focused, color }) => (
     <AppIcon
       name={name}
       size={focused ? 24 : 22}
-      color={color}
+      color={tint ?? color}
       strokeWidth={focused ? 2.4 : 2}
     />
   );
 }
 
-// Sugar helper for the stack screens' headerTitle: icon + label, with the icon
-// in the theme's neutral text colour (no per-screen tint).
+// Same work-around as tabIcon above, for the label text under it.
+function tabLabel(text, tint, fontFamilyBold) {
+  return ({ focused }) => (
+    <Text
+      style={{
+        fontSize: 11,
+        fontWeight: fontFamilyBold ? undefined : (focused ? '700' : '600'),
+        fontFamily: fontFamilyBold || undefined,
+        letterSpacing: 0.15,
+        marginTop: 2,
+        color: tint,
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+// Sugar helper for the stack screens' headerTitle: icon + label. `tint` is
+// optional — omit it for the theme's neutral text colour, or pass a color
+// (usually reused from wherever this screen is linked from elsewhere in the
+// app — its MenuRow tint, its tab color — so the header doesn't introduce
+// a color that means something different one tap away).
 //
-//   options={{ headerTitle: hdr('wallet', 'Income') }}
-function hdr(icon, label) {
-  return () => <HeaderTitleWithIcon icon={icon} label={label} />;
+//   options={{ headerTitle: hdr('wallet', 'Income', colors.accent.income) }}
+function hdr(icon, label, tint) {
+  return () => <HeaderTitleWithIcon icon={icon} label={label} tint={tint} />;
 }
 
 // Shared header look for both stacks — computed from the active theme so
@@ -192,18 +221,18 @@ function TransactionsStack() {
       <Stack.Screen
         name="TransactionsHome"
         component={TransactionsScreen}
-        options={{ headerTitle: hdr('arrow-down-up', 'Transactions') }}
+        options={{ headerTitle: hdr('arrow-down-up', 'Transactions', colors.accent.expense) }}
       />
       <Stack.Screen
         name="LoanDetail"
         component={LoanDetailScreen}
-        options={{ headerTitle: hdr('landmark', 'Loan') }}
+        options={{ headerTitle: hdr('landmark', 'Loan', colors.accent.expense) }}
       />
       {/* 'Open in Calc' on a loan opened from this tab. */}
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
-        options={{ headerTitle: hdr('calculator', 'EMI Calculator') }}
+        options={{ headerTitle: hdr('calculator', 'EMI Calculator', colors.accent.orange) }}
       />
     </Stack.Navigator>
   );
@@ -222,32 +251,32 @@ function InvestmentsStack() {
       <Stack.Screen
         name="InvestmentsHome"
         component={InvestmentsScreen}
-        options={{ headerTitle: hdr('pie-chart', 'Investments') }}
+        options={{ headerTitle: hdr('pie-chart', 'Investments', colors.accent.investment) }}
       />
       <Stack.Screen
         name="Portfolio"
         component={PortfolioScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Portfolio') }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Portfolio', colors.accent.income) }}
       />
       <Stack.Screen
         name="PortfolioBalance"
         component={PortfolioBalanceScreen}
-        options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio') }}
+        options={{ headerTitle: hdr('pie-chart', 'Balance Portfolio', colors.accent.orange) }}
       />
       <Stack.Screen
         name="MarketAllocation"
         component={MarketAllocationScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Market Allocation') }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Market Allocation', colors.accent.primary) }}
       />
       <Stack.Screen
         name="ImportHoldings"
         component={ImportHoldingsScreen}
-        options={{ headerTitle: hdr('download', 'Import Holdings') }}
+        options={{ headerTitle: hdr('download', 'Import Holdings', colors.accent.investment) }}
       />
       <Stack.Screen
         name="NetWorth"
         component={NetWorthScreen}
-        options={{ headerTitle: hdr('gem', 'Net Worth') }}
+        options={{ headerTitle: hdr('coins', 'Net Worth', colors.accent.gold) }}
       />
     </Stack.Navigator>
   );
@@ -267,35 +296,35 @@ function InsightsStack() {
       <Stack.Screen
         name="PlanHome"
         component={PlanScreen}
-        options={{ headerTitle: hdr('target', 'Plan') }}
+        options={{ headerTitle: hdr('target', 'Plan', colors.accent.income) }}
       />
       <Stack.Screen
         name="Plans"
         component={PlansScreen}
-        options={{ headerTitle: hdr('compass', 'Plans') }}
+        options={{ headerTitle: hdr('compass', 'Plans', colors.accent.income) }}
       />
       <Stack.Screen
         name="PlanChooser"
         component={PlansScreen}
         initialParams={{ promptCreate: true }}
-        options={{ headerTitle: hdr('compass', 'Plans') }}
+        options={{ headerTitle: hdr('compass', 'Plans', colors.accent.income) }}
       />
       <Stack.Screen
         name="Budgets"
         component={PlansScreen}
         initialParams={{ tab: 'budgets' }}
-        options={{ headerTitle: hdr('target', 'Plans') }}
+        options={{ headerTitle: hdr('target', 'Plans', colors.accent.expense) }}
       />
       <Stack.Screen
         name="Goals"
         component={PlansScreen}
         initialParams={{ tab: 'goals' }}
-        options={{ headerTitle: hdr('flag', 'Plans') }}
+        options={{ headerTitle: hdr('flag', 'Plans', colors.accent.income) }}
       />
       <Stack.Screen
         name="InsightsHome"
         component={InsightsScreen}
-        options={{ headerTitle: hdr('sparkles', 'AI Insights') }}
+        options={{ headerTitle: hdr('sparkles', 'AI Insights', colors.accent.investment) }}
       />
     </Stack.Navigator>
   );
@@ -314,177 +343,182 @@ function MoreStack() {
       <Stack.Screen
         name="MoreMenu"
         component={MoreMenuScreen}
-        options={{ headerTitle: hdr('layout-grid', 'More') }}
+        options={{ headerTitle: hdr('layout-grid', 'More', colors.accent.teal) }}
       />
 
       {/* ---- Analyze (was AnalysisStack) ---- */}
       <Stack.Screen
         name="DataHealth"
         component={DataHealthScreen}
-        options={{ headerTitle: hdr('activity', 'Data check') }}
+        options={{ headerTitle: hdr('activity', 'Data check', colors.accent.gold) }}
       />
       <Stack.Screen
         name="ActivityTimeline"
         component={ActivityTimelineScreen}
-        options={{ headerTitle: hdr('activity', 'Activity & search') }}
+        options={{ headerTitle: hdr('activity', 'Activity & search', colors.accent.primary) }}
       />
       <Stack.Screen
         name="Reports"
         component={ReportsScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Reports') }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Reports', colors.accent.investment) }}
       />
       <Stack.Screen
         name="CashFlow"
         component={CashFlowScreen}
-        options={{ headerTitle: hdr('activity', 'Cash Flow Forecast') }}
+        options={{ headerTitle: hdr('activity', 'Cash Flow Forecast', colors.accent.orange) }}
       />
       <Stack.Screen
         name="Search"
         component={ActivityTimelineScreen}
         initialParams={{ mode: 'search' }}
-        options={{ headerTitle: hdr('search', 'Activity & search') }}
+        options={{ headerTitle: hdr('search', 'Activity & search', colors.accent.primary) }}
       />
 
       {/* ---- Track & rules (was ToolsStack) ---- */}
       <Stack.Screen
         name="Loans"
         component={LoansRedirectScreen}
-        options={{ headerTitle: hdr('landmark', 'Loans') }}
+        options={{ headerTitle: hdr('landmark', 'Loans', colors.accent.expense) }}
       />
       <Stack.Screen
         name="LoanDetail"
         component={LoanDetailScreen}
-        options={{ headerTitle: hdr('landmark', 'Loan') }}
+        options={{ headerTitle: hdr('landmark', 'Loan', colors.accent.expense) }}
       />
       <Stack.Screen
         name="InsurancePolicies"
         component={InsurancePoliciesScreen}
-        options={{ headerTitle: hdr('shield', 'Insurance') }}
+        options={{ headerTitle: hdr('shield', 'Insurance', colors.accent.income) }}
       />
       <Stack.Screen
         name="RecurringTransactions"
         component={RecurringTransactionsScreen}
-        options={{ headerTitle: hdr('repeat', 'Recurring') }}
+        options={{ headerTitle: hdr('repeat', 'Recurring', colors.accent.primary) }}
       />
       <Stack.Screen
         name="Transfers"
         component={TransfersRedirectScreen}
-        options={{ headerTitle: hdr('arrow-right-left', 'Transfers') }}
+        options={{ headerTitle: hdr('arrow-right-left', 'Transfers', colors.accent.primary) }}
       />
 
       {/* ---- Import ---- */}
       <Stack.Screen
         name="ImportBankStatement"
         component={ImportBankStatementScreen}
-        options={{ headerTitle: hdr('landmark', 'Bank Statement Import') }}
+        options={{ headerTitle: hdr('landmark', 'Bank Statement Import', colors.accent.investment) }}
       />
       <Stack.Screen
         name="ImportTransactions"
         component={ImportTransactionsScreen}
-        options={{ headerTitle: hdr('download', 'Import Transactions') }}
+        options={{ headerTitle: hdr('download', 'Import Transactions', colors.accent.primary) }}
       />
 
       {/* ---- Financial tools ---- */}
+      {/* Tints below reuse each tool's own `accent` from FinancialToolsScreen's
+          TOOL_GROUPS / StockMarketScreen's MARKET_TOOLS, so the header matches
+          the color the tool was tapped from one screen back. */}
       <Stack.Screen
         name="FinancialTools"
         component={FinancialToolsScreen}
-        options={{ headerTitle: hdr('calculator', 'Financial Tools') }}
+        options={{ headerTitle: hdr('calculator', 'Financial Tools', colors.accent.orange) }}
       />
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
-        options={{ headerTitle: hdr('calculator', 'EMI Calculator') }}
+        options={{ headerTitle: hdr('calculator', 'EMI Calculator', colors.accent.primary) }}
       />
       <Stack.Screen
         name="SIPCalculator"
         component={SIPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-up', 'SIP Calculator') }}
+        options={{ headerTitle: hdr('trending-up', 'SIP Calculator', colors.accent.income) }}
       />
       <Stack.Screen
         name="TaxCalculator"
         component={TaxCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Tax Calculator') }}
+        options={{ headerTitle: hdr('receipt', 'Tax Calculator', colors.accent.investment) }}
       />
       <Stack.Screen
         name="FireCalculator"
         component={FireCalculatorScreen}
-        options={{ headerTitle: hdr('flame', 'FIRE Calculator') }}
+        options={{ headerTitle: hdr('flame', 'FIRE Calculator', colors.accent.expense) }}
       />
       <Stack.Screen
         name="SWPCalculator"
         component={SWPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-down', 'SWP Calculator') }}
+        options={{ headerTitle: hdr('trending-down', 'SWP Calculator', colors.accent.income) }}
       />
       <Stack.Screen
         name="MISCalculator"
         component={MISCalculatorScreen}
-        options={{ headerTitle: hdr('wallet', 'MIS Calculator') }}
+        options={{ headerTitle: hdr('wallet', 'MIS Calculator', colors.accent.income) }}
       />
       <Stack.Screen
         name="GratuityCalculator"
         component={GratuityCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator') }}
+        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator', colors.accent.income) }}
       />
       <Stack.Screen
         name="FundamentalAnalysis"
         component={FundamentalAnalysisScreen}
-        options={{ headerTitle: hdr('search', 'Fundamentals') }}
+        options={{ headerTitle: hdr('search', 'Fundamentals', colors.accent.investment) }}
       />
       <Stack.Screen
         name="StockMarket"
         component={StockMarketScreen}
-        options={{ headerTitle: hdr('trending-up', 'Stock Market') }}
+        options={{ headerTitle: hdr('trending-up', 'Stock Market', colors.accent.investment) }}
       />
       <Stack.Screen
         name="StockHistory"
         component={StockHistoryScreen}
-        options={{ headerTitle: hdr('bar-chart-2', 'Price History') }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Price History', colors.accent.primary) }}
       />
       <Stack.Screen
         name="MarketIndices"
         component={MarketBoardScreen}
         initialParams={{ board: 'indices' }}
-        options={{ headerTitle: hdr('bar-chart-2', 'Nifty Indices') }}
+        options={{ headerTitle: hdr('bar-chart-2', 'Nifty Indices', colors.accent.primary) }}
       />
       <Stack.Screen
         name="MarketGainers"
         component={MarketBoardScreen}
         initialParams={{ board: 'gainers' }}
-        options={{ headerTitle: hdr('trending-up', 'Top Gainers') }}
+        options={{ headerTitle: hdr('trending-up', 'Top Gainers', colors.accent.income) }}
       />
       <Stack.Screen
         name="MarketLosers"
         component={MarketBoardScreen}
         initialParams={{ board: 'losers' }}
-        options={{ headerTitle: hdr('trending-down', 'Top Losers') }}
+        options={{ headerTitle: hdr('trending-down', 'Top Losers', colors.accent.expense) }}
       />
 
-      {/* ---- App ---- */}
-      <Stack.Screen
-        name="Settings"
-        component={SettingsHubScreen}
-        options={{ headerTitle: hdr('settings', 'Settings') }}
-      />
+      {/* ---- App ----
+          The 'Settings' hub screen (SettingsHubScreen) that used to sit in
+          front of these 4 was removed — MoreMenuScreen now links to each
+          of these directly from a flattened "Settings" section, so the
+          hub's tap-through is gone. Tints below (except Categories/
+          Accounts/Brokers, which reuse SettingsAccountsDataScreen's own
+          literal tints for an exact match) mirror MoreMenuScreen's row
+          tints for the same area. */}
       <Stack.Screen
         name={'SettingsAppearance'}
         component={SettingsAppearanceScreen}
-        options={{ headerTitle: hdr('sun', 'Appearance') }}
+        options={{ headerTitle: hdr('sun', 'Appearance', colors.accent.violet) }}
       />
       <Stack.Screen
         name={'SettingsAccountsData'}
         component={SettingsAccountsDataScreen}
-        options={{ headerTitle: hdr('wallet', 'Accounts & data') }}
+        options={{ headerTitle: hdr('wallet', 'Accounts & data', colors.accent.sky) }}
       />
       <Stack.Screen
         name={'SettingsAI'}
         component={SettingsAIScreen}
-        options={{ headerTitle: hdr('sparkles', 'AI') }}
+        options={{ headerTitle: hdr('sparkles', 'AI', colors.accent.cyan) }}
       />
       <Stack.Screen
         name={'SettingsAdvanced'}
         component={AdvancedSettingsScreen}
         initialParams={{ section: 'advanced' }}
-        options={{ headerTitle: hdr('wrench', 'Advanced') }}
+        options={{ headerTitle: hdr('wrench', 'Advanced', colors.accent.orange) }}
       />
       {/* Categories were extracted out of Settings in the v4 polish
           pass — Settings now shows a compact hub card that pushes
@@ -493,7 +527,7 @@ function MoreStack() {
       <Stack.Screen
         name="Categories"
         component={CategoriesScreen}
-        options={{ headerTitle: hdr('tag', 'Categories') }}
+        options={{ headerTitle: hdr('tag', 'Categories', '#0891b2') }}
       />
       {/* Accounts got the same treatment as Categories — the two-level
           group-card UI moved out of Settings into its own screen with
@@ -502,12 +536,12 @@ function MoreStack() {
       <Stack.Screen
         name="Accounts"
         component={AccountsScreen}
-        options={{ headerTitle: hdr('wallet', 'Accounts') }}
+        options={{ headerTitle: hdr('wallet', 'Accounts', '#0ea5e9') }}
       />
       <Stack.Screen
         name="AccountActivity"
         component={AccountActivityScreen}
-        options={{ headerTitle: hdr('activity', 'Account Activity') }}
+        options={{ headerTitle: hdr('activity', 'Account Activity', colors.accent.income) }}
       />
       {/* Brokers — the same v4-polish pattern applied to broker
           management. Accounts hold CASH (HDFC Savings, Cash wallet);
@@ -519,7 +553,7 @@ function MoreStack() {
       <Stack.Screen
         name="Brokers"
         component={BrokersScreen}
-        options={{ headerTitle: hdr('trending-up', 'Brokers') }}
+        options={{ headerTitle: hdr('trending-up', 'Brokers', colors.accent.orange) }}
       />
     </Stack.Navigator>
   );
@@ -623,9 +657,9 @@ function ThemedApp() {
             name="Dashboard"
             component={DashboardScreen}
             options={{
-              headerTitle: hdr('home', 'Home'),
-              tabBarLabel: 'Home',
-              tabBarIcon: tabIcon('home'),
+              headerTitle: hdr('home', 'Home', colors.accent.primary),
+              tabBarLabel: tabLabel('Home', colors.accent.primary, fontFamilyBold),
+              tabBarIcon: tabIcon('home', colors.accent.primary),
               safeAreaInsets: {
                 top: Math.max(
                   insets.top,
@@ -642,14 +676,20 @@ function ThemedApp() {
             listeners={stackTabListeners('TransactionsHome')}
             options={{
               headerShown: false,
-              tabBarLabel: 'Transactions',
+              // Own color identity (same red the transactions list already
+              // uses for its date-group chips), full-strength always rather
+              // than falling back to flat gray like the un-themed tabs —
+              // matches the colour identity the Home cards got. Driven
+              // explicitly through tabIcon/tabLabel's `tint` argument, not
+              // tabBarActiveTintColor — see the note on tabIcon.
+              tabBarLabel: tabLabel('Transactions', colors.accent.expense, fontFamilyBold),
               // A scalloped receipt glyph — one clear silhouette that
               // reads as "your ledger of entries" at 24 dp. Chosen over
               // the previous `arrow-down-up` (two thin arrows) because
               // the double-arrow was fiddly at tab-bar size and got
               // visually lost next to the bolder single-glyph icons on
               // the other tabs (home, pie-chart, sparkles, layout-grid).
-              tabBarIcon: tabIcon('receipt'),
+              tabBarIcon: tabIcon('receipt', colors.accent.expense),
             }}
           />
           <Tab.Screen
@@ -658,8 +698,8 @@ function ThemedApp() {
             listeners={stackTabListeners('NetWorth')}
             options={{
               headerShown: false,
-              tabBarLabel: 'Wealth',
-              tabBarIcon: tabIcon('gem'),
+              tabBarLabel: tabLabel('Wealth', colors.accent.gold, fontFamilyBold),
+              tabBarIcon: tabIcon('coins', colors.accent.gold),
             }}
           />
           {/* Insights — AI-generated financial coach. Kept as its own
@@ -673,8 +713,8 @@ function ThemedApp() {
             listeners={stackTabListeners('PlanHome')}
             options={{
               headerShown: false,
-              tabBarLabel: 'Plan',
-              tabBarIcon: tabIcon('target'),
+              tabBarLabel: tabLabel('Plan', colors.accent.income, fontFamilyBold),
+              tabBarIcon: tabIcon('target', colors.accent.income),
             }}
           />
           {/* More — the catch-all hub. Absorbs the old Analysis + Tools +
@@ -688,8 +728,8 @@ function ThemedApp() {
             listeners={stackTabListeners('MoreMenu')}
             options={{
               headerShown: false,
-              tabBarLabel: 'More',
-              tabBarIcon: tabIcon('layout-grid'),
+              tabBarLabel: tabLabel('More', colors.accent.teal, fontFamilyBold),
+              tabBarIcon: tabIcon('layout-grid', colors.accent.teal),
             }}
           />
         </Tab.Navigator>

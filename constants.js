@@ -374,7 +374,6 @@ const EXPENSE_CATEGORY_SEEDS = [
       { id: 'food_snacks',       label: 'Snacks',        emoji: '🍿', color: '#eab308' },
       { id: 'food_bakery',       label: 'Bakery',        emoji: '🥐', color: '#d97706' },
       { id: 'food_fastfood',     label: 'Fast Food',     emoji: '🍟', color: '#f97316' },
-      { id: 'food_dining_out',   label: 'Dining Out',    emoji: '🍷', color: '#dc2626' },
       { id: 'food_alcohol',      label: 'Alcohol / Bar', emoji: '🍺', color: '#a16207' },
       { id: 'food_fruitveg',     label: 'Fruits & Veg',  emoji: '🥕', color: '#65a30d' },
       { id: 'food_meat',         label: 'Meat & Fish',   emoji: '🥩', color: '#b91c1c' },
@@ -603,13 +602,13 @@ const EXPENSE_CATEGORY_SEEDS = [
     subCategories: [
       { id: 'other_donation',  label: 'Donation',       emoji: '🤝', color: '#f97316' },
       { id: 'other_fees',      label: 'Fees & Charges', emoji: '📄', color: '#6b7280' },
-      { id: 'other_repairs',   label: 'Repairs',        emoji: '🔧', color: '#78716c' },
-      { id: 'other_pets',      label: 'Pets',           emoji: '🐾', color: '#a16207' },
-      { id: 'other_education', label: 'Education',      emoji: '🎓', color: '#4f46e5' },
       { id: 'other_kids',      label: 'Kids',           emoji: '👶', color: '#fb7185' },
       { id: 'other_legal',     label: 'Legal',          emoji: '⚖️', color: '#78716c' },
       { id: 'other_tax',       label: 'Tax Payment',    emoji: '🏛️', color: '#dc2626' },
-      { id: 'other_misc',      label: 'Miscellaneous',  emoji: '❓', color: '#6b7280' },
+      // No explicit "Miscellaneous"/"Others" sub here — ensureOthersSubcategories
+      // (below) already appends one automatically for every category,
+      // including this one. A second, hand-written catch-all sub used to
+      // duplicate it (two near-identical "Miscellaneous"/"Others" chips).
     ],
   },
 ];

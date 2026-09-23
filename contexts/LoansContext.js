@@ -74,6 +74,7 @@ import {
   findLoanKind as findLoanKindInLib,
   getRateAtDate,
   healLegacyClosureEvents,
+  kindColor as kindColorInLib,
   kindIcon as kindIconInLib,
   kindLabel as kindLabelInLib,
   normalizeCustomLoanKind,
@@ -423,6 +424,11 @@ export function LoansProvider({ children }) {
 
   const kindIcon = useCallback(
     (id) => kindIconInLib(id, customLoanKinds),
+    [customLoanKinds],
+  );
+
+  const kindColor = useCallback(
+    (id) => kindColorInLib(id, customLoanKinds),
     [customLoanKinds],
   );
 
@@ -1790,6 +1796,7 @@ export function LoansProvider({ children }) {
       findLoanKind,
       kindLabel,
       kindIcon,
+      kindColor,
       addCustomLoanKind,
       findLoan,
       addLoan,
@@ -1816,6 +1823,7 @@ export function LoansProvider({ children }) {
       findLoanKind,
       kindLabel,
       kindIcon,
+      kindColor,
       addCustomLoanKind,
       findLoan,
       addLoan,

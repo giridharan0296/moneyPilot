@@ -236,11 +236,15 @@ export default function LoansScreen({ navigation, embedded = false }) {
 
 function LoanRow({ loan, onPress, onDelete }) {
   const styles = useThemedStyles(makeStyles);
-  const { kindIcon, kindLabel } = useLoans();
+  const { kindIcon, kindColor, kindLabel } = useLoans();
   const pct = computePayoffPercent(loan);
   const { remainingMonths, projectedClosureDate } = computePayoffProjection(loan);
 
   const barColor = loan.status === 'closed' ? '#9ca3af' : '#059669';
+  // Each loan kind carries its own color (lib/loans.js LOAN_KINDS) — reuse
+  // it here so "Home Loan" / "Car Loan" / "Money Lent" etc. read apart at a
+  // glance instead of every row showing the same red.
+  const kindTint = kindColor(loan.kind);
   return (
     <SwipeableDeleteRow
       onPress={onPress}
@@ -249,11 +253,11 @@ function LoanRow({ loan, onPress, onDelete }) {
       wrapStyle={{ marginBottom: spacing.sm }}
       contentStyle={[styles.row, loan.status === 'closed' && { opacity: 0.6 }]}
     >
-      <View style={styles.rowEmoji}>
+      <View style={[styles.rowEmoji, { backgroundColor: kindTint + '1a' }]}>
         <AppIcon
           name={kindIcon(loan.kind)}
           size={18}
-          color="#dc2626"
+          color={kindTint}
           strokeWidth={2}
         />
       </View>

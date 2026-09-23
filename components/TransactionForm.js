@@ -16,6 +16,7 @@ import VoiceRecorder from './VoiceRecorder';
 import VoicePlayer from './VoicePlayer';
 import SpeakToFillButton from './SpeakToFillButton';
 import TagInput from './TagInput';
+import useNoteTagSuggestions, { noteForTransactionDate } from '../hooks/useNoteTagSuggestions';
 import AppIcon from './AppIcon';
 import AmountCalculatorButton from './AmountCalculatorButton';
 import AppButton from './AppButton';
@@ -146,49 +147,6 @@ const INCOME_ENTRY_MODES = [
   { id: 'manual', icon: 'edit-3', label: 'Manual entry', short: 'Manual' },
   { id: 'payslip', icon: 'file-text', label: 'From payslip PDF', short: 'Source doc' },
 ];
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-// Turn a remembered recurring note into a note for the selected transaction
-// month. Only replace a month that matches the source transaction's own date,
-// so unrelated text such as "March conference deposit" is not rewritten when
-// copied from a transaction recorded in a different month.
-function noteForTransactionDate(template, sourceDate, targetDate) {
-  const source = new Date(sourceDate);
-  const target = new Date(targetDate);
-  if (!template || !isFinite(source.getTime()) || !isFinite(target.getTime())) {
-    return template;
-  }
-  const sourceFull = MONTH_NAMES[source.getMonth()];
-  const sourceShort = sourceFull.slice(0, 3);
-  const targetFull = MONTH_NAMES[target.getMonth()];
-  const targetShort = targetFull.slice(0, 3);
-  let replacedMonth = false;
-  let next = String(template).replace(
-    new RegExp(`\\b${sourceFull}\\b`, 'gi'),
-    () => {
-      replacedMonth = true;
-      return targetFull;
-    },
-  );
-  next = next.replace(
-    new RegExp(`\\b${sourceShort}\\b`, 'gi'),
-    () => {
-      replacedMonth = true;
-      return targetShort;
-    },
-  );
-  if (replacedMonth && source.getFullYear() !== target.getFullYear()) {
-    next = next.replace(
-      new RegExp(`\\b${source.getFullYear()}\\b`, 'g'),
-      String(target.getFullYear()),
-    );
-  }
-  return next;
-}
 
 // ----------------------------------------------------------------------------
 // TransactionForm — the shared amount+category+account+timestamp+note form.
@@ -411,66 +369,14 @@ export default function TransactionForm({
     }
   }, [accounts, initialValues, typeTransactions]);
 
-  const matchingHistory = useMemo(() => {
-    const query = note.trim().toLocaleLowerCase();
-    if (query.length < 2) return [];
-    return typeTransactions
-      .filter((tx) => {
-        const candidate = String(tx.note ?? '').trim().toLocaleLowerCase();
-        return candidate && candidate.includes(query);
-      })
-      .sort((a, b) => {
-        const aScope = a.categoryId === categoryId
-          ? (a.subCategoryId === subCategoryId ? 2 : 1)
-          : 0;
-        const bScope = b.categoryId === categoryId
-          ? (b.subCategoryId === subCategoryId ? 2 : 1)
-          : 0;
-        const aNote = String(a.note).trim().toLocaleLowerCase();
-        const bNote = String(b.note).trim().toLocaleLowerCase();
-        const aPrefix = aNote.startsWith(query) ? 1 : 0;
-        const bPrefix = bNote.startsWith(query) ? 1 : 0;
-        return bScope - aScope
-          || bPrefix - aPrefix
-          || new Date(b.createdAt) - new Date(a.createdAt);
-      });
-  }, [categoryId, note, subCategoryId, typeTransactions]);
-
-  const noteSuggestions = useMemo(() => {
-    const seen = new Set();
-    const suggestions = [];
-    for (const tx of matchingHistory) {
-      const template = String(tx.note ?? '').trim();
-      const sourceDate = tx.createdAt ?? tx.date;
-      const label = noteForTransactionDate(template, sourceDate, date);
-      const key = label.toLocaleLowerCase();
-      if (!template || seen.has(key) || key === note.trim().toLocaleLowerCase()) continue;
-      seen.add(key);
-      suggestions.push({ label, template, transaction: tx });
-      if (suggestions.length === 4) break;
-    }
-    return suggestions;
-  }, [date, matchingHistory, note]);
-
-  const tagSuggestions = useMemo(() => {
-    const scopedCounts = new Map();
-    for (const tx of typeTransactions) {
-      if (tx.categoryId !== categoryId) continue;
-      if (subCategoryId && tx.subCategoryId !== subCategoryId) continue;
-      for (const rawTag of Array.isArray(tx.tags) ? tx.tags : []) {
-        const tag = String(rawTag ?? '').trim();
-        if (tag) scopedCounts.set(tag, (scopedCounts.get(tag) ?? 0) + 1);
-      }
-    }
-    const scoped = [...scopedCounts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([tag]) => tag);
-    const seen = new Set(scoped.map((tag) => tag.toLocaleLowerCase()));
-    return [
-      ...scoped,
-      ...allTags.filter((tag) => !seen.has(String(tag).toLocaleLowerCase())),
-    ];
-  }, [allTags, categoryId, subCategoryId, typeTransactions]);
+  const { matchingHistory, noteSuggestions, tagSuggestions } = useNoteTagSuggestions({
+    transactions: typeTransactions,
+    categoryId,
+    subCategoryId,
+    note,
+    date,
+    allTags,
+  });
 
   const suggestedCategory = useMemo(() => {
     if (!note.trim() || matchingHistory.length === 0) return null;
@@ -576,6 +482,17 @@ export default function TransactionForm({
   const canShowOpeningPosition = tracksMarketInstrument
     && Boolean(instrument?.symbol)
     && (instrumentIsNewInSystem || Boolean(savedOpeningPosition));
+
+  // KNOWN_BUGS #1: "Historical only" is meant for units owned BEFORE
+  // tracking started. If this instrument already has other logged
+  // purchases, an opening lot on top of them silently double-counts units
+  // in Portfolio/Net Worth — instrumentIsNewInSystem already excludes the
+  // record currently being edited, so this only trips for a genuinely
+  // separate, already-logged instrument.
+  const historicalDuplicatesLogged = historicalOnly
+    && tracksMarketInstrument
+    && Boolean(instrument?.symbol)
+    && !instrumentIsNewInSystem;
 
   const recurringFrequencyOptions = useMemo(
     () => FREQUENCIES.filter((f) => ['weekly', 'monthly', 'yearly'].includes(f.id)),
@@ -1042,6 +959,10 @@ export default function TransactionForm({
       }
       if (!instrument?.symbol) {
         failValidation('Search and select the stock, ETF, or mutual fund you already own.');
+        return;
+      }
+      if (!instrumentIsNewInSystem) {
+        failValidation('This instrument already has logged purchases — a historical entry would double-count your units. Switch to "New purchase" instead.');
         return;
       }
       const parsedLots = parseOpeningLotsFromForm(openingLots);
@@ -1742,8 +1663,22 @@ export default function TransactionForm({
             style={styles.panelInput}
             value={chitSchemeName}
             onChangeText={(value) => {
-              setChitSchemeName(value);
-              setChitSchemeId(null);
+              // Typing the exact name of an existing open chit should behave
+              // like tapping its chip below — auto-fill purity and the last
+              // rate you actually paid there, instead of silently falling
+              // back to today's live market rate (which drifts from what
+              // the shop charges and made repeat entries for the same
+              // scheme price inconsistently against each other).
+              const typed = value.trim().toLocaleLowerCase();
+              const match = typed
+                ? openChitSchemes.find((s) => s.name.trim().toLocaleLowerCase() === typed)
+                : null;
+              if (match) {
+                pickOpenChitScheme(match);
+              } else {
+                setChitSchemeName(value);
+                setChitSchemeId(null);
+              }
             }}
             placeholder="e.g. Tanishq 20g gold chit"
             placeholderTextColor={themeColors.text.muted}
@@ -1897,7 +1832,16 @@ export default function TransactionForm({
             hideUnits={historicalOnly}
             accentColor={accentColor}
           />
-          {(canShowOpeningPosition || historicalOnly) ? (
+          {historicalDuplicatesLogged ? (
+            <InfoCallout
+              icon="alert-triangle"
+              tone="warning"
+              title="Already logged"
+              body="This instrument already has other logged purchases. A historical entry on top of those would double-count your units. Switch to “New purchase” instead, or edit the existing entry from Portfolio."
+              compact
+            />
+          ) : null}
+          {(canShowOpeningPosition || (historicalOnly && !historicalDuplicatesLogged)) ? (
             <View style={styles.openingPositionCard}>
               {!brokerId ? (
                 <View style={styles.openingPositionToggle}>
@@ -2376,20 +2320,27 @@ export default function TransactionForm({
 // ----------------------------------------------------------------------------
 function VoiceFillSummary({ summary, accentColor, onDismiss }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const { heard, applied, missed } = summary;
   const allMissed = applied.length === 0;
   return (
     <View
       style={[
         styles.summaryCard,
-        { borderColor: allMissed ? '#fca5a5' : accentColor + '55' },
-        allMissed && { backgroundColor: '#fef2f2' },
+        { borderColor: allMissed ? themeColors.state.errorText : accentColor + '55' },
+        allMissed && { backgroundColor: themeColors.state.errorSurface },
       ]}
     >
       <View style={styles.summaryHeader}>
         <Text style={styles.summaryHeaderLabel}>HEARD</Text>
-        <TouchableOpacity onPress={onDismiss} hitSlop={8} style={styles.summaryClose}>
-          <AppIcon name="x" size={14} color="#6b7280" strokeWidth={2.4} />
+        <TouchableOpacity
+          onPress={onDismiss}
+          hitSlop={8}
+          style={styles.summaryClose}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss voice-fill summary"
+        >
+          <AppIcon name="x" size={14} color={styles.summaryCloseText.color} strokeWidth={2.4} />
         </TouchableOpacity>
       </View>
       <Text style={styles.summaryQuote}>"{heard}"</Text>
@@ -2508,6 +2459,10 @@ function SubCategoryChipRow({ items, selectedId, onSelect, accentColor, trailing
           },
         ]}
         activeOpacity={0.7}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !selectedId }}
+        accessibilityLabel="No sub-category"
       >
         <Text
           style={[
@@ -2532,6 +2487,10 @@ function SubCategoryChipRow({ items, selectedId, onSelect, accentColor, trailing
               },
             ]}
             activeOpacity={0.7}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={s.label}
           >
             <Text
               style={[
@@ -2568,6 +2527,10 @@ function ChipRow({ items, selectedId, onSelect, accentColor, emptyText, trailing
               },
             ]}
             activeOpacity={0.7}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={c.label}
           >
             <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
               {c.emoji} {c.label}
@@ -2700,6 +2663,10 @@ function BrokerChipRow({ brokers, selectedId, onSelect, accentColor }) {
           },
         ]}
         activeOpacity={0.7}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityState={{ selected: noneSelected }}
+        accessibilityLabel="No broker"
       >
         <Text style={[styles.chipText, noneSelected && styles.chipTextSelected]}>
           — None
@@ -2719,6 +2686,10 @@ function BrokerChipRow({ brokers, selectedId, onSelect, accentColor }) {
               },
             ]}
             activeOpacity={0.7}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={b.label}
           >
             <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
               {b.emoji} {b.label}

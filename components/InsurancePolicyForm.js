@@ -10,7 +10,6 @@ import {
 import AmountCalculatorButton from './AmountCalculatorButton';
 import DateTimePicker from './DatePicker';
 import TagInput from './TagInput';
-import QuickAddPickerItem from './QuickAddPickerItem';
 import {
   POLICY_TYPES,
   PREMIUM_FREQUENCIES,
@@ -244,19 +243,28 @@ export default function InsurancePolicyForm({
       />
 
       <Text style={styles.label}>Log premium under</Text>
-      <View style={styles.pickerList}>
-        {pickerCategories.map((cat) => (
-          <QuickAddPickerItem
-            key={cat.id}
-            emoji={cat.emoji}
-            label={cat.label}
-            selected={expenseCategoryId === cat.id}
-            onPress={() => {
-              setExpenseCategoryId(cat.id);
-              setExpenseSubCategoryId(null);
-            }}
-          />
-        ))}
+      <View style={styles.chipRow}>
+        {pickerCategories.map((cat) => {
+          const selected = expenseCategoryId === cat.id;
+          return (
+            <TouchableOpacity
+              key={cat.id}
+              onPress={() => {
+                setExpenseCategoryId(cat.id);
+                setExpenseSubCategoryId(null);
+              }}
+              activeOpacity={0.7}
+              style={[styles.chip, selected && styles.chipSelected]}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={cat.label}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                {cat.emoji ? `${cat.emoji} ` : ''}{cat.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {subCategories.length > 0 && (
@@ -363,8 +371,8 @@ const makeStyles = (c) => ({
     backgroundColor: c.bg.surfaceAlt,
   },
   chipSelected: {
-    backgroundColor: '#0d9488',
-    borderColor: '#0d9488',
+    backgroundColor: c.accent.teal,
+    borderColor: c.accent.teal,
   },
   chipText: {
     fontSize: 13,
@@ -385,9 +393,6 @@ const makeStyles = (c) => ({
   dateBtnText: {
     fontSize: 16,
     color: c.text.primary,
-  },
-  pickerList: {
-    gap: spacing.xs,
   },
   error: {
     color: c.accent.expense,

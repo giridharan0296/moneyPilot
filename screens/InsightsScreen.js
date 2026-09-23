@@ -163,9 +163,9 @@ export default function InsightsScreen({ navigation }) {
             style={styles.ctaButton}
             onPress={() =>
               // Settings lives inside the More tab in v4 — nested
-              // navigate keeps the More tab focused and drills to
-              // Settings so the back button returns to MoreMenu.
-              navigation.navigate('More', { screen: 'Settings' })
+              // navigate keeps the More tab focused and drills straight
+              // to the AI area so the back button returns to MoreMenu.
+              navigation.navigate('More', { screen: 'SettingsAI' })
             }
             activeOpacity={0.85}
           >
@@ -208,7 +208,7 @@ export default function InsightsScreen({ navigation }) {
           style={[styles.refreshBtn, loading && styles.refreshBtnDisabled]}
           disabled={loading}
           onPress={isSample
-            ? () => navigation.navigate('More', { screen: 'Settings' })
+            ? () => navigation.navigate('More', { screen: 'SettingsAI' })
             : handleGenerate}
           activeOpacity={0.8}
         >

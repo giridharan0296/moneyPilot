@@ -26,7 +26,7 @@ import {
 import RecurringForm from '../components/RecurringForm';
 import AppIcon from '../components/AppIcon';
 import HelpSheet from '../components/HelpSheet';
-import { StatusBadge } from '../components/UiPrimitives';
+import { EmptyState, StatusBadge } from '../components/UiPrimitives';
 import { useRecurring } from '../contexts/RecurringContext';
 import { useInsurancePolicies } from '../contexts/InsurancePoliciesContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -239,17 +239,16 @@ export default function RecurringTransactionsScreen({ navigation }) {
       )}
 
       {rules.length === 0 && !creating && (
-        <View style={styles.emptyCard}>
-          <View style={styles.emptyIconWrap}>
-            <AppIcon name="repeat" size={40} color="#9ca3af" strokeWidth={1.7} />
-          </View>
-          <Text style={styles.emptyTitle}>No recurring rules yet</Text>
-          <Text style={styles.emptySub}>
-            Set up rules for things that repeat — salary, rent, Netflix, SIPs,
-            gym membership. They'll get added automatically each period.
-            Tap + in the header to create one.
-          </Text>
-        </View>
+        <EmptyState
+          icon="repeat"
+          title="No recurring rules yet"
+          body="Set up rules for things that repeat — salary, rent, Netflix, SIPs, gym membership. They'll get added automatically each period."
+          actionLabel="Add recurring rule"
+          onAction={() => {
+            setEditingId(null);
+            setCreating(true);
+          }}
+        />
       )}
 
       {(['expense', 'income', 'investment']).map((type) => {
@@ -315,6 +314,7 @@ function RuleRow({
   onToggleActive,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   const meta = TYPE_META[rule.type];
   const cat = findCategory(rule.type, rule.categoryId);
   const sub = rule.subCategoryId
@@ -371,13 +371,16 @@ function RuleRow({
         <Switch
           value={rule.active}
           onValueChange={onToggleActive}
-          trackColor={{ false: '#e5e7eb', true: meta.color }}
-          thumbColor="#fff"
+          trackColor={{ false: themeColors.bg.surfaceAlt, true: meta.color + '88' }}
+          thumbColor={rule.active ? meta.color : themeColors.bg.surface}
+          accessibilityLabel={rule.active ? 'Pause rule' : 'Activate rule'}
         />
         <TouchableOpacity
           onPress={onDelete}
           hitSlop={8}
           style={styles.deleteBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Delete rule"
         >
           <AppIcon name="x" size={12} color="#b91c1c" strokeWidth={2.4} />
         </TouchableOpacity>
@@ -471,23 +474,4 @@ const makeStyles = (c) => ({
   },
   cardTitle: { fontSize: 15, fontWeight: '700', color: c.text.primary },
 
-  // ---- Empty state ----
-  emptyCard: {
-    backgroundColor: c.bg.surface,
-    borderRadius: 14,
-    padding: 24,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#c7d2fe',
-    alignItems: 'center',
-  },
-  emptyIconWrap: { marginBottom: 8, opacity: 0.85 },
-  emptyTitle: { fontSize: 16, fontWeight: '800', color: c.text.primary },
-  emptySub: {
-    fontSize: 13,
-    color: c.text.secondary,
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 19,
-  },
 });

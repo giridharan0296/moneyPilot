@@ -13,10 +13,13 @@ const STEPS = [
     eyebrow: 'Welcome',
     title: 'See your complete money picture',
     body: `${APP_DISPLAY_NAME} brings daily cash flow, investments, loans, goals, and net worth into one place.`,
+    // Each point's 4th element keys into theme.accent — 'home' and 'more'
+    // reuse the exact colors those two bottom tabs use, so the onboarding
+    // tour visually previews the real tab bar.
     points: [
-      ['home', 'Home', 'Your net worth, what to do next, and where your money went this month.'],
-      ['plus', 'Quick add', 'Use + to record income, expenses, and investments.'],
-      ['layout-grid', 'More', 'Find reports, loans, imports, calculators, and settings.'],
+      ['home', 'Home', 'Your net worth, what to do next, and where your money went this month.', 'primary'],
+      ['plus', 'Quick add', 'Use + to record income, expenses, and investments.', 'income'],
+      ['layout-grid', 'More', 'Find reports, loans, imports, calculators, and settings.', 'orange'],
     ],
   },
   {
@@ -136,17 +139,20 @@ export default function GuidedOnboarding({
               </Pressable>
             ) : null}
 
-            {current.points.map(([icon, label, description]) => (
-              <View key={label} style={styles.point}>
-                <View style={styles.pointIcon}>
-                  <AppIcon name={icon} size={18} color={colors.accent.primary} strokeWidth={2.1} />
+            {current.points.map(([icon, label, description, colorKey]) => {
+              const tint = colors.accent[colorKey] ?? colors.accent.primary;
+              return (
+                <View key={label} style={styles.point}>
+                  <View style={[styles.pointIcon, { backgroundColor: tint + '16' }]}>
+                    <AppIcon name={icon} size={18} color={tint} strokeWidth={2.1} />
+                  </View>
+                  <View style={styles.pointCopy}>
+                    <Text style={styles.pointTitle}>{label}</Text>
+                    <Text style={styles.pointBody}>{description}</Text>
+                  </View>
                 </View>
-                <View style={styles.pointCopy}>
-                  <Text style={styles.pointTitle}>{label}</Text>
-                  <Text style={styles.pointBody}>{description}</Text>
-                </View>
-              </View>
-            ))}
+              );
+            })}
 
             {step === 3 ? (
               <View style={styles.readyCard}>

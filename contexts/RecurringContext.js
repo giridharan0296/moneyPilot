@@ -247,6 +247,7 @@ export function RecurringProvider({ children }) {
       currency:      data.currency ? String(data.currency).toUpperCase() : null,
       fxRate:        Number(data.fxRate) > 0 ? Number(data.fxRate) : null,
       note:          (data.note ?? '').trim(),
+      tags:          Array.isArray(data.tags) ? data.tags : [],
       frequency,
       // Monthly-only anchor mode. Older rules omit this field entirely and
       // are treated as 'date' by lib/recurring.js, so persistence stays
