@@ -1,0 +1,11 @@
+Date,Type,Amount,Category,Sub-category,Account,Note,Tags
+01/09/2026,expense,450,Food,Groceries,Cash,Weekly grocery run,household
+02/09/2026,expense,180,Transport,Cab,Cash,Office commute,
+03/09/2026,expense,45000,Bills,Rent,Cash,September rent,
+04/09/2026,expense,899,Shopping,,Cash,New t-shirt,
+05/09/2026,income,185000,Employment Income,Base Pay,Cash,Monthly salary,
+06/09/2026,investment,25000,Mutual Funds,,Cash,Parag Parikh Flexi Cap SIP,sip
+07/09/2026,expense,320,Food,Coffee / Tea,Cash,Coffee with friends,social
+08/09/2026,expense,1200,Transport,Fuel,Cash,Petrol top-up,
+09/09/2026,expense,650,Health,,Cash,Pharmacy,
+10/09/2026,income,8000,Business Income,Client Work,Cash,Freelance invoice paid,freelance

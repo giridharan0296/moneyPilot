@@ -42,8 +42,9 @@ import {
 
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
-import { AGE_BANDS, CAPS, compareRegimes } from '../lib/tax';
+import { AGE_BANDS, CAPS, compareRegimes, computeHraExemption } from '../lib/tax';
 import { radii, spacing } from '../lib/theme';
+import { withAlpha } from '../lib/colorAlpha';
 import { PAYSLIP_PDF_ALERTS, readPayslipPdf } from '../lib/readPayslipPdf';
 import AppIcon from '../components/AppIcon';
 import AmountCalculatorButton from '../components/AmountCalculatorButton';
@@ -236,6 +237,9 @@ export default function TaxCalculatorScreen() {
   };
 
   const clearAll = () => {
+    setAge('below_60');
+    setExpanded(false);
+    setShowDeductions(false);
     setOther('');
     setCtcInputs({ gross: '' });
     setPayslipInputs({
@@ -309,7 +313,7 @@ export default function TaxCalculatorScreen() {
             activeOpacity={0.7}
           >
             <View style={styles.autoFillInner}>
-              <AppIcon name="zap" size={12} color="#2563eb" strokeWidth={2.2} filled />
+              <AppIcon name="zap" size={12} color={themeColors.accent.primary} strokeWidth={2.2} filled />
               <Text style={styles.autoFillText}>From my income</Text>
             </View>
           </TouchableOpacity>
@@ -332,7 +336,7 @@ export default function TaxCalculatorScreen() {
                 <AppIcon
                   name={m.icon}
                   size={14}
-                  color={active ? '#c2410c' : '#6b7280'}
+                  color={active ? themeColors.accent.primary : themeColors.text.secondary}
                   strokeWidth={2.1}
                 />
                 <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>
@@ -393,36 +397,48 @@ export default function TaxCalculatorScreen() {
             label="80C investments"
             value={c80C}
             onChangeText={setC80C}
+            cap={CAPS.c80C}
             hint={`PPF, ELSS, EPF, home-loan principal — capped at ₹${cap(CAPS.c80C)}`}
           />
           <MoneyInput
             label="80D health insurance"
             value={c80D}
             onChangeText={setC80D}
+            cap={senior ? CAPS.c80D_senior : CAPS.c80D_regular}
             hint={`Health premium — capped at ₹${cap(senior ? CAPS.c80D_senior : CAPS.c80D_regular)}${senior ? ' (senior)' : ''}`}
           />
           <MoneyInput
             label="HRA exemption"
             value={hra}
             onChangeText={setHra}
-            hint="From your Form 16 or HRA calculation"
+            hint="From your Form 16, or work it out below"
+            warnIf={hasSalaryInput && num(hra) > derivedGross}
+            warnMessage="This is more than your gross salary — make sure you've entered the exempt HRA amount, not the full HRA received."
+          />
+          <HraHelper
+            prefillBasic={payslipInputs.monthlyBasic}
+            prefillHra={payslipInputs.monthlyHRA}
+            onApply={(amount) => setHra(String(amount))}
           />
           <MoneyInput
             label="Home loan interest u/s 24(b)"
             value={homeLoanInterest}
             onChangeText={setHli}
+            cap={CAPS.homeLoanInterest}
             hint={`Self-occupied — capped at ₹${cap(CAPS.homeLoanInterest)}`}
           />
           <MoneyInput
             label="NPS 80CCD(1B)"
             value={nps80CCD1B}
             onChangeText={setNps}
+            cap={CAPS.nps80CCD1B}
             hint={`Extra over 80C — capped at ₹${cap(CAPS.nps80CCD1B)}`}
           />
           <MoneyInput
             label="80TTA savings interest"
             value={c80TTA}
             onChangeText={setTta}
+            cap={CAPS.c80TTA}
             hint={`Savings account interest — capped at ₹${cap(CAPS.c80TTA)}`}
           />
         </View>
@@ -430,7 +446,7 @@ export default function TaxCalculatorScreen() {
 
       {/* RECOMMENDATION BANNER */}
       {result.old.totalIncome > 0 && (
-        <View style={[styles.recBanner, { borderColor: rec.color, backgroundColor: rec.color + '15' }]}>
+        <View style={[styles.recBanner, { borderColor: rec.color, backgroundColor: withAlpha(rec.color, 0.08) }]}>
           <View style={styles.recTitleRow}>
             {rec.icon ? (
               <AppIcon name={rec.icon} size={16} color={rec.textColor} strokeWidth={2.2} />
@@ -573,7 +589,7 @@ function PayslipInputs({ inputs, onChange, derivedGross, onUploadPdf, uploading 
         ) : (
           <>
             <View style={styles.uploadPdfBtnEmoji}>
-              <AppIcon name="file-text" size={22} color="#0369a1" strokeWidth={1.8} />
+              <AppIcon name="file-text" size={22} color={themeColors.accent.primary} strokeWidth={1.8} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.uploadPdfBtnText}>Upload payslip PDF</Text>
@@ -697,12 +713,174 @@ function TakehomeInputs({ inputs, onChange, derivedGross }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// HRA exemption helper — works out the exempt amount from basic, HRA received
+// and rent, instead of trusting a hand-typed number. Everything is entered
+// MONTHLY (that's how payslips and rent receipts read) and ×12 for the maths.
+// ---------------------------------------------------------------------------
+function HraHelper({ prefillBasic, prefillHra, onApply }) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const [open, setOpen] = useState(false);
+  const [metro, setMetro] = useState(true);
+  const [basic, setBasic] = useState('');
+  const [hraReceived, setHraReceived] = useState('');
+  const [rent, setRent] = useState('');
+
+  const toggle = () => {
+    if (!open) {
+      // Pull from the payslip inputs the first time only, so we never
+      // overwrite something the user has already typed here.
+      if (!basic && prefillBasic) setBasic(String(prefillBasic));
+      if (!hraReceived && prefillHra) setHraReceived(String(prefillHra));
+    }
+    setOpen((o) => !o);
+  };
+
+  const r = useMemo(() => computeHraExemption({
+    annualBasic: 12 * num(basic),
+    annualHra: 12 * num(hraReceived),
+    annualRent: 12 * num(rent),
+    metro,
+  }), [basic, hraReceived, rent, metro]);
+
+  const inr = (n) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+  const hasInput = num(basic) > 0 || num(hraReceived) > 0 || num(rent) > 0;
+  const rows = [
+    { key: 'hra',   label: 'HRA received',                          value: r.actualHra },
+    { key: 'rent',  label: 'Rent paid − 10% of basic',              value: r.rentMinusTenPct },
+    { key: 'basic', label: `${metro ? '50%' : '40%'} of basic`,     value: r.percentOfBasic },
+  ];
+  const problems = [];
+  if (hasInput && num(basic) === 0) problems.push('Enter your monthly basic pay — both limits depend on it.');
+  if (hasInput && num(rent) === 0) problems.push('No rent entered — HRA is only exempt if you actually pay rent.');
+  if (num(basic) > 0 && num(hraReceived) === 0) problems.push('No HRA received — nothing to exempt if your employer doesn\'t pay HRA.');
+
+  return (
+    <View style={styles.hraWrap}>
+      <TouchableOpacity onPress={toggle} activeOpacity={0.7} style={styles.hraToggle} accessibilityRole="button">
+        <AppIcon name="calculator" size={14} color={themeColors.accent.primary} strokeWidth={2.2} />
+        <Text style={styles.hraToggleText}>
+          {open ? 'Hide HRA helper' : 'Not sure? Work it out from your rent'}
+        </Text>
+      </TouchableOpacity>
+
+      {open && (
+        <View style={styles.hraCard}>
+          <Text style={styles.hraTitle}>HRA exemption helper</Text>
+          <Text style={styles.hraSub}>
+            The exempt amount is the lowest of three limits. Enter monthly figures from your payslip and rent receipt.
+          </Text>
+
+          <Text style={styles.modeLabel}>City you live in</Text>
+          <View style={styles.chipRow}>
+            {[
+              { id: true,  label: 'Metro',    sub: 'Delhi, Mumbai, Kolkata, Chennai' },
+              { id: false, label: 'Other city', sub: 'Everywhere else' },
+            ].map((o) => {
+              const active = metro === o.id;
+              return (
+                <TouchableOpacity
+                  key={String(o.id)}
+                  onPress={() => setMetro(o.id)}
+                  activeOpacity={0.7}
+                  style={[styles.chip, active && styles.chipActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`${o.label} — ${o.sub}`}
+                >
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{o.label}</Text>
+                  <Text style={styles.hraChipSub} numberOfLines={1}>{o.sub}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <MoneyInput
+            label="Monthly basic pay"
+            value={basic}
+            onChangeText={setBasic}
+            hint="Basic plus dearness allowance (DA), if you get DA."
+          />
+          <MoneyInput
+            label="Monthly HRA received"
+            value={hraReceived}
+            onChangeText={setHraReceived}
+            hint="The HRA line on your payslip Earnings side."
+          />
+          <MoneyInput
+            label="Monthly rent paid"
+            value={rent}
+            onChangeText={setRent}
+            hint="What you actually pay your landlord each month."
+          />
+
+          {problems.map((p) => (
+            <View key={p} style={styles.inputWarnRow}>
+              <AppIcon name="alert-triangle" size={12} color={themeColors.state.warningSurfaceText} strokeWidth={2.2} />
+              <Text style={styles.inputWarnText}>{p}</Text>
+            </View>
+          ))}
+
+          {hasInput && (
+            <View style={styles.hraResult}>
+              <Text style={styles.hraResultLabel}>Yearly limits</Text>
+              {rows.map((row) => {
+                const applies = row.key === r.binding;
+                return (
+                  <View key={row.key} style={styles.hraRow}>
+                    <View style={styles.hraRowLeft}>
+                      {applies
+                        ? <AppIcon name="check" size={12} color={themeColors.state.successSurfaceText} strokeWidth={2.6} />
+                        : <View style={styles.hraRowSpacer} />}
+                      <Text style={[styles.hraRowText, applies && styles.hraRowTextApplies]} numberOfLines={1}>
+                        {row.label}
+                      </Text>
+                    </View>
+                    <Text style={[styles.hraRowText, applies && styles.hraRowTextApplies]}>{inr(row.value)}</Text>
+                  </View>
+                );
+              })}
+              <View style={styles.hraDivider} />
+              <View style={styles.hraRow}>
+                <Text style={styles.hraExemptLabel}>Exempt HRA per year</Text>
+                <Text style={styles.hraExemptValue}>{inr(r.exempt)}</Text>
+              </View>
+              {r.taxableHra > 0 && (
+                <Text style={styles.hraNote}>
+                  {inr(r.taxableHra)} of your HRA stays taxable as salary.
+                </Text>
+              )}
+              {r.needsLandlordPan && (
+                <Text style={styles.hraNote}>
+                  Rent above ₹1,00,000 a year — you'll need your landlord's PAN to claim this.
+                </Text>
+              )}
+              <TouchableOpacity
+                onPress={() => { onApply(r.exempt); setOpen(false); }}
+                disabled={r.exempt <= 0}
+                activeOpacity={0.8}
+                style={[styles.hraApply, r.exempt <= 0 && styles.hraApplyDisabled]}
+                accessibilityRole="button"
+              >
+                <Text style={styles.hraApplyText}>
+                  {r.exempt > 0 ? `Use ${inr(r.exempt)} as HRA exemption` : 'Nothing to exempt yet'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 function DerivationCard({ tone, heading, detail, note }) {
   const styles = useThemedStyles(makeStyles);
   const style = tone === 'verified' ? styles.deriveCardOk : styles.deriveCardWarn;
   const headingStyle = tone === 'verified' ? styles.deriveHeadingOk : styles.deriveHeadingWarn;
   const iconName = tone === 'verified' ? 'check' : 'alert-triangle';
-  const iconColor = tone === 'verified' ? '#059669' : '#b45309';
+  const iconColor = headingStyle.color;
   return (
     <View style={[styles.deriveCard, style]}>
       <View style={styles.deriveHeadingRow}>
@@ -721,6 +899,7 @@ function DerivationCard({ tone, heading, detail, note }) {
 
 function AutoFillDialog({ visible, total, onClose, onGross, onTakeHome }) {
   const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
   return (
     <Modal
       visible={visible}
@@ -751,7 +930,7 @@ function AutoFillDialog({ visible, total, onClose, onGross, onTakeHome }) {
             activeOpacity={0.7}
           >
             <View style={styles.modalOptionEmoji}>
-              <AppIcon name="landmark" size={22} color="#0369a1" strokeWidth={1.8} />
+              <AppIcon name="landmark" size={22} color={themeColors.accent.primary} strokeWidth={1.8} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.modalOptionTitle}>
@@ -771,7 +950,7 @@ function AutoFillDialog({ visible, total, onClose, onGross, onTakeHome }) {
             activeOpacity={0.7}
           >
             <View style={styles.modalOptionEmoji}>
-              <AppIcon name="file-text" size={22} color="#0369a1" strokeWidth={1.8} />
+              <AppIcon name="file-text" size={22} color={themeColors.accent.primary} strokeWidth={1.8} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.modalOptionTitle}>
@@ -801,18 +980,37 @@ function AutoFillDialog({ visible, total, onClose, onGross, onTakeHome }) {
 // Sub-components (unchanged from earlier version)
 // ---------------------------------------------------------------------------
 
-function MoneyInput({ label, value, onChangeText, hint }) {
+// `cap`: when the entered amount exceeds this, only `cap` actually counts
+// toward the deduction (lib/tax.js clamps it silently) — show that instead
+// of letting the user believe the full amount reduced their tax.
+// `warnIf` + `warnMessage`: a free-form sanity check (e.g. HRA claimed
+// exceeding salary) that doesn't have a numeric cap but is still worth
+// flagging — `warnIf` is a boolean the caller has already computed.
+function MoneyInput({ label, value, onChangeText, hint, cap, warnIf, warnMessage }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
+  const n = num(value);
+  const overCap = Number.isFinite(cap) && n > cap;
+  const warning = overCap
+    ? `Only ₹${cap.toLocaleString('en-IN')} of this counts — amounts above the cap don't reduce your tax further.`
+    : (warnIf ? warnMessage : null);
+
+  const sanitize = (raw) => {
+    // Digits only — blocks negative signs, letters, and stray punctuation
+    // a physical keyboard or paste can sneak past the numeric keypad hint.
+    const cleaned = String(raw ?? '').replace(/[^0-9]/g, '');
+    onChangeText(cleaned);
+  };
+
   return (
     <View style={styles.inputWrap}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <AmountCalculatorButton value={value} onChangeText={onChangeText}>
-        <View style={styles.inputBox}>
+      <AmountCalculatorButton value={value} onChangeText={sanitize}>
+        <View style={[styles.inputBox, warning && styles.inputBoxWarn]}>
           <Text style={styles.rupee}>₹</Text>
           <TextInput
             value={value}
-            onChangeText={onChangeText}
+            onChangeText={sanitize}
             keyboardType="numeric"
             style={styles.input}
             placeholder="0"
@@ -820,7 +1018,14 @@ function MoneyInput({ label, value, onChangeText, hint }) {
           />
         </View>
       </AmountCalculatorButton>
-      {hint && <Text style={styles.inputHint}>{hint}</Text>}
+      {warning ? (
+        <View style={styles.inputWarnRow}>
+          <AppIcon name="alert-triangle" size={12} color={themeColors.state.warningSurfaceText} strokeWidth={2.2} />
+          <Text style={styles.inputWarnText}>{warning}</Text>
+        </View>
+      ) : (
+        hint && <Text style={styles.inputHint}>{hint}</Text>
+      )}
     </View>
   );
 }
@@ -840,7 +1045,7 @@ function RegimeCard({ label, data, highlight }) {
         <Text style={styles.regimeLabel}>{label}</Text>
         {highlight && (
           <View style={styles.winnerBadgeRow}>
-            <AppIcon name="check" size={11} color="#065f46" strokeWidth={2.4} />
+            <AppIcon name="check" size={11} color={themeColors.state.successSurfaceText} strokeWidth={2.4} />
             <Text style={styles.winnerBadge}>Better</Text>
           </View>
         )}
@@ -848,7 +1053,7 @@ function RegimeCard({ label, data, highlight }) {
       <Text
         style={[
           styles.regimeTaxValue,
-          { color: highlight ? '#059669' : themeColors.text.primary },
+          { color: highlight ? themeColors.accent.income : themeColors.text.primary },
         ]}
       >
         ₹{tax.toLocaleString('en-IN')}
@@ -862,7 +1067,7 @@ function RegimeCard({ label, data, highlight }) {
       </View>
       {data.rebate > 0 && !data.marginalRelief && (
         <View style={styles.regimeNoteRow}>
-          <AppIcon name="check" size={11} color="#065f46" strokeWidth={2.4} />
+          <AppIcon name="check" size={11} color={themeColors.state.successSurfaceText} strokeWidth={2.4} />
           <Text style={styles.regimeNote}>
             Section 87A rebate applied (₹{data.rebate.toLocaleString('en-IN')})
           </Text>
@@ -870,7 +1075,7 @@ function RegimeCard({ label, data, highlight }) {
       )}
       {data.marginalRelief && (
         <View style={styles.regimeNoteRow}>
-          <AppIcon name="check" size={11} color="#065f46" strokeWidth={2.4} />
+          <AppIcon name="check" size={11} color={themeColors.state.successSurfaceText} strokeWidth={2.4} />
           <Text style={styles.regimeNote}>
             Marginal relief under 87A applied
           </Text>
@@ -996,8 +1201,8 @@ function recommendation(result, themeColors) {
       icon: 'scale',
       title: 'Both regimes cost the same',
       body: 'At this income level, the two regimes work out identically.',
-      color: '#9ca3af',
-      textColor: '#374151',
+      color: themeColors.text.muted,
+      textColor: themeColors.text.secondary,
     };
   }
   const savePerMonth = Math.round(result.savings / 12);
@@ -1010,8 +1215,8 @@ function recommendation(result, themeColors) {
         ? "New regime doesn't need any investment proofs — simpler for most salaried filers."
         : "Old regime pays off if you're already using deductions worth this much."
     }`,
-    color: result.better === 'new' ? '#0ea5e9' : '#f59e0b',
-    textColor: result.better === 'new' ? '#0369a1' : '#92400e',
+    color: result.better === 'new' ? themeColors.accent.sky : themeColors.accent.gold,
+    textColor: result.better === 'new' ? themeColors.state.infoSurfaceText : themeColors.state.warningSurfaceText,
   };
 }
 
@@ -1071,7 +1276,7 @@ const makeStyles = (c) => ({
   },
   chipActive: {
     borderColor: c.accent.primary,
-    backgroundColor: c.accent.primary + '18',
+    backgroundColor: withAlpha(c.accent.primary, 0.09),
   },
   chipText: {
     fontSize: 12,
@@ -1141,7 +1346,7 @@ const makeStyles = (c) => ({
   },
   modeChipActive: {
     borderColor: c.accent.primary,
-    backgroundColor: c.accent.primary + '18',
+    backgroundColor: withAlpha(c.accent.primary, 0.09),
   },
   modeChipEmoji: { fontSize: 16 },
   modeChipText: {
@@ -1168,24 +1373,24 @@ const makeStyles = (c) => ({
     gap: 4,
   },
   deriveCardOk: {
-    borderColor: '#059669',
-    backgroundColor: '#f0fdf4',
+    borderColor: c.accent.income,
+    backgroundColor: c.state.successSurface,
   },
   deriveCardWarn: {
-    borderColor: '#f59e0b',
-    backgroundColor: '#fffbeb',
+    borderColor: c.state.warningSurfaceText,
+    backgroundColor: c.state.warningSurface,
   },
   deriveHeadingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deriveHeadingOk: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#065f46',
+    color: c.state.successSurfaceText,
     flexShrink: 1,
   },
   deriveHeadingWarn: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#92400e',
+    color: c.state.warningSurfaceText,
     flexShrink: 1,
   },
   deriveDetail: {
@@ -1217,6 +1422,9 @@ const makeStyles = (c) => ({
     borderColor: c.border.subtle,
     paddingHorizontal: 12,
   },
+  inputBoxWarn: {
+    borderColor: c.state.warningSurfaceText,
+  },
   rupee: {
     fontSize: 16,
     color: c.text.secondary,
@@ -1232,6 +1440,76 @@ const makeStyles = (c) => ({
     fontSize: 11,
     color: c.text.muted,
   },
+  inputWarnRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+  },
+  inputWarnText: {
+    flex: 1,
+    fontSize: 11,
+    color: c.state.warningSurfaceText,
+    lineHeight: 15,
+  },
+
+  // --- HRA exemption helper ---
+  hraWrap: { gap: spacing.sm },
+  hraToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  hraToggleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.accent.primary,
+  },
+  hraCard: {
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: c.border.subtle,
+    backgroundColor: c.bg.surfaceAlt,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  hraTitle: { fontSize: 14, fontWeight: '800', color: c.text.primary },
+  hraSub: { fontSize: 12, color: c.text.secondary, lineHeight: 17, marginTop: -spacing.xs },
+  hraChipSub: { fontSize: 9, color: c.text.muted, marginTop: 2, paddingHorizontal: 4 },
+  hraResult: {
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    borderColor: c.accent.income,
+    backgroundColor: c.state.successSurface,
+    padding: spacing.md,
+    gap: 6,
+  },
+  hraResultLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: c.state.successSurfaceText,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  hraRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  hraRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
+  hraRowSpacer: { width: 12 },
+  hraRowText: { fontSize: 12, color: c.text.secondary, fontVariant: ['tabular-nums'] },
+  hraRowTextApplies: { color: c.state.successSurfaceText, fontWeight: '800' },
+  hraDivider: { height: 1, backgroundColor: c.border.strong, marginVertical: 2 },
+  hraExemptLabel: { fontSize: 13, fontWeight: '800', color: c.text.primary },
+  hraExemptValue: { fontSize: 18, fontWeight: '900', color: c.state.successSurfaceText, fontVariant: ['tabular-nums'] },
+  hraNote: { fontSize: 11, color: c.text.secondary, lineHeight: 15 },
+  hraApply: {
+    marginTop: 4,
+    paddingVertical: 11,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    backgroundColor: c.accent.primary,
+  },
+  hraApplyDisabled: { backgroundColor: withAlpha(c.accent.primary, 0.35) },
+  hraApplyText: { fontSize: 13, fontWeight: '800', color: '#fff' },
 
   deductionsToggle: {
     padding: spacing.md,
@@ -1287,9 +1565,9 @@ const makeStyles = (c) => ({
     gap: 6,
   },
   regimeCardWinner: {
-    borderColor: '#059669',
+    borderColor: c.accent.income,
     borderWidth: 2,
-    backgroundColor: '#f0fdf4',
+    backgroundColor: c.state.successSurface,
   },
   regimeHeader: {
     flexDirection: 'row',
@@ -1307,7 +1585,7 @@ const makeStyles = (c) => ({
   winnerBadge: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#059669',
+    color: c.state.successSurfaceText,
   },
   regimeTaxValue: {
     fontSize: 22,
@@ -1467,7 +1745,7 @@ const makeStyles = (c) => ({
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: c.accent.primary,
-    backgroundColor: c.accent.primary + '0d',
+    backgroundColor: withAlpha(c.accent.primary, 0.05),
   },
   uploadPdfBtnBusy: {
     borderStyle: 'solid',
@@ -1484,119 +1762,5 @@ const makeStyles = (c) => ({
     color: c.text.secondary,
     marginTop: 2,
     lineHeight: 15,
-  },
-
-  // --- Payslip review dialog ---
-  reviewList: {
-    maxHeight: 260,
-    marginTop: spacing.sm,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    backgroundColor: c.bg.surfaceAlt,
-  },
-  reviewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: c.border.subtle,
-    gap: spacing.md,
-  },
-  reviewRowLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: c.text.primary,
-  },
-  reviewRowMatch: {
-    fontSize: 11,
-    color: c.text.muted,
-    marginTop: 2,
-    fontStyle: 'italic',
-  },
-  reviewRowLine: {
-    fontSize: 10,
-    color: c.text.muted,
-    marginTop: 1,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  reviewRowMissing: {
-    fontSize: 11,
-    color: c.text.muted,
-    marginTop: 2,
-    fontStyle: 'italic',
-  },
-  reviewRowAmount: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: c.text.primary,
-    fontVariant: ['tabular-nums'],
-  },
-  reviewRowAmountMissing: {
-    color: c.text.muted,
-    fontWeight: '600',
-  },
-  reviewFooter: {
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radii.sm,
-    backgroundColor: c.bg.surfaceAlt,
-  },
-  reviewFooterLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: c.text.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  reviewFooterRow: {
-    fontSize: 12,
-    color: c.text.secondary,
-    marginTop: 4,
-  },
-  reviewFooterLine: {
-    fontSize: 10,
-    color: c.text.muted,
-    marginTop: 1,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  reviewWarnBox: {
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radii.sm,
-    backgroundColor: '#fef3c7',
-    borderWidth: 1,
-    borderColor: '#f59e0b',
-    gap: 4,
-  },
-  reviewWarnRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-  reviewWarnText: {
-    fontSize: 12,
-    color: '#92400e',
-    lineHeight: 16,
-    flexShrink: 1,
-  },
-  modalBtnRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  modalApply: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radii.md,
-    backgroundColor: c.accent.primary,
-  },
-  modalApplyDisabled: {
-    backgroundColor: c.border.subtle,
-  },
-  modalApplyText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#fff',
   },
 });

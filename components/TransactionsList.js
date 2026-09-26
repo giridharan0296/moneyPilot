@@ -50,26 +50,11 @@ import {
   removeSavedOpeningLots,
   syncOpeningLots,
 } from '../lib/openingPositions';
-import { holdingPortfolioSymbol } from '../lib/portfolioHoldings';
-
-function investmentBrokerKey(tx) {
-  return tx?.openingPosition?.broker ?? tx?.brokerId ?? 'logged';
-}
-
-function investmentSymbolKey(tx) {
-  const raw = tx?.openingPosition?.symbol ?? tx?.instrumentSymbol;
-  return raw ? holdingPortfolioSymbol({ symbol: raw }) : null;
-}
-
-function hasOtherInvestmentLogs(items, { excludeId, broker, symbolKey }) {
-  if (!symbolKey) return false;
-  return items.some((tx) => {
-    if (excludeId && tx.id === excludeId) return false;
-    if (!tx.instrumentSymbol) return false;
-    if (holdingPortfolioSymbol({ symbol: tx.instrumentSymbol }) !== symbolKey) return false;
-    return (tx.brokerId || 'logged') === broker;
-  });
-}
+import {
+  hasOtherInvestmentLogs,
+  investmentBrokerKey,
+  investmentSymbolKey,
+} from '../lib/portfolioHoldings';
 
 // ----------------------------------------------------------------------------
 // TransactionsList — the reusable "list of transactions of one type" screen.

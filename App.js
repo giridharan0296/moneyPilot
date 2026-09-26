@@ -232,7 +232,7 @@ function TransactionsStack() {
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
-        options={{ headerTitle: hdr('calculator', 'EMI Calculator', colors.accent.orange) }}
+        options={{ headerTitle: hdr('calculator', 'Loan Planner', colors.accent.orange) }}
       />
     </Stack.Navigator>
   );
@@ -425,37 +425,37 @@ function MoreStack() {
       <Stack.Screen
         name="EMICalculator"
         component={EMICalculatorScreen}
-        options={{ headerTitle: hdr('calculator', 'EMI Calculator', colors.accent.primary) }}
+        options={{ headerTitle: hdr('calculator', 'Loan Planner', colors.accent.primary) }}
       />
       <Stack.Screen
         name="SIPCalculator"
         component={SIPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-up', 'SIP Calculator', colors.accent.income) }}
+        options={{ headerTitle: hdr('trending-up', 'SIP Planner', colors.accent.income) }}
       />
       <Stack.Screen
         name="TaxCalculator"
         component={TaxCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Tax Calculator', colors.accent.investment) }}
+        options={{ headerTitle: hdr('receipt', 'Tax Estimator', colors.accent.investment) }}
       />
       <Stack.Screen
         name="FireCalculator"
         component={FireCalculatorScreen}
-        options={{ headerTitle: hdr('flame', 'FIRE Calculator', colors.accent.expense) }}
+        options={{ headerTitle: hdr('flame', 'FIRE Planner', colors.accent.expense) }}
       />
       <Stack.Screen
         name="SWPCalculator"
         component={SWPCalculatorScreen}
-        options={{ headerTitle: hdr('trending-down', 'SWP Calculator', colors.accent.income) }}
+        options={{ headerTitle: hdr('trending-down', 'Withdrawal Planner', colors.accent.income) }}
       />
       <Stack.Screen
         name="MISCalculator"
         component={MISCalculatorScreen}
-        options={{ headerTitle: hdr('wallet', 'MIS Calculator', colors.accent.income) }}
+        options={{ headerTitle: hdr('wallet', 'Fixed Income Estimator', colors.accent.income) }}
       />
       <Stack.Screen
         name="GratuityCalculator"
         component={GratuityCalculatorScreen}
-        options={{ headerTitle: hdr('receipt', 'Gratuity Calculator', colors.accent.income) }}
+        options={{ headerTitle: hdr('receipt', 'Gratuity Estimator', colors.accent.income) }}
       />
       <Stack.Screen
         name="FundamentalAnalysis"

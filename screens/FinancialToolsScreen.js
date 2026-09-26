@@ -19,21 +19,21 @@ const TOOL_GROUPS = [
       {
         route: 'SIPCalculator',
         icon: 'trending-up',
-        name: 'SIP Calculator',
+        name: 'SIP Planner',
         description: 'Estimate the future value of monthly investing.',
         accent: 'income',
       },
       {
         route: 'FireCalculator',
         icon: 'flame',
-        name: 'FIRE Calculator',
+        name: 'FIRE Planner',
         description: 'Plan your retirement corpus, timeline, and required SIP.',
         accent: 'expense',
       },
       {
         route: 'SWPCalculator',
         icon: 'trending-down',
-        name: 'SWP Calculator',
+        name: 'Withdrawal Planner',
         description: 'Plan withdrawals and see how long your corpus can last.',
         accent: 'income',
       },
@@ -47,7 +47,7 @@ const TOOL_GROUPS = [
       {
         route: 'MISCalculator',
         icon: 'wallet',
-        name: 'MIS Calculator',
+        name: 'Fixed Income Estimator',
         description: 'Estimate monthly interest from a fixed-income deposit.',
         accent: 'income',
       },
@@ -60,21 +60,21 @@ const TOOL_GROUPS = [
       {
         route: 'EMICalculator',
         icon: 'calculator',
-        name: 'EMI Calculator',
+        name: 'Loan Planner',
         description: 'Calculate payments, interest, prepayments, and payoff.',
         accent: 'primary',
       },
       {
         route: 'TaxCalculator',
         icon: 'receipt',
-        name: 'Tax Calculator',
+        name: 'Tax Estimator',
         description: 'Compare Indian old and new tax regimes.',
         accent: 'investment',
       },
       {
         route: 'GratuityCalculator',
         icon: 'receipt',
-        name: 'Gratuity Calculator',
+        name: 'Gratuity Estimator',
         description: 'Estimate gratuity from wages and years of service.',
         accent: 'income',
       },
@@ -103,7 +103,7 @@ export default function FinancialToolsScreen({ navigation }) {
           <Text style={styles.heading}>Financial tools</Text>
           <HelpSheet
             title="Financial tools"
-            summary="These calculators and research tools are for planning. They do not change your accounts, transactions, or portfolio."
+            summary="These planners and research tools are for exploring scenarios. They do not change your accounts, transactions, or portfolio."
             items={['Use them to compare scenarios before recording real activity.', 'Your saved financial data remains unchanged.']}
           />
         </View>

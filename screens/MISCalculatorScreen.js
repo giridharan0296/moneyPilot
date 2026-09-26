@@ -3,6 +3,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-na
 
 import CalculatorField from '../components/CalculatorField';
 import { useThemedStyles } from '../contexts/ThemeContext';
+import { LIMITS, checkNumber, enterPrompt, missingFields } from '../lib/calcChecks';
 
 const money = (n) => (Number.isFinite(n) ? `₹ ${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—');
 
@@ -11,6 +12,8 @@ export default function MISCalculatorScreen() {
   const [deposit, setDeposit] = useState('1000000');
   const [rate, setRate] = useState('7.4');
   const [years, setYears] = useState('5');
+
+  const missing = missingFields([['Deposit amount', deposit], ['Tenure', years]]);
 
   const result = useMemo(() => {
     const principal = Number(deposit);
@@ -32,14 +35,14 @@ export default function MISCalculatorScreen() {
         <Text style={styles.intro}>
           Estimate monthly interest from a fixed-income Monthly Income Scheme. Principal is assumed to return at maturity.
         </Text>
-        <CalculatorField label="Deposit amount" value={deposit} onChangeText={setDeposit} prefix="₹" placeholder="1000000" />
-        <CalculatorField label="Annual interest rate" value={rate} onChangeText={setRate} suffix="%" placeholder="7.4" />
-        <CalculatorField label="Tenure" value={years} onChangeText={setYears} suffix="years" placeholder="5" />
+        <CalculatorField label="Deposit amount" value={deposit} onChangeText={setDeposit} prefix="₹" placeholder="1000000" warning={checkNumber(deposit, { label: 'Deposit', positive: true })} />
+        <CalculatorField label="Annual interest rate" value={rate} onChangeText={setRate} suffix="%" placeholder="7.4" warning={checkNumber(rate, { label: 'Rate', max: LIMITS.interestRatePct, unit: '%' })} />
+        <CalculatorField label="Tenure" value={years} onChangeText={setYears} suffix="years" placeholder="5" warning={checkNumber(years, { label: 'Tenure', positive: true, max: LIMITS.tenureYears, unit: ' years' })} />
 
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>ESTIMATED MONTHLY INCOME</Text>
           <Text style={styles.heroValue}>{result ? money(result.monthlyIncome) : '—'}</Text>
-          <Text style={styles.heroSub}>Interest payout; principal remains invested until maturity.</Text>
+          <Text style={styles.heroSub}>{result ? 'Interest payout; principal remains invested until maturity.' : (enterPrompt(missing) || 'Check the values above')}</Text>
         </View>
 
         <View style={styles.details}>

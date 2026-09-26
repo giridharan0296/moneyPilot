@@ -14,10 +14,11 @@
 // ----------------------------------------------------------------------------
 
 import React, { useState } from 'react';
-import { View, Text, TextInput } from 'react-native';
+import { Platform, View, Text, TextInput } from 'react-native';
 
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AmountCalculatorButton from './AmountCalculatorButton';
+import AppIcon from './AppIcon';
 
 export default function CalculatorField({
   label,
@@ -26,6 +27,9 @@ export default function CalculatorField({
   prefix,
   suffix,
   placeholder,
+  // Message shown under the field (with an amber border) when the value is
+  // legal to type but unlikely to be right — see lib/calcChecks.js.
+  warning,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -53,7 +57,7 @@ export default function CalculatorField({
       <Text style={styles.label}>{label}</Text>
       {prefix === '₹' ? (
         <AmountCalculatorButton value={value} onChangeText={onChangeText}>
-          <View style={[styles.inputRow, focused && styles.inputRowFocused]}>
+          <View style={[styles.inputRow, focused && styles.inputRowFocused, warning && styles.inputRowWarn]}>
             {prefix ? <Text style={styles.affix}>{prefix}</Text> : null}
             <TextInput
               style={styles.input}
@@ -69,7 +73,7 @@ export default function CalculatorField({
           </View>
         </AmountCalculatorButton>
       ) : (
-        <View style={[styles.inputRow, focused && styles.inputRowFocused]}>
+        <View style={[styles.inputRow, focused && styles.inputRowFocused, warning && styles.inputRowWarn]}>
           {prefix ? <Text style={styles.affix}>{prefix}</Text> : null}
           <TextInput
             style={styles.input}
@@ -84,6 +88,12 @@ export default function CalculatorField({
           {suffix ? <Text style={styles.affix}>{suffix}</Text> : null}
         </View>
       )}
+      {warning ? (
+        <View style={styles.warnRow}>
+          <AppIcon name="alert-triangle" size={12} color={themeColors.state.warningSurfaceText} strokeWidth={2.2} />
+          <Text style={styles.warnText}>{warning}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -102,11 +112,17 @@ const makeStyles = (c) => ({
     paddingHorizontal: 12,
   },
   // Focused-ring is a brand accent — reads clearly in both themes.
-  inputRowFocused: { borderColor: '#3b82f6' },
+  inputRowFocused: { borderColor: c.accent.primary },
+  inputRowWarn: { borderColor: c.state.warningSurfaceText },
+  warnRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 4, marginTop: 5 },
+  warnText: { flex: 1, fontSize: 11, lineHeight: 15, color: c.state.warningSurfaceText },
 
   affix: { fontSize: 16, color: c.text.secondary, fontWeight: '600' },
   input: {
     flex: 1,
+    minWidth: 0,
+    width: 0, // web: ignore the input's intrinsic ~20ch width so it can shrink in narrow rows
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none', outlineWidth: 0 } : null),
     fontSize: 18,
     color: c.text.primary,
     paddingVertical: 12,

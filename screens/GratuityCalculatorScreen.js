@@ -11,6 +11,7 @@ import {
 import CalculatorField from '../components/CalculatorField';
 import HelpSheet from '../components/HelpSheet';
 import { useThemedStyles } from '../contexts/ThemeContext';
+import { checkNumber } from '../lib/calcChecks';
 
 const GRATUITY_CEILING = 2000000;
 const money = (value) => Number.isFinite(value)
@@ -32,22 +33,38 @@ export default function GratuityCalculatorScreen() {
     if (!(wages > 0) || (wholeYears === 0 && extraMonths === 0)) return null;
 
     const exactYears = wholeYears + (extraMonths / 12);
+    const notCovered = employmentType === 'notCovered';
     const isProRata = employmentType === 'fixed' || exception;
-    const serviceFactor = isProRata
-      ? exactYears
-      : wholeYears + (extraMonths > 6 ? 1 : 0);
+    // Not covered by the Act: only completed years count, and a month is 30 days.
+    const serviceFactor = notCovered
+      ? wholeYears
+      : isProRata
+        ? exactYears
+        : wholeYears + (extraMonths > 6 ? 1 : 0);
     const eligible = exception
       || (employmentType === 'fixed' ? exactYears >= 1 : exactYears >= 5);
-    const uncapped = (wages / 26) * 15 * serviceFactor;
+    const uncapped = (wages / (notCovered ? 30 : 26)) * 15 * serviceFactor;
 
     return {
       eligible,
       serviceFactor,
       uncapped,
+      dayRate: wages / (notCovered ? 30 : 26),
       payable: Math.min(uncapped, GRATUITY_CEILING),
       capped: uncapped > GRATUITY_CEILING,
     };
   }, [monthlyWages, years, months, employmentType, exception]);
+
+  // The formula only counts whole completed years plus 0–11 extra months, so
+  // these are corrected silently unless we say so.
+  const yearsWarning = checkNumber(years, { label: 'Years', max: 60, unit: ' years' })
+    ?? (years.includes('.') && Number(years) % 1 !== 0
+      ? 'Use whole years here and put the remainder in "Additional months".'
+      : null);
+  const monthsWarning = checkNumber(months, { label: 'Months' })
+    ?? (Number(months) > 11
+      ? 'Only 0–11 months count here — put full years in "Completed years".'
+      : null);
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -63,6 +80,7 @@ export default function GratuityCalculatorScreen() {
               'Regular employment usually requires five years of continuous service. A service part over six months is rounded up for calculation.',
               'Fixed-term employees qualify after one year and are calculated proportionately.',
               'The five-year condition does not apply when service ends due to death or disablement.',
+              'Employees not covered by the Act (usually small employers) are calculated on half a month of wages (÷ 30) per completed year, with no rounding up of months.',
               'The current statutory ceiling is ₹20 lakh, although an award, agreement, or employment contract may provide better terms.',
             ]}
           />
@@ -72,17 +90,18 @@ export default function GratuityCalculatorScreen() {
         <View style={styles.segment}>
           <Segment label="Regular" selected={employmentType === 'regular'} onPress={() => setEmploymentType('regular')} />
           <Segment label="Fixed-term" selected={employmentType === 'fixed'} onPress={() => setEmploymentType('fixed')} />
+          <Segment label="Not under Act" selected={employmentType === 'notCovered'} onPress={() => setEmploymentType('notCovered')} />
         </View>
 
-        <CalculatorField label="Last-drawn monthly wages" value={monthlyWages} onChangeText={setMonthlyWages} prefix="₹" placeholder="50000" />
+        <CalculatorField label="Last-drawn monthly wages" value={monthlyWages} onChangeText={setMonthlyWages} prefix="₹" placeholder="50000" warning={checkNumber(monthlyWages, { label: 'Monthly wages', positive: true })} />
         <Text style={styles.hint}>Enter wages applicable for gratuity, not necessarily gross salary or CTC.</Text>
 
         <View style={styles.durationRow}>
           <View style={styles.durationField}>
-            <CalculatorField label="Completed years" value={years} onChangeText={setYears} suffix="years" placeholder="5" />
+            <CalculatorField label="Completed years" value={years} onChangeText={setYears} suffix="years" placeholder="5" warning={yearsWarning} />
           </View>
           <View style={styles.durationField}>
-            <CalculatorField label="Additional months" value={months} onChangeText={setMonths} suffix="months" placeholder="0" />
+            <CalculatorField label="Additional months" value={months} onChangeText={setMonths} suffix="months" placeholder="0" warning={monthsWarning} />
           </View>
         </View>
 
@@ -116,7 +135,7 @@ export default function GratuityCalculatorScreen() {
         {result ? (
           <View style={styles.details}>
             <Row label="Service used in formula" value={`${formatYears(result.serviceFactor)} years`} />
-            <Row label="15 days' wages" value={money((Number(monthlyWages) / 26) * 15)} />
+            <Row label="15 days' wages" value={money(result.dayRate * 15)} />
             <Row label="Before statutory ceiling" value={money(result.uncapped)} />
             <Row label="Estimated payable amount" value={result.eligible ? money(result.payable) : 'Not currently eligible'} emphasize />
           </View>
@@ -165,7 +184,7 @@ const makeStyles = (c) => ({
   segmentTextSelected: { color: c.text.onHero },
   hint: { marginTop: -8, marginBottom: 14, fontSize: 11, lineHeight: 16, color: c.text.muted },
   durationRow: { flexDirection: 'row', gap: 10 },
-  durationField: { flex: 1 },
+  durationField: { flex: 1, minWidth: 0 },
   exception: { flexDirection: 'row', padding: 13, borderRadius: 12, borderWidth: 1, borderColor: c.border.subtle, backgroundColor: c.bg.surface, marginBottom: 16 },
   exceptionSelected: { borderColor: c.accent.primary },
   checkbox: { width: 21, height: 21, borderRadius: 6, borderWidth: 1.5, borderColor: c.border.strong ?? c.border.subtle, alignItems: 'center', justifyContent: 'center', marginRight: 10 },

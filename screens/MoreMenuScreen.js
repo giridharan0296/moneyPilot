@@ -67,7 +67,7 @@ const SECTIONS = [
   {
     title: 'Explore',
     items: [
-      { route: 'FinancialTools', icon: 'calculator', name: 'Financial tools', desc: 'SIP, FIRE, EMI, tax and other calculators.', color: 'fuchsia' },
+      { route: 'FinancialTools', icon: 'calculator', name: 'Financial tools', desc: 'SIP, FIRE, loans, tax and other planners.', color: 'fuchsia' },
       { route: 'StockMarket', icon: 'trending-up', name: 'Stock market', desc: 'Indices, gainers, losers and stock fundamentals.', color: 'investmentStrong' },
     ],
   },

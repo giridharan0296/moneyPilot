@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// EMI Calculator — full loan-analysis screen.
+// Loan Planner (EMI calculator) — full loan-analysis screen.
 //
 // Always visible:
 //   • Loan type picker
@@ -34,7 +34,8 @@ import {
 import CalculatorField from '../components/CalculatorField';
 import CollapsibleSection from '../components/CollapsibleSection';
 import AppIcon from '../components/AppIcon';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { withAlpha } from '../lib/colorAlpha';
 import {
   LOAN_TYPES,
   findLoanType,
@@ -110,6 +111,7 @@ function formatMoneyShort(n) {
 //                falls back to home-loan defaults as before.
 export default function EMICalculatorScreen({ route }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const loanSeed = route?.params?.loanSeed ?? null;
 
   // ---- base inputs ----
@@ -252,7 +254,7 @@ export default function EMICalculatorScreen({ route }) {
         {loanSeed && (
           <View style={styles.seedBanner}>
             <View style={styles.seedBannerEmoji}>
-              <AppIcon name="link-2" size={18} color="#0369a1" strokeWidth={2.2} />
+              <AppIcon name="link-2" size={18} color={colors.accent.primary} strokeWidth={2.2} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.seedBannerTitle}>
@@ -283,7 +285,7 @@ export default function EMICalculatorScreen({ route }) {
                   <AppIcon
                     name={t.icon}
                     size={18}
-                    color={active ? '#dc2626' : '#6b7280'}
+                    color={active ? colors.accent.expense : colors.text.muted}
                     strokeWidth={2}
                   />
                 </View>
@@ -378,13 +380,13 @@ export default function EMICalculatorScreen({ route }) {
           <DetailRow
             label="Principal"
             value={result ? formatMoney(result.principal) : '—'}
-            color="#3b82f6"
+            color={colors.accent.investment}
           />
           <View style={styles.divider} />
           <DetailRow
             label="Total Interest"
             value={result ? formatMoney(result.totalInterest) : '—'}
-            color="#f59e0b"
+            color={colors.accent.gold}
           />
           <View style={styles.divider} />
           <DetailRow
@@ -398,7 +400,7 @@ export default function EMICalculatorScreen({ route }) {
         {method === 'flat' && effectiveRate != null && (
           <View style={styles.effectiveCard}>
             <View style={styles.effectiveTitleRow}>
-              <AppIcon name="lightbulb" size={14} color="#78350f" strokeWidth={2.2} />
+              <AppIcon name="lightbulb" size={14} color={colors.state.warningSurfaceText} strokeWidth={2.2} />
               <Text style={styles.effectiveTitle}>Effective Interest Rate</Text>
             </View>
             <Text style={styles.effectiveValue}>~{effectiveRate.toFixed(2)} %</Text>
@@ -418,19 +420,19 @@ export default function EMICalculatorScreen({ route }) {
               <View
                 style={[
                   styles.barSegment,
-                  { flex: principalPct, backgroundColor: '#3b82f6' },
+                  { flex: principalPct, backgroundColor: colors.accent.investment },
                 ]}
               />
               <View
                 style={[
                   styles.barSegment,
-                  { flex: 100 - principalPct, backgroundColor: '#f59e0b' },
+                  { flex: 100 - principalPct, backgroundColor: colors.accent.gold },
                 ]}
               />
             </View>
             <View style={styles.legendRow}>
-              <Legend color="#3b82f6" label="Principal" pct={principalPct} />
-              <Legend color="#f59e0b" label="Interest" pct={100 - principalPct} />
+              <Legend color={colors.accent.investment} label="Principal" pct={principalPct} />
+              <Legend color={colors.accent.gold} label="Interest" pct={100 - principalPct} />
             </View>
           </>
         )}
@@ -440,7 +442,7 @@ export default function EMICalculatorScreen({ route }) {
           <View style={styles.positionCard}>
             <View style={styles.positionHeader}>
               <View style={styles.positionTitleRow}>
-                <AppIcon name="map-pin" size={14} color="#0369a1" strokeWidth={2.2} />
+                <AppIcon name="map-pin" size={14} color={colors.accent.primary} strokeWidth={2.2} />
                 <Text style={styles.positionTitle}>Where you are today</Text>
               </View>
               <Text style={styles.positionPct}>
@@ -508,7 +510,7 @@ export default function EMICalculatorScreen({ route }) {
                 ? `${pastPrepayments.length} entr${pastPrepayments.length === 1 ? 'y' : 'ies'} · ${formatMoney(pastPrepayments.reduce((s, p) => s + Number(p.amount || 0), 0))} total`
                 : 'Optional — add if you already prepaid on this loan'
             }
-            accent="#8b5cf6"
+            accent={colors.accent.violet}
           >
             <PastPrepaymentsSection
               entries={pastPrepayments}
@@ -539,7 +541,7 @@ export default function EMICalculatorScreen({ route }) {
           title="Processing Fee & GST"
           icon="wallet"
           subtitle="Upfront charge on top of the loan"
-          accent="#f59e0b"
+          accent={colors.accent.gold}
         >
           <FeesSection principal={amount} baseTotal={result?.totalPayment} />
         </CollapsibleSection>
@@ -554,7 +556,7 @@ export default function EMICalculatorScreen({ route }) {
                 ? 'Extra payments on remaining balance'
                 : 'Pay extra → shorter loan, less interest'
             }
-            accent="#10b981"
+            accent={colors.accent.income}
           >
             <PrepaymentSection
               inputs={workingInputs}
@@ -570,7 +572,7 @@ export default function EMICalculatorScreen({ route }) {
             title="Best Time to Prepay"
             icon="lightbulb"
             subtitle="For a given amount, when does it save the most?"
-            accent="#eab308"
+            accent={colors.accent.gold}
           >
             <BestTimeSection
               inputs={workingInputs}
@@ -586,7 +588,7 @@ export default function EMICalculatorScreen({ route }) {
             title="Prepay vs Invest"
             icon="bar-chart-2"
             subtitle="Should you kill the loan or grow the market?"
-            accent="#8b5cf6"
+            accent={colors.accent.violet}
           >
             <PrepayVsInvestSection
               inputs={workingInputs}
@@ -602,7 +604,7 @@ export default function EMICalculatorScreen({ route }) {
             title="Moratorium (Study Period)"
             icon="graduation-cap"
             subtitle="Deferred EMIs during your course"
-            accent="#a855f7"
+            accent={colors.accent.violet}
           >
             <MoratoriumSection inputs={baseInputs} />
           </CollapsibleSection>
@@ -614,7 +616,7 @@ export default function EMICalculatorScreen({ route }) {
             title="Rate Change What-If"
             icon="trending-up"
             subtitle="If your floating rate resets mid-loan"
-            accent="#3b82f6"
+            accent={colors.accent.investment}
           >
             <RateChangeSection
               inputs={workingInputs}
@@ -633,7 +635,7 @@ export default function EMICalculatorScreen({ route }) {
               ? 'Pre-filled from your current position'
               : 'Should you switch to a lower rate?'
           }
-          accent="#ec4899"
+          accent={colors.accent.pink}
         >
           <BalanceTransferSection
             defaultBalance={
@@ -652,7 +654,7 @@ export default function EMICalculatorScreen({ route }) {
             title="Year-by-year Breakdown"
             icon="calendar"
             subtitle="How each year splits into principal vs interest"
-            accent="#6366f1"
+            accent={colors.accent.violet}
             defaultOpen={showSchedule}
           >
             <View style={styles.scheduleTable}>
@@ -683,9 +685,9 @@ export default function EMICalculatorScreen({ route }) {
                   >
                     <View style={[styles.scheduleCell, styles.scheduleCellYear, styles.scheduleCellYearRow]}>
                       {isCurrent ? (
-                        <AppIcon name="star" size={10} color="#f59e0b" strokeWidth={2} filled />
+                        <AppIcon name="star" size={10} color={colors.accent.gold} strokeWidth={2} filled />
                       ) : isPast ? (
-                        <AppIcon name="check" size={10} color="#059669" strokeWidth={2.4} />
+                        <AppIcon name="check" size={10} color={colors.accent.income} strokeWidth={2.4} />
                       ) : (
                         <View style={styles.scheduleCellSpacer} />
                       )}
@@ -722,6 +724,7 @@ export default function EMICalculatorScreen({ route }) {
 // ---- Fees & GST ----
 function FeesSection({ principal, baseTotal }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [feePct, setFeePct] = useState('1');
   const [gstPct, setGstPct] = useState('18');
 
@@ -748,7 +751,7 @@ function FeesSection({ principal, baseTotal }) {
         suffix="%"
         placeholder="18"
       />
-      <MiniResultCard color="#f59e0b">
+      <MiniResultCard color={colors.accent.gold}>
         <MiniRow label="Processing fee"      value={formatMoney(fees.fee)} />
         <MiniRow label="GST on fee"          value={formatMoney(fees.gst)} />
         <MiniRow label="Upfront cost"        value={formatMoney(fees.upfront)} strong />
@@ -779,6 +782,7 @@ function FeesSection({ principal, baseTotal }) {
 // component only owns its own inline-form draft state.
 function PastPrepaymentsSection({ entries, setEntries, elapsedInt }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [draftMonth, setDraftMonth]   = useState('');
   const [draftAmount, setDraftAmount] = useState('');
 
@@ -863,7 +867,7 @@ function PastPrepaymentsSection({ entries, setEntries, elapsedInt }) {
           onPress={add}
           style={[
             styles.customAddBtn,
-            !isMonthValid && { backgroundColor: '#d1d5db' },
+            !isMonthValid && { backgroundColor: colors.border.subtle },
           ]}
           activeOpacity={0.7}
           disabled={!isMonthValid}
@@ -873,7 +877,7 @@ function PastPrepaymentsSection({ entries, setEntries, elapsedInt }) {
       </View>
 
       {!isMonthValid && (
-        <Text style={[styles.tinyHint, { color: '#b91c1c' }]}>
+        <Text style={[styles.tinyHint, { color: colors.state.errorText }]}>
           Month must be between 1 and {elapsedInt} (the elapsed period).
           For future prepayments, use the Prepayment Simulator below.
         </Text>
@@ -894,6 +898,7 @@ function PastPrepaymentsSection({ entries, setEntries, elapsedInt }) {
 // on the remaining balance), not month N of the original schedule.
 function PrepaymentSection({ inputs, baseResult, isInProgress }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const monthSuffix = isInProgress ? 'from today' : `of ${baseResult.months}`;
   // -- channel 1: lump sum --
   const [lumpSum, setLumpSum]     = useState('');
@@ -1077,7 +1082,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
 
       {/* --- Result --- */}
       {sim ? (
-        <MiniResultCard color="#10b981">
+        <MiniResultCard color={colors.accent.income}>
           <MiniRow
             label="Strategy"
             value={strategy === 'tenure' ? 'Shorten tenure' : 'Reduce EMI'}
@@ -1106,7 +1111,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
               <MiniRow
                 label="Time saved"
                 value={sim.monthsSaved > 0 ? formatMonths(sim.monthsSaved) : '—'}
-                valueColor="#059669"
+                valueColor={colors.accent.income}
                 strong
               />
             </>
@@ -1123,7 +1128,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
               <MiniRow
                 label="Final EMI (after all prepayments)"
                 value={formatMoney(sim.finalEMI)}
-                valueColor="#059669"
+                valueColor={colors.accent.income}
                 strong
               />
               <MiniRow
@@ -1131,7 +1136,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
                 value={formatMoney(
                   Math.max(0, sim.originalEMI - sim.finalEMI),
                 )}
-                valueColor="#059669"
+                valueColor={colors.accent.income}
               />
             </>
           )}
@@ -1148,7 +1153,7 @@ function PrepaymentSection({ inputs, baseResult, isInProgress }) {
           <MiniRow
             label="Interest saved"
             value={formatMoney(sim.interestSaved)}
-            valueColor="#059669"
+            valueColor={colors.accent.income}
             strong
           />
         </MiniResultCard>
@@ -1179,6 +1184,7 @@ const FREQ_OPTIONS = [
 // Compact inline input used by the custom-schedule "Add" row.
 function CustomTinyInput({ value, onChangeText, placeholder, prefix, flex = 1 }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   return (
     <View style={[styles.tinyInputWrap, { flex }]}>
       {prefix ? <Text style={styles.tinyInputAffix}>{prefix}</Text> : null}
@@ -1186,7 +1192,7 @@ function CustomTinyInput({ value, onChangeText, placeholder, prefix, flex = 1 })
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#9ca3af"
+        placeholderTextColor={colors.text.muted}
         keyboardType="decimal-pad"
         style={styles.tinyInput}
       />
@@ -1206,6 +1212,7 @@ function CustomTinyInput({ value, onChangeText, placeholder, prefix, flex = 1 })
 // can be 5-6× different in savings for the same rupees.
 function BestTimeSection({ inputs, baseResult, isInProgress }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [amount, setAmount] = useState('500000');
   const monthLabel = isInProgress ? 'from today' : 'from loan start';
 
@@ -1231,25 +1238,25 @@ function BestTimeSection({ inputs, baseResult, isInProgress }) {
         </Text>
       ) : (
         <>
-          <MiniResultCard color="#eab308">
+          <MiniResultCard color={colors.accent.gold}>
             <MiniRow
               label="Best month to prepay"
               value={`Month ${analysis.best.month} (${analysis.best.yearLabel})`}
               strong
-              valueColor="#065f46"
+              valueColor={colors.state.successSurfaceText}
             />
             <MiniRow
               label="Max interest you can save"
               value={formatMoney(analysis.best.interestSaved)}
               strong
-              valueColor="#059669"
+              valueColor={colors.accent.income}
             />
             <MiniRow
               label="Vs prepaying at the worst month"
               value={formatMoney(
                 analysis.best.interestSaved - analysis.worst.interestSaved,
               )}
-              valueColor="#b45309"
+              valueColor={colors.state.warningSurfaceText}
             />
           </MiniResultCard>
 
@@ -1274,7 +1281,7 @@ function BestTimeSection({ inputs, baseResult, isInProgress }) {
                 >
                   <View style={[styles.scheduleCell, styles.scheduleCellYear, styles.scheduleCellYearRow]}>
                     {isBest ? (
-                      <AppIcon name="star" size={10} color="#f59e0b" strokeWidth={2} filled />
+                      <AppIcon name="star" size={10} color={colors.accent.gold} strokeWidth={2} filled />
                     ) : (
                       <View style={styles.scheduleCellSpacer} />
                     )}
@@ -1312,6 +1319,7 @@ function BestTimeSection({ inputs, baseResult, isInProgress }) {
 // server-side inside compareInvestVsPrepay.
 function PrepayVsInvestSection({ inputs, baseResult }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [amount, setAmount]         = useState('500000');
   const [expectedRet, setExpectedRet] = useState('12');
 
@@ -1369,25 +1377,25 @@ function PrepayVsInvestSection({ inputs, baseResult }) {
 
       {comp ? (
         <>
-          <MiniResultCard color={comp.winner === 'prepay' ? '#059669' : '#7c3aed'}>
+          <MiniResultCard color={comp.winner === 'prepay' ? colors.accent.income : colors.accent.violet}>
             <MiniRow
               label="Scenario A · Prepay + reinvest freed EMIs"
               value={formatMoney(comp.prepayWealth)}
               strong={comp.winner === 'prepay'}
-              valueColor={comp.winner === 'prepay' ? '#059669' : '#111827'}
+              valueColor={comp.winner === 'prepay' ? colors.accent.income : colors.text.primary}
             />
             <MiniRow
               label="Scenario B · Invest lump, keep loan"
               value={formatMoney(comp.investWealth)}
               strong={comp.winner === 'invest'}
-              valueColor={comp.winner === 'invest' ? '#7c3aed' : '#111827'}
+              valueColor={comp.winner === 'invest' ? colors.accent.violet : colors.text.primary}
             />
             <View style={styles.miniDivider} />
             <MiniRow
               label={comp.winner === 'prepay' ? 'Prepay wins by' : 'Investing wins by'}
               value={formatMoney(comp.delta)}
               strong
-              valueColor={comp.winner === 'prepay' ? '#059669' : '#7c3aed'}
+              valueColor={comp.winner === 'prepay' ? colors.accent.income : colors.accent.violet}
             />
             <MiniRow
               label="Break-even market return"
@@ -1396,18 +1404,18 @@ function PrepayVsInvestSection({ inputs, baseResult }) {
                   ? `${comp.breakEvenReturn.toFixed(2)}% / yr`
                   : 'n/a'
               }
-              valueColor="#6b7280"
+              valueColor={colors.text.muted}
             />
             <View style={styles.miniDivider} />
             <View style={styles.verdictRow}>
               <AppIcon
                 name="check"
                 size={14}
-                color={comp.winner === 'prepay' ? '#065f46' : '#5b21b6'}
+                color={comp.winner === 'prepay' ? colors.state.successSurfaceText : colors.accent.violet}
                 strokeWidth={2.6}
               />
               <Text style={[styles.verdict, {
-                color: comp.winner === 'prepay' ? '#065f46' : '#5b21b6',
+                color: comp.winner === 'prepay' ? colors.state.successSurfaceText : colors.accent.violet,
               }]}>
                 {comp.winner === 'prepay'
                   ? 'Prepaying looks better at this return rate'
@@ -1452,6 +1460,7 @@ const RETURN_PRESETS = [
 // ---- Moratorium (edu loans) ----
 function MoratoriumSection({ inputs }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [moratoriumMonths, setMoratoriumMonths] = useState('24');
   const [mode, setMode] = useState('compound');
 
@@ -1506,11 +1515,11 @@ function MoratoriumSection({ inputs }) {
       </View>
 
       {postMoratorium && (
-        <MiniResultCard color="#a855f7">
+        <MiniResultCard color={colors.accent.violet}>
           <MiniRow
             label="Interest accrued during moratorium"
             value={formatMoney(result.accruedInterest)}
-            valueColor="#b45309"
+            valueColor={colors.state.warningSurfaceText}
           />
           <MiniRow
             label="Effective principal (post-moratorium)"
@@ -1522,7 +1531,7 @@ function MoratoriumSection({ inputs }) {
             label="Recalculated EMI"
             value={formatMoney(postMoratorium.emi)}
             strong
-            valueColor="#6d28d9"
+            valueColor={colors.accent.violet}
           />
           <MiniRow
             label="Total interest over lifetime"
@@ -1545,6 +1554,7 @@ function MoratoriumSection({ inputs }) {
 // ---- Rate Change What-If ----
 function RateChangeSection({ inputs, baseResult, isInProgress }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [newRate, setNewRate] = useState(String(Number(inputs.annualRatePct) + 1));
   const [changeAtMonth, setChangeAtMonth] = useState('12');
   const monthSuffix = isInProgress ? 'from today' : `of ${baseResult.months}`;
@@ -1576,7 +1586,7 @@ function RateChangeSection({ inputs, baseResult, isInProgress }) {
       />
 
       {scenario && (
-        <MiniResultCard color="#3b82f6">
+        <MiniResultCard color={colors.accent.investment}>
           <MiniRow
             label="Balance at change point"
             value={formatMoney(scenario.balanceAtChange)}
@@ -1590,7 +1600,7 @@ function RateChangeSection({ inputs, baseResult, isInProgress }) {
             value={formatMoney(scenario.newEMI)}
             strong
             valueColor={
-              scenario.newEMI > scenario.originalEMI ? '#dc2626' : '#059669'
+              scenario.newEMI > scenario.originalEMI ? colors.accent.expense : colors.accent.income
             }
           />
           <View style={styles.miniDivider} />
@@ -1605,7 +1615,7 @@ function RateChangeSection({ inputs, baseResult, isInProgress }) {
           <MiniRow
             label={scenario.interestDelta >= 0 ? 'Extra interest cost' : 'Interest saved'}
             value={formatMoney(Math.abs(scenario.interestDelta))}
-            valueColor={scenario.interestDelta >= 0 ? '#dc2626' : '#059669'}
+            valueColor={scenario.interestDelta >= 0 ? colors.accent.expense : colors.accent.income}
             strong
           />
         </MiniResultCard>
@@ -1626,6 +1636,7 @@ function BalanceTransferSection({
   defaultRemainingMonths,
 }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [balance, setBalance] = useState(String(defaultBalance ?? ''));
   const [curRate, setCurRate] = useState(String(defaultRate ?? ''));
   const [remainingMonths, setRemainingMonths] = useState(
@@ -1684,7 +1695,7 @@ function BalanceTransferSection({
       />
 
       {result && (
-        <MiniResultCard color={result.worthwhile ? '#059669' : '#dc2626'}>
+        <MiniResultCard color={result.worthwhile ? colors.accent.income : colors.accent.expense}>
           <MiniRow
             label="Current EMI"
             value={formatMoney(result.currentEMI)}
@@ -1701,13 +1712,13 @@ function BalanceTransferSection({
                 ? formatMoney(result.monthlySavings)
                 : '—'
             }
-            valueColor={result.monthlySavings > 0 ? '#059669' : '#6b7280'}
+            valueColor={result.monthlySavings > 0 ? colors.accent.income : colors.text.muted}
           />
           <View style={styles.miniDivider} />
           <MiniRow
             label="Transfer fee"
             value={formatMoney(result.transferFee)}
-            valueColor="#b45309"
+            valueColor={colors.state.warningSurfaceText}
           />
           <MiniRow
             label="Interest saved (over remaining)"
@@ -1716,7 +1727,7 @@ function BalanceTransferSection({
           <MiniRow
             label={result.totalSavings >= 0 ? 'Net savings' : 'Net loss'}
             value={formatMoney(Math.abs(result.totalSavings))}
-            valueColor={result.totalSavings >= 0 ? '#059669' : '#dc2626'}
+            valueColor={result.totalSavings >= 0 ? colors.accent.income : colors.accent.expense}
             strong
           />
           <View style={styles.miniDivider} />
@@ -1732,11 +1743,11 @@ function BalanceTransferSection({
             <AppIcon
               name={result.worthwhile ? 'check' : 'x'}
               size={14}
-              color={result.worthwhile ? '#065f46' : '#7f1d1d'}
+              color={result.worthwhile ? colors.state.successSurfaceText : colors.state.errorText}
               strokeWidth={2.6}
             />
             <Text style={[styles.verdict, {
-              color: result.worthwhile ? '#065f46' : '#7f1d1d',
+              color: result.worthwhile ? colors.state.successSurfaceText : colors.state.errorText,
             }]}>
               {result.worthwhile
                 ? 'Transfer looks worthwhile'
@@ -1821,7 +1832,7 @@ function Legend({ color, label, pct }) {
 function MiniResultCard({ color, children }) {
   const styles = useThemedStyles(makeStyles);
   return (
-    <View style={[styles.miniCard, { borderColor: color + '55' }]}>
+    <View style={[styles.miniCard, { borderColor: withAlpha(color, 0.33) }]}>
       {children}
     </View>
   );
@@ -1873,16 +1884,16 @@ const makeStyles = (c) => ({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
-    backgroundColor: '#eff6ff',
+    backgroundColor: c.state.infoSurface,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: withAlpha(c.accent.primary, 0.3),
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
   },
   seedBannerEmoji: { marginRight: 4, marginTop: 1 },
-  seedBannerTitle: { fontSize: 13, fontWeight: '700', color: '#1e3a8a' },
-  seedBannerSub:   { fontSize: 12, color: '#1e40af', marginTop: 2, lineHeight: 16 },
+  seedBannerTitle: { fontSize: 13, fontWeight: '700', color: c.state.infoSurfaceText },
+  seedBannerSub:   { fontSize: 12, color: c.state.infoSurfaceText, marginTop: 2, lineHeight: 16 },
 
   sectionLabel: {
     fontSize: 11, fontWeight: '700', color: c.text.secondary,
@@ -1910,11 +1921,11 @@ const makeStyles = (c) => ({
     paddingHorizontal: 10, paddingVertical: 6,
     marginRight: 6, marginBottom: 6,
   },
-  typeChipActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
+  typeChipActive: { borderColor: c.accent.primary, backgroundColor: c.state.infoSurface },
   typeChipEmoji:  { fontSize: 14, marginRight: 6 },
   typeChipIcon:   { marginRight: 6 },
   typeChipText:   { fontSize: 12, color: c.text.secondary, fontWeight: '600' },
-  typeChipTextActive: { color: '#1d4ed8', fontWeight: '700' },
+  typeChipTextActive: { color: c.state.infoSurfaceText, fontWeight: '700' },
   typeHint: {
     fontSize: 11, color: c.text.secondary, marginBottom: 12,
     fontStyle: 'italic',
@@ -1929,10 +1940,10 @@ const makeStyles = (c) => ({
     borderRadius: 12,
     padding: 12,
   },
-  methodPillActive:   { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
+  methodPillActive:   { borderColor: c.accent.primary, backgroundColor: c.state.infoSurface },
   methodPillDisabled: { opacity: 0.4 },
   methodPillTitle:    { fontSize: 14, fontWeight: '700', color: c.text.primary },
-  methodPillTitleActive: { color: '#1d4ed8' },
+  methodPillTitleActive: { color: c.state.infoSurfaceText },
   methodPillTitleDisabled: { color: c.text.muted },
   methodPillSub:      { fontSize: 11, color: c.text.secondary, marginTop: 2 },
   methodLockNote: {
@@ -1942,16 +1953,16 @@ const makeStyles = (c) => ({
 
   // Result hero
   resultCard: {
-    backgroundColor: '#2563eb',
+    backgroundColor: c.bg.hero,
     borderRadius: 16,
     padding: 20,
     alignItems: 'center',
     marginTop: 12,
     marginBottom: 16,
   },
-  resultLabel: { color: '#dbeafe', fontSize: 13, fontWeight: '600' },
-  resultValue: { color: '#fff', fontSize: 34, fontWeight: '800', marginTop: 4 },
-  resultSub:   { color: '#dbeafe', fontSize: 12, marginTop: 4 },
+  resultLabel: { color: c.text.onHeroMuted, fontSize: 13, fontWeight: '600' },
+  resultValue: { color: c.text.onHero, fontSize: 34, fontWeight: '800', marginTop: 4 },
+  resultSub:   { color: c.text.onHeroMuted, fontSize: 12, marginTop: 4 },
 
   // Detail rows
   detailCard: {
@@ -1977,17 +1988,17 @@ const makeStyles = (c) => ({
 
   // Effective rate card
   effectiveCard: {
-    backgroundColor: '#fef2f2',
+    backgroundColor: c.state.errorSurface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#fecaca',
+    borderColor: withAlpha(c.accent.expense, 0.4),
     padding: 16,
     marginBottom: 16,
   },
   effectiveTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  effectiveTitle: { fontSize: 12, fontWeight: '700', color: '#991b1b', letterSpacing: 0.5 },
-  effectiveValue: { fontSize: 26, fontWeight: '800', color: '#b91c1c', marginTop: 4 },
-  effectiveSub:   { fontSize: 12, color: '#7f1d1d', marginTop: 4, lineHeight: 18 },
+  effectiveTitle: { fontSize: 12, fontWeight: '700', color: c.state.errorText, letterSpacing: 0.5 },
+  effectiveValue: { fontSize: 26, fontWeight: '800', color: c.state.errorText, marginTop: 4 },
+  effectiveSub:   { fontSize: 12, color: c.state.errorText, marginTop: 4, lineHeight: 18 },
 
   // Cost breakdown bar
   breakdownTitle: {
@@ -2013,10 +2024,10 @@ const makeStyles = (c) => ({
 
   // Current position card (shown for in-progress loans)
   positionCard: {
-    backgroundColor: '#f0fdf4',
+    backgroundColor: c.state.successSurface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#86efac',
+    borderColor: withAlpha(c.accent.income, 0.4),
     padding: 14,
     marginBottom: 20,
     marginTop: 8,
@@ -2028,19 +2039,19 @@ const makeStyles = (c) => ({
     marginBottom: 8,
   },
   positionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  positionTitle: { fontSize: 13, fontWeight: '800', color: '#065f46', letterSpacing: 0.3 },
-  positionPct:   { fontSize: 12, fontWeight: '700', color: '#047857' },
+  positionTitle: { fontSize: 13, fontWeight: '800', color: c.state.successSurfaceText, letterSpacing: 0.3 },
+  positionPct:   { fontSize: 12, fontWeight: '700', color: c.state.successSurfaceText },
   progressTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#dcfce7',
+    backgroundColor: c.state.successSurface,
     overflow: 'hidden',
     marginBottom: 12,
   },
   progressFill: {
     height: '100%',
     borderRadius: 4,
-    backgroundColor: '#10b981',
+    backgroundColor: c.accent.income,
   },
   positionGrid: {
     flexDirection: 'row',
@@ -2053,19 +2064,19 @@ const makeStyles = (c) => ({
     paddingVertical: 6,
   },
   posCellLabel: {
-    fontSize: 10, fontWeight: '700', color: '#065f46',
+    fontSize: 10, fontWeight: '700', color: c.state.successSurfaceText,
     letterSpacing: 0.4, textTransform: 'uppercase',
   },
   posCellValue: {
-    fontSize: 15, fontWeight: '700', color: '#111827',
+    fontSize: 15, fontWeight: '700', color: c.text.primary,
     marginTop: 2,
   },
   posCellValueEmphasize: {
-    fontSize: 17, fontWeight: '800', color: '#047857',
+    fontSize: 17, fontWeight: '800', color: c.state.successSurfaceText,
   },
-  posCellSub: { fontSize: 10, color: '#6b7280', marginTop: 1 },
+  posCellSub: { fontSize: 10, color: c.text.muted, marginTop: 1 },
   positionAssumption: {
-    fontSize: 10, color: '#065f46', fontStyle: 'italic',
+    fontSize: 10, color: c.state.successSurfaceText, fontStyle: 'italic',
     marginTop: 8, textAlign: 'center', lineHeight: 14,
   },
 
@@ -2126,9 +2137,9 @@ const makeStyles = (c) => ({
     paddingHorizontal: 12, paddingVertical: 6,
     marginRight: 6, marginBottom: 6,
   },
-  freqChipActive:     { borderColor: '#10b981', backgroundColor: '#ecfdf5' },
+  freqChipActive:     { borderColor: c.accent.income, backgroundColor: c.state.successSurface },
   freqChipText:       { fontSize: 12, color: c.text.secondary, fontWeight: '600' },
-  freqChipTextActive: { color: '#047857', fontWeight: '700' },
+  freqChipTextActive: { color: c.state.successSurfaceText, fontWeight: '700' },
 
   // Custom prepayments list
   customList: {
@@ -2147,10 +2158,10 @@ const makeStyles = (c) => ({
   customCellAmount: { fontSize: 13, color: c.text.primary, flex: 1, textAlign: 'right', fontWeight: '700' },
   customRemove: {
     marginLeft: 10, width: 24, height: 24,
-    borderRadius: 12, backgroundColor: '#fecaca',
+    borderRadius: 12, backgroundColor: c.state.errorSurface,
     alignItems: 'center', justifyContent: 'center',
   },
-  customRemoveText: { color: '#b91c1c', fontSize: 16, fontWeight: '700', lineHeight: 16 },
+  customRemoveText: { color: c.state.errorText, fontSize: 16, fontWeight: '700', lineHeight: 16 },
   customTotalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2168,11 +2179,11 @@ const makeStyles = (c) => ({
     marginBottom: 4,
   },
   customAddBtn: {
-    backgroundColor: '#10b981',
+    backgroundColor: c.accent.income,
     paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: 10,
   },
-  customAddBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  customAddBtnText: { color: c.text.onHero, fontSize: 12, fontWeight: '700' },
 
   // Compact inline input (used inside "Add prepayment" row)
   tinyInputWrap: {
@@ -2207,10 +2218,10 @@ const makeStyles = (c) => ({
   scheduleCellYear:  { flex: 0.4, textAlign: 'left', color: c.text.secondary, fontWeight: '600' },
   scheduleCellYearRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   scheduleCellSpacer: { width: 10 },
-  scheduleValPrincipal: { color: '#1d4ed8' },
-  scheduleValInterest:  { color: '#b45309' },
+  scheduleValPrincipal: { color: c.state.infoSurfaceText },
+  scheduleValInterest:  { color: c.state.warningSurfaceText },
   bestRow: {
-    backgroundColor: '#fef3c7',
+    backgroundColor: c.state.warningSurface,
     borderRadius: 6,
   },
   scheduleFooter: {

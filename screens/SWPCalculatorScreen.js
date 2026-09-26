@@ -5,6 +5,7 @@ import CalculatorField from '../components/CalculatorField';
 import CalculatorScenarioManager from '../components/CalculatorScenarioManager';
 import { STORAGE_KEYS } from '../constants';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { LIMITS, checkNumber, enterPrompt, missingFields } from '../lib/calcChecks';
 import { projectSWP, sustainableMonthlyWithdrawal, yearsUntilDepletion } from '../lib/swp';
 
 const money = (n) => (Number.isFinite(n) ? `₹ ${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—');
@@ -42,6 +43,14 @@ export default function SWPCalculatorScreen() {
     };
   }, [corpus, withdrawal, returnPct, years, stepUp, inflation, targetCorpus]);
 
+  // Withdrawing more than the whole corpus each year can only end in
+  // depletion inside 12 months — say so on the field that causes it.
+  const withdrawalWarning = checkNumber(withdrawal, { label: 'Monthly withdrawal' })
+    ?? (Number(withdrawal) * 12 > Number(corpus) && Number(corpus) > 0
+      ? 'That is more than your whole corpus each year, so it runs out within 12 months.'
+      : null);
+  const missing = missingFields([['Starting corpus', corpus], ['Duration', years]]);
+
   const loadScenario = (saved) => {
     setCorpus(saved.corpus ?? '');
     setWithdrawal(saved.withdrawal ?? '');
@@ -56,21 +65,23 @@ export default function SWPCalculatorScreen() {
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <Text style={styles.intro}>Plan monthly income from an investment corpus. This is an estimate, not a guarantee.</Text>
-        <CalculatorField label="Starting corpus" value={corpus} onChangeText={setCorpus} prefix="₹" placeholder="1000000" />
-        <CalculatorField label="Monthly withdrawal" value={withdrawal} onChangeText={setWithdrawal} prefix="₹" placeholder="10000" />
-        <CalculatorField label="Expected return (per year)" value={returnPct} onChangeText={setReturnPct} suffix="%" placeholder="8" />
-        <CalculatorField label="Income duration" value={years} onChangeText={setYears} suffix="years" placeholder="20" />
-        <CalculatorField label="Annual withdrawal increase (inflation)" value={stepUp} onChangeText={setStepUp} suffix="%" placeholder="0" />
-        <CalculatorField label="Expected inflation" value={inflation} onChangeText={setInflation} suffix="%" placeholder="6" />
+        <CalculatorField label="Starting corpus" value={corpus} onChangeText={setCorpus} prefix="₹" placeholder="1000000" warning={checkNumber(corpus, { label: 'Starting corpus', positive: true })} />
+        <CalculatorField label="Monthly withdrawal" value={withdrawal} onChangeText={setWithdrawal} prefix="₹" placeholder="10000" warning={withdrawalWarning} />
+        <CalculatorField label="Expected return (per year)" value={returnPct} onChangeText={setReturnPct} suffix="%" placeholder="8" warning={checkNumber(returnPct, { label: 'Return', max: LIMITS.annualReturnPct, unit: '%' })} />
+        <CalculatorField label="Income duration" value={years} onChangeText={setYears} suffix="years" placeholder="20" warning={checkNumber(years, { label: 'Duration', positive: true, max: LIMITS.tenureYears, unit: ' years' })} />
+        <CalculatorField label="Annual withdrawal increase (inflation)" value={stepUp} onChangeText={setStepUp} suffix="%" placeholder="0" warning={checkNumber(stepUp, { label: 'Increase', max: LIMITS.stepUpPct, unit: '%' })} />
+        <CalculatorField label="Expected inflation" value={inflation} onChangeText={setInflation} suffix="%" placeholder="6" warning={checkNumber(inflation, { label: 'Inflation', max: LIMITS.inflationPct, unit: '%' })} />
         <CalculatorField label="Desired corpus at end" value={targetCorpus} onChangeText={setTargetCorpus} prefix="₹" placeholder="0" />
 
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>CORPUS AFTER {result?.months ?? '—'} MONTHS</Text>
           <Text style={styles.heroValue}>{result ? money(result.finalCorpus) : '—'}</Text>
           <Text style={styles.heroSub}>
-            {result?.depletedAtMonth != null
-              ? `Corpus depletes in about ${(result.depletedAtMonth / 12).toFixed(1)} years`
-              : 'Corpus lasts through the selected duration'}
+            {!result
+              ? (enterPrompt(missing) || 'Check the values above')
+              : result.depletedAtMonth != null
+                ? `Corpus depletes in about ${(result.depletedAtMonth / 12).toFixed(1)} years`
+                : 'Corpus lasts through the selected duration'}
           </Text>
         </View>
 

@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// SIP Calculator
+// SIP Planner
 //
 // Formula (Future Value of a monthly SIP, ANNUITY-DUE convention):
 //     FV = P × [((1+r)^n − 1) / r] × (1+r)
@@ -28,7 +28,8 @@ import {
 import CalculatorField from '../components/CalculatorField';
 import CalculatorScenarioManager from '../components/CalculatorScenarioManager';
 import { STORAGE_KEYS } from '../constants';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { LIMITS, checkNumber, enterPrompt, missingFields } from '../lib/calcChecks';
 import { fvLumpSum, fvMonthlyAnnuityWithStepUp } from '../lib/fire';
 
 function computeSIP(monthlyStr, returnStr, yearsStr, stepUpStr, lumpSumStr, inflationStr, goalStr) {
@@ -77,6 +78,7 @@ function formatMoney(n) {
 
 export default function SIPCalculatorScreen() {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const [monthly,  setMonthly]  = useState('10000');
   const [expected, setExpected] = useState('12');
   const [years,    setYears]    = useState('10');
@@ -127,6 +129,7 @@ export default function SIPCalculatorScreen() {
           onChangeText={setMonthly}
           prefix="₹"
           placeholder="10000"
+          warning={checkNumber(monthly, { label: 'Monthly investment', positive: true })}
         />
         <CalculatorField
           label="Annual SIP step-up"
@@ -134,6 +137,7 @@ export default function SIPCalculatorScreen() {
           onChangeText={setStepUp}
           suffix="%"
           placeholder="10"
+          warning={checkNumber(stepUp, { label: 'Step-up', max: LIMITS.stepUpPct, unit: '%' })}
         />
         <CalculatorField
           label="Expected Return (per year)"
@@ -141,6 +145,7 @@ export default function SIPCalculatorScreen() {
           onChangeText={setExpected}
           suffix="%"
           placeholder="12"
+          warning={checkNumber(expected, { label: 'Return', max: LIMITS.annualReturnPct, unit: '%' })}
         />
         <CalculatorField
           label="Expected inflation"
@@ -148,6 +153,7 @@ export default function SIPCalculatorScreen() {
           onChangeText={setInflation}
           suffix="%"
           placeholder="6"
+          warning={checkNumber(inflation, { label: 'Inflation', max: LIMITS.inflationPct, unit: '%' })}
         />
         <CalculatorField
           label="Target corpus (optional)"
@@ -162,6 +168,7 @@ export default function SIPCalculatorScreen() {
           onChangeText={setYears}
           suffix="years"
           placeholder="10"
+          warning={checkNumber(years, { label: 'Duration', positive: true, max: LIMITS.tenureYears, unit: ' years' })}
         />
 
         <View style={styles.resultCard}>
@@ -175,7 +182,10 @@ export default function SIPCalculatorScreen() {
             </Text>
           ) : (
             <Text style={styles.resultSub}>
-              Enter investment, return, and duration
+              {enterPrompt(missingFields([
+                ['Monthly investment', monthly],
+                ['Duration', years],
+              ])) || (expected.trim() === '' ? 'Enter expected return' : 'Check the values above')}
             </Text>
           )}
         </View>
@@ -184,13 +194,13 @@ export default function SIPCalculatorScreen() {
           <DetailRow
             label="Total Invested"
             value={result.ok ? formatMoney(result.invested) : '—'}
-            color="#10b981"
+            color={colors.accent.income}
           />
           <View style={styles.divider} />
           <DetailRow
             label="Estimated Returns"
             value={result.ok ? formatMoney(result.returns) : '—'}
-            color="#8b5cf6"
+            color={colors.accent.investment}
           />
           <View style={styles.divider} />
           <DetailRow
@@ -203,13 +213,13 @@ export default function SIPCalculatorScreen() {
               <DetailRow
                 label="Monthly SIP needed for target"
                 value={formatMoney(result.requiredMonthly)}
-                color="#f59e0b"
+                color={colors.accent.gold}
               />
               <View style={styles.divider} />
               <DetailRow
                 label="Target status"
                 value={result.goalShortfall > 0 ? `${formatMoney(result.goalShortfall)} short` : 'On track'}
-                color={result.goalShortfall > 0 ? '#ef4444' : '#10b981'}
+                color={result.goalShortfall > 0 ? colors.accent.expense : colors.accent.income}
               />
             </>
           ) : null}
@@ -228,19 +238,19 @@ export default function SIPCalculatorScreen() {
               <View
                 style={[
                   styles.barSegment,
-                  { flex: investedPct, backgroundColor: '#10b981' },
+                  { flex: investedPct, backgroundColor: colors.accent.income },
                 ]}
               />
               <View
                 style={[
                   styles.barSegment,
-                  { flex: 100 - investedPct, backgroundColor: '#8b5cf6' },
+                  { flex: 100 - investedPct, backgroundColor: colors.accent.investment },
                 ]}
               />
             </View>
             <View style={styles.legendRow}>
-              <Legend color="#10b981" label="Invested" pct={investedPct} />
-              <Legend color="#8b5cf6" label="Returns"  pct={100 - investedPct} />
+              <Legend color={colors.accent.income} label="Invested" pct={investedPct} />
+              <Legend color={colors.accent.investment} label="Returns"  pct={100 - investedPct} />
             </View>
           </>
         )}
@@ -296,16 +306,16 @@ const makeStyles = (c) => ({
   container: { padding: 16, paddingBottom: 40 },
 
   resultCard: {
-    backgroundColor: '#059669',
+    backgroundColor: c.bg.heroGreen,
     borderRadius: 16,
     padding: 20,
     alignItems: 'center',
     marginTop: 8,
     marginBottom: 16,
   },
-  resultLabel: { color: '#d1fae5', fontSize: 13, fontWeight: '600' },
-  resultValue: { color: '#fff', fontSize: 34, fontWeight: '800', marginTop: 4 },
-  resultSub:   { color: '#d1fae5', fontSize: 12, marginTop: 4 },
+  resultLabel: { color: c.state.successFg, fontSize: 13, fontWeight: '600' },
+  resultValue: { color: c.text.onHero, fontSize: 34, fontWeight: '800', marginTop: 4 },
+  resultSub:   { color: c.state.successFg, fontSize: 12, marginTop: 4 },
 
   detailCard: {
     backgroundColor: c.bg.surface,

@@ -21,7 +21,7 @@ import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 
 /**
  * Review conservatively-parsed payslip fields before applying.
- * mode='tax' — earnings only (Tax Calculator).
+ * mode='tax' — earnings only (Tax Estimator).
  * mode='income' — earnings + TDS/PF, with net vs gross amount choice.
  */
 export default function PayslipReviewDialog({

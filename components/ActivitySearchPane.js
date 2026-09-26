@@ -99,6 +99,12 @@ export default function ActivitySearchPane({
   lockAccountFilter = false,
   searchPlaceholder,
   scopeHint,
+  // Optional — when the caller wants tapping a result to open it inline
+  // (e.g. ActivityTimelineScreen's own edit modal) instead of navigating
+  // to the Transactions/Invest tab. Falls back to the old nav-based
+  // `openTransactionsTab` behavior when omitted, so other callers of this
+  // pane (AccountActivityScreen) are unaffected.
+  onOpenItem,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -223,6 +229,10 @@ export default function ActivitySearchPane({
   };
 
   const openResult = (tx, type) => {
+    if (onOpenItem) {
+      onOpenItem(tx, type);
+      return;
+    }
     if (type === 'investment') {
       navigation.getParent()?.navigate('Invest', {
         screen: 'InvestmentsHome',

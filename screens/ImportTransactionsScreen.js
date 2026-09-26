@@ -28,7 +28,9 @@ import { parseXLSX } from '../lib/xlsx';
 import { parseTransactions } from '../lib/parseTransactions';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
-import { useThemedStyles } from '../contexts/ThemeContext';
+import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { withAlpha } from '../lib/colorAlpha';
 import AppIcon from '../components/AppIcon';
 import QuickAddPickerItem from '../components/QuickAddPickerItem';
 
@@ -47,15 +49,14 @@ const FIELDS = [
   { key: 'rateCol',        label: 'Exchange rate', required: false, hint: 'Rate to your base currency. Blank = the rate saved in Settings' },
 ];
 
-const TYPES = [
-  { id: 'expense',    label: 'Expense',    icon: 'credit-card',  color: '#dc2626' },
-  { id: 'income',     label: 'Income',     icon: 'wallet',       color: '#059669' },
-  { id: 'investment', label: 'Investment', icon: 'bar-chart-2',  color: '#6366f1' },
-];
-
-function formatMoney(n) {
-  if (!isFinite(n)) return '—';
-  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Colors resolved at render (useThemeColors), not a module constant, so
+// they follow the active theme instead of staying fixed light-mode hex.
+function typesFor(colors) {
+  return [
+    { id: 'expense',    label: 'Expense',    icon: 'credit-card',  color: colors.accent.expense },
+    { id: 'income',     label: 'Income',     icon: 'wallet',       color: colors.accent.income },
+    { id: 'investment', label: 'Investment', icon: 'bar-chart-2',  color: colors.accent.investment },
+  ];
 }
 
 function formatDate(iso) {
@@ -70,6 +71,8 @@ function formatDate(iso) {
 
 export default function ImportTransactionsScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
+  const TYPES = useMemo(() => typesFor(colors), [colors]);
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
   const { importTransactions, expenses, income, investments } = useTransactions();
 
@@ -118,6 +121,10 @@ export default function ImportTransactionsScreen({ navigation }) {
   const [importing, setImporting] = useState(false);
   const [previewFilter, setPreviewFilter] = useState('all');
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  // Collapsed once Date/Amount are mapped — matches ImportHoldingsScreen's
+  // "review only if something needs attention" pattern instead of always
+  // showing the full column-by-column mapper.
+  const [mappingExpanded, setMappingExpanded] = useState(true);
 
   const mixedMode = !!mapping.typeCol;
 
@@ -238,6 +245,7 @@ export default function ImportTransactionsScreen({ navigation }) {
   }, [mapping]);
 
   const mappingReady = !!mapping.dateCol && !!mapping.amountCol;
+  const mappedFieldsCount = FIELDS.filter((f) => mapping[f.key]).length;
 
   const mixedFallbacksReady = TYPES.every(
     (t) => (categories[t.id]?.length ?? 0) === 0 || !!fallbacksByType[t.id]?.categoryId,
@@ -317,7 +325,9 @@ export default function ImportTransactionsScreen({ navigation }) {
       setFileWarnings(warnings);
       if (warnings.length) Alert.alert('Check this file', warnings.join('\n\n'));
       // Best-effort auto-mapping by column name for the first sheet.
-      setMapping(autoDetectMapping(nonEmpty[0].headers));
+      const detected = autoDetectMapping(nonEmpty[0].headers);
+      setMapping(detected);
+      setMappingExpanded(!detected.dateCol || !detected.amountCol);
     } catch (e) {
       Alert.alert('Import failed', e.message ?? 'Could not read the file.');
     } finally {
@@ -335,7 +345,9 @@ export default function ImportTransactionsScreen({ navigation }) {
     setPreviewFilter('all');
     setPreviewExpanded(false);
     setDateOrder('auto');
-    setMapping(autoDetectMapping(sheets[idx]?.headers ?? []));
+    const detected = autoDetectMapping(sheets[idx]?.headers ?? []);
+    setMapping(detected);
+    setMappingExpanded(!detected.dateCol || !detected.amountCol);
   }
 
   function setColumnFor(fieldKey, columnName) {
@@ -394,10 +406,11 @@ export default function ImportTransactionsScreen({ navigation }) {
   }
 
   // ---- Render ----
+  const showFooter = mappingReady && !!result;
   return (
+    <View style={styles.screen}>
     <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, showFooter && styles.containerWithFooter]}
       keyboardShouldPersistTaps="handled"
     >
       {/* STEP 1 */}
@@ -408,11 +421,11 @@ export default function ImportTransactionsScreen({ navigation }) {
         disabled={loading}
       >
         {loading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={colors.accent.primary} />
         ) : (
           <>
             <View style={styles.pickerEmoji}>
-              <AppIcon name="file-text" size={32} color="#6b7280" strokeWidth={1.7} />
+              <AppIcon name="file-text" size={32} color={colors.text.muted} strokeWidth={1.7} />
             </View>
             <Text style={styles.pickerLabel}>
               {fileName ? `Selected: ${fileName}` : 'Pick CSV or Excel file'}
@@ -425,6 +438,14 @@ export default function ImportTransactionsScreen({ navigation }) {
           </>
         )}
       </TouchableOpacity>
+      {!fileName && (
+        <Text style={styles.hint}>
+          Needs at least a Date and Amount column — any header names work,
+          you'll match them to fields next. Optional columns: Type,
+          Category, Sub-category, Account, Note, Tags, Currency, Exchange
+          rate.
+        </Text>
+      )}
 
       {/* Sheet picker (visible only for multi-sheet Excel workbooks) */}
       {fileWarnings.map((w) => (
@@ -485,14 +506,14 @@ export default function ImportTransactionsScreen({ navigation }) {
                   style={[
                     styles.chip,
                     styles.chipWithIcon,
-                    active && { borderColor: t.color, backgroundColor: t.color + '15' },
+                    active && { borderColor: t.color, backgroundColor: withAlpha(t.color, 0.08) },
                   ]}
                   onPress={() => setType(t.id)}
                 >
                   <AppIcon
                     name={t.icon}
                     size={13}
-                    color={active ? t.color : '#6b7280'}
+                    color={active ? t.color : colors.text.secondary}
                     strokeWidth={2.2}
                   />
                   <Text style={[styles.chipText, active && { color: t.color, fontWeight: '700' }]}>
@@ -509,20 +530,40 @@ export default function ImportTransactionsScreen({ navigation }) {
           </Text>
 
           {/* STEP 3 */}
-          <StepHeader
-            index={3}
-            title="Map columns"
-            done={!!mapping.dateCol && !!mapping.amountCol}
-          />
-          {FIELDS.map((f) => (
-            <ColumnMapper
-              key={f.key}
-              field={f}
-              headers={headers}
-              selected={mapping[f.key]}
-              onSelect={(col) => setColumnFor(f.key, col)}
-            />
-          ))}
+          <StepHeader index={3} title="Map columns" done={mappingReady} />
+          <TouchableOpacity
+            style={styles.mappingSummary}
+            onPress={() => setMappingExpanded((v) => !v)}
+          >
+            <View style={styles.mappingIcon}>
+              <AppIcon
+                name={mappingReady ? 'check' : 'alert-triangle'}
+                size={18}
+                color={mappingReady ? colors.accent.income : colors.state.warningSurfaceText}
+                strokeWidth={2.2}
+              />
+            </View>
+            <View style={styles.selectTextCol}>
+              <Text style={styles.mappingTitle}>
+                {mappingReady ? 'Columns detected' : 'Mapping needs attention'}
+              </Text>
+              <Text style={styles.mappingSub}>{mappedFieldsCount} of {FIELDS.length} fields mapped</Text>
+            </View>
+            <Text style={styles.mappingAction}>{mappingExpanded ? 'Hide' : 'Review'}</Text>
+          </TouchableOpacity>
+          {mappingExpanded && (
+            <View style={styles.mappingEditor}>
+              {FIELDS.map((f) => (
+                <ColumnMapper
+                  key={f.key}
+                  field={f}
+                  headers={headers}
+                  selected={mapping[f.key]}
+                  onSelect={(col) => setColumnFor(f.key, col)}
+                />
+              ))}
+            </View>
+          )}
 
           {duplicateMappings.length > 0 && (
             <View style={styles.warnList}>
@@ -569,7 +610,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                       return (
                         <TouchableOpacity
                           key={c.id}
-                          style={[styles.chip, active && { borderColor: c.color, backgroundColor: c.color + '20' }]}
+                          style={[styles.chip, active && { borderColor: c.color, backgroundColor: withAlpha(c.color, 0.13) }]}
                           onPress={() => setFallbackForType(t.id, c.id)}
                         >
                           <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
@@ -586,11 +627,11 @@ export default function ImportTransactionsScreen({ navigation }) {
                         <TouchableOpacity
                           style={[
                             styles.chip,
-                            !fb.subCategoryId && { borderColor: '#2563eb', backgroundColor: '#dbeafe' },
+                            !fb.subCategoryId && { borderColor: colors.accent.primary, backgroundColor: colors.state.infoSurface },
                           ]}
                           onPress={() => setFallbackSubForType(t.id, null)}
                         >
-                          <Text style={[styles.chipText, !fb.subCategoryId && { color: '#2563eb', fontWeight: '700' }]}>
+                          <Text style={[styles.chipText, !fb.subCategoryId && { color: colors.accent.primary, fontWeight: '700' }]}>
                             None
                           </Text>
                         </TouchableOpacity>
@@ -599,7 +640,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                           return (
                             <TouchableOpacity
                               key={s.id}
-                              style={[styles.chip, active && { borderColor: s.color, backgroundColor: s.color + '20' }]}
+                              style={[styles.chip, active && { borderColor: s.color, backgroundColor: withAlpha(s.color, 0.13) }]}
                               onPress={() => setFallbackSubForType(t.id, s.id)}
                             >
                               <Text style={[styles.chipText, active && { color: s.color, fontWeight: '700' }]}>
@@ -628,7 +669,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                 return (
                   <TouchableOpacity
                     key={c.id}
-                    style={[styles.chip, active && { borderColor: c.color, backgroundColor: c.color + '20' }]}
+                    style={[styles.chip, active && { borderColor: c.color, backgroundColor: withAlpha(c.color, 0.13) }]}
                     onPress={() => setFallbackCategoryId(c.id)}
                   >
                     <Text style={[styles.chipText, active && { color: c.color, fontWeight: '700' }]}>
@@ -652,11 +693,11 @@ export default function ImportTransactionsScreen({ navigation }) {
                 <TouchableOpacity
                   style={[
                     styles.chip,
-                    !fallbackSubCategoryId && { borderColor: '#2563eb', backgroundColor: '#dbeafe' },
+                    !fallbackSubCategoryId && { borderColor: colors.accent.primary, backgroundColor: colors.state.infoSurface },
                   ]}
                   onPress={() => setFallbackSubCategoryId(null)}
                 >
-                  <Text style={[styles.chipText, !fallbackSubCategoryId && { color: '#2563eb', fontWeight: '700' }]}>
+                  <Text style={[styles.chipText, !fallbackSubCategoryId && { color: colors.accent.primary, fontWeight: '700' }]}>
                     None
                   </Text>
                 </TouchableOpacity>
@@ -665,7 +706,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                   return (
                     <TouchableOpacity
                       key={s.id}
-                      style={[styles.chip, active && { borderColor: s.color, backgroundColor: s.color + '20' }]}
+                      style={[styles.chip, active && { borderColor: s.color, backgroundColor: withAlpha(s.color, 0.13) }]}
                       onPress={() => setFallbackSubCategoryId(s.id)}
                     >
                       <Text style={[styles.chipText, active && { color: s.color, fontWeight: '700' }]}>
@@ -698,7 +739,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                 return (
                   <TouchableOpacity
                     key={a.id}
-                    style={[styles.chip, active && { borderColor: a.color, backgroundColor: a.color + '20' }]}
+                    style={[styles.chip, active && { borderColor: a.color, backgroundColor: withAlpha(a.color, 0.13) }]}
                     onPress={() => setFallbackAccountId(a.id)}
                   >
                     <Text style={[styles.chipText, active && { color: a.color, fontWeight: '700' }]}>
@@ -847,6 +888,7 @@ export default function ImportTransactionsScreen({ navigation }) {
                           defaultType={type}
                           categories={categories}
                           accounts={accounts}
+                          baseCurrency={baseCurrency}
                           bordered={i > 0}
                         />
                       ))
@@ -901,21 +943,6 @@ export default function ImportTransactionsScreen({ navigation }) {
                 </View>
               )}
 
-              <TouchableOpacity
-                style={[styles.confirmButton, !ready && styles.confirmButtonDisabled]}
-                onPress={handleImport}
-                disabled={!ready || importing}
-              >
-                {importing ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.confirmText}>
-                    Import {result.transactions.length} transaction
-                    {result.transactions.length === 1 ? '' : 's'}
-                  </Text>
-                )}
-              </TouchableOpacity>
-
               {!ready && (
                 <Text style={styles.footer}>
                   {result.transactions.length === 0
@@ -934,6 +961,33 @@ export default function ImportTransactionsScreen({ navigation }) {
         </>
       )}
     </ScrollView>
+
+    {showFooter && (
+      <View style={styles.footerBar}>
+        <View style={styles.footerTextCol}>
+          <Text style={styles.footerTitle}>
+            {result.transactions.length} transaction{result.transactions.length === 1 ? '' : 's'} ready
+          </Text>
+          <Text style={styles.footerSub} numberOfLines={1}>
+            {ready
+              ? (result.mixed ? 'Mixed types · added to your data' : `Added as ${type}`)
+              : 'Complete the steps above to enable Import'}
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={[styles.confirmButton, !ready && styles.confirmButtonDisabled]}
+          onPress={handleImport}
+          disabled={!ready || importing}
+        >
+          {importing ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.confirmText}>Import</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    )}
+    </View>
   );
 }
 
@@ -957,12 +1011,13 @@ function StepHeader({ index, title, done }) {
 
 function ColumnMapper({ field, headers, selected, onSelect }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   return (
     <View style={styles.mapBlock}>
       <View style={styles.mapLabelRow}>
         <Text style={styles.mapLabel}>
           {field.label}
-          {field.required ? <Text style={{ color: '#dc2626' }}> *</Text> : null}
+          {field.required ? <Text style={{ color: colors.accent.expense }}> *</Text> : null}
         </Text>
         <Text style={styles.mapHint}>{field.hint}</Text>
       </View>
@@ -998,6 +1053,7 @@ function ColumnMapper({ field, headers, selected, onSelect }) {
 
 function SummaryRow({ label, value, emphasize, negative }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
@@ -1005,7 +1061,7 @@ function SummaryRow({ label, value, emphasize, negative }) {
         style={[
           styles.summaryValue,
           emphasize && styles.summaryValueBold,
-          negative && { color: '#dc2626' },
+          negative && { color: colors.accent.expense },
         ]}
       >
         {value}
@@ -1037,8 +1093,10 @@ function displayRawDate(value) {
   return s;
 }
 
-function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) {
+function ImportPreviewRow({ row, defaultType, categories, accounts, baseCurrency, bordered }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
+  const TYPES = useMemo(() => typesFor(colors), [colors]);
   const isValid = row.status === 'valid';
   const tx = row.transaction;
   const rowType = tx?.importType ?? defaultType;
@@ -1076,7 +1134,9 @@ function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) 
           <Text style={styles.previewRowNum}>Row {row.rowNum}</Text>
         </View>
         {isValid && tx ? (
-          <Text style={styles.previewAmount}>{formatMoney(tx.amount)}</Text>
+          <Text style={styles.previewAmount}>
+            {formatMoneyCurrency(tx.amount, tx.currency ?? baseCurrency)}
+          </Text>
         ) : null}
       </View>
 
@@ -1108,9 +1168,14 @@ function ImportPreviewRow({ row, defaultType, categories, accounts, bordered }) 
         <Text style={styles.previewSkipReason}>{row.reason}</Text>
       )}
 
-      <Text style={styles.previewRaw} numberOfLines={3}>
-        CSV: {rawParts.join(' · ') || '—'}
-      </Text>
+      {/* Raw CSV values are debugging noise on a clean row — only worth
+          showing when there's something to double-check (skipped, or a
+          fallback/unmatched value was used). */}
+      {(!isValid || flagNotes.length > 0) && (
+        <Text style={styles.previewRaw} numberOfLines={3}>
+          CSV: {rawParts.join(' · ') || '—'}
+        </Text>
+      )}
     </View>
   );
 }
@@ -1169,6 +1234,7 @@ function autoDetectMapping(headers) {
 const makeStyles = (c) => ({
   screen:    { flex: 1, backgroundColor: c.bg.canvas },
   container: { padding: 16, paddingBottom: 60 },
+  containerWithFooter: { paddingBottom: 112 },
 
   stepHeader: { flexDirection: 'row', alignItems: 'center', marginTop: 18, marginBottom: 10 },
   stepBadge: {
@@ -1177,7 +1243,7 @@ const makeStyles = (c) => ({
     alignItems: 'center', justifyContent: 'center',
     marginRight: 10,
   },
-  stepBadgeDone: { backgroundColor: '#059669' },
+  stepBadgeDone: { backgroundColor: c.accent.income },
   stepBadgeText: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
   stepTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
 
@@ -1207,7 +1273,7 @@ const makeStyles = (c) => ({
     borderRadius: 8,
     maxWidth: 180,
   },
-  chipSmallActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  chipSmallActive: { backgroundColor: c.accent.primary, borderColor: c.accent.primary },
   chipTextSmall: { fontSize: 12, color: c.text.secondary },
 
   hint: {
@@ -1220,12 +1286,24 @@ const makeStyles = (c) => ({
   mapLabel: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
   mapHint:  { fontSize: 11, color: c.text.secondary, marginTop: 2 },
 
+  mappingSummary: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: 14, borderWidth: 1,
+    borderColor: c.border.subtle, backgroundColor: c.bg.surface,
+  },
+  mappingIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: c.bg.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  selectTextCol: { flex: 1, minWidth: 0 },
+  mappingTitle: { fontSize: 14, color: c.text.primary, fontWeight: '700' },
+  mappingSub: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
+  mappingAction: { fontSize: 12, color: c.accent.primary, fontWeight: '800' },
+  mappingEditor: { marginTop: 6 },
+
   warnBox: {
-    backgroundColor: '#fef3c7',
+    backgroundColor: c.state.warningSurface,
     borderRadius: 10,
     padding: 10,
     fontSize: 12,
-    color: '#92400e',
+    color: c.state.warningSurfaceText,
     marginBottom: 8,
   },
 
@@ -1242,7 +1320,7 @@ const makeStyles = (c) => ({
   },
   summaryLabel: { fontSize: 13, color: c.text.secondary },
   summaryValue: { fontSize: 14, color: c.text.primary, fontWeight: '600' },
-  summaryValueBold: { fontSize: 16, fontWeight: '800', color: '#059669' },
+  summaryValueBold: { fontSize: 16, fontWeight: '800', color: c.accent.income },
 
   previewCard: {
     backgroundColor: c.bg.surface, borderRadius: 14, padding: 12, marginTop: 8,
@@ -1267,17 +1345,17 @@ const makeStyles = (c) => ({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  statusBadgeValid: { backgroundColor: '#d1fae5' },
-  statusBadgeSkipped: { backgroundColor: '#fee2e2' },
+  statusBadgeValid: { backgroundColor: c.state.successSurface },
+  statusBadgeSkipped: { backgroundColor: c.state.errorSurface },
   statusBadgeText: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
-  statusBadgeTextValid: { color: '#047857' },
-  statusBadgeTextSkipped: { color: '#b91c1c' },
+  statusBadgeTextValid: { color: c.state.successSurfaceText },
+  statusBadgeTextSkipped: { color: c.state.errorText },
   previewResolved: { fontSize: 13, color: c.text.primary, fontWeight: '600' },
-  previewSkipReason: { fontSize: 13, color: '#b45309', fontWeight: '600', marginBottom: 2 },
-  previewFlagNote: { fontSize: 11, color: '#92400e', marginTop: 2, fontStyle: 'italic' },
+  previewSkipReason: { fontSize: 13, color: c.state.warningSurfaceText, fontWeight: '600', marginBottom: 2 },
+  previewFlagNote: { fontSize: 11, color: c.state.warningSurfaceText, marginTop: 2, fontStyle: 'italic' },
   previewRaw: { fontSize: 11, color: c.text.secondary, marginTop: 4 },
   previewExpandBtn: { paddingVertical: 10, alignItems: 'center' },
-  previewExpandText: { fontSize: 13, fontWeight: '700', color: '#2563eb' },
+  previewExpandText: { fontSize: 13, fontWeight: '700', color: c.accent.primary },
   previewRow: {
     flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
   },
@@ -1290,30 +1368,30 @@ const makeStyles = (c) => ({
 
   warnList: {
     marginTop: 12,
-    backgroundColor: '#fef3c7',
+    backgroundColor: c.state.warningSurface,
     padding: 12,
     borderRadius: 10,
   },
-  warnListTitle: { fontSize: 13, fontWeight: '700', color: '#92400e' },
-  warnListBody:  { fontSize: 12, color: '#78350f', marginTop: 4 },
+  warnListTitle: { fontSize: 13, fontWeight: '700', color: c.state.warningSurfaceText },
+  warnListBody:  { fontSize: 12, color: c.state.warningSurfaceText, marginTop: 4 },
 
   errorList: {
     marginTop: 12,
-    backgroundColor: '#fff7ed',
+    backgroundColor: c.state.warningSurface,
     padding: 12,
     borderRadius: 10,
   },
-  errorListTitle: { fontSize: 13, fontWeight: '700', color: '#9a3412', marginBottom: 4 },
-  errorListItem:  { fontSize: 12, color: '#7c2d12', marginTop: 2 },
+  errorListTitle: { fontSize: 13, fontWeight: '700', color: c.state.warningSurfaceText, marginBottom: 4 },
+  errorListItem:  { fontSize: 12, color: c.state.warningSurfaceText, marginTop: 2 },
 
   confirmButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: c.accent.primary,
     borderRadius: 12,
     paddingVertical: 14,
+    paddingHorizontal: 24,
     alignItems: 'center',
-    marginTop: 16,
   },
-  confirmButtonDisabled: { backgroundColor: '#93c5fd' },
+  confirmButtonDisabled: { backgroundColor: withAlpha(c.accent.primary, 0.4) },
   confirmText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   footer: {
@@ -1321,4 +1399,15 @@ const makeStyles = (c) => ({
     fontSize: 12, color: c.text.secondary,
     textAlign: 'center', fontStyle: 'italic',
   },
+
+  footerBar: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16,
+    borderTopWidth: 1, borderTopColor: c.border.subtle,
+    backgroundColor: c.bg.surface,
+  },
+  footerTextCol: { flex: 1, minWidth: 0 },
+  footerTitle: { fontSize: 14, fontWeight: '800', color: c.text.primary },
+  footerSub: { fontSize: 11, color: c.text.secondary, marginTop: 2 },
 });

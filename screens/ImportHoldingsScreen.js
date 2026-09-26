@@ -39,12 +39,9 @@ import {
 import { usePortfolio } from '../contexts/PortfolioContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { formatMoney as formatMoneyCurrency } from '../lib/currency';
+import { withAlpha } from '../lib/colorAlpha';
 import AppIcon from '../components/AppIcon';
-
-function formatMoney(n) {
-  if (!isFinite(n)) return '—';
-  return '₹ ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 // Empty { symbol: null, quantity: null, ... } — used as the initial state
 // so React doesn't have to guard against undefined-vs-null on every field.
@@ -70,7 +67,7 @@ export default function ImportHoldingsScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
   const { importFromBroker } = usePortfolio();
-  const { brokers: userBrokers } = useSettings();
+  const { brokers: userBrokers, baseCurrency } = useSettings();
 
   // The chip picker only shows brokers whose CSV format we ACTUALLY know
   // how to parse — that's exactly what the BROKERS constant is for. For
@@ -233,7 +230,7 @@ export default function ImportHoldingsScreen({ navigation }) {
       {/* STEP 1 — broker */}
       <StepHeader index={1} title="Broker" done={!!broker} />
       <TouchableOpacity style={styles.selectField} onPress={() => setBrokerPickerOpen(true)}>
-        <View style={[styles.brokerMark, { backgroundColor: `${selectedBroker?.color ?? '#6b7280'}18` }]}>
+        <View style={[styles.brokerMark, { backgroundColor: withAlpha(selectedBroker?.color ?? colors.text.muted, 0.09) }]}>
           <Text style={styles.brokerMarkText}>{selectedBroker?.emoji ?? '📄'}</Text>
         </View>
         <View style={styles.selectTextCol}>
@@ -252,11 +249,11 @@ export default function ImportHoldingsScreen({ navigation }) {
         disabled={loading}
       >
         {loading ? (
-          <ActivityIndicator color="#2563eb" />
+          <ActivityIndicator color={colors.accent.primary} />
         ) : (
           <>
             <View style={styles.pickerEmoji}>
-              <AppIcon name="file-text" size={32} color="#6b7280" strokeWidth={1.7} />
+              <AppIcon name="file-text" size={32} color={colors.text.muted} strokeWidth={1.7} />
             </View>
             <Text style={styles.pickerLabel}>
               {fileName ? `Selected: ${fileName}` : 'Pick CSV or Excel file'}
@@ -269,6 +266,13 @@ export default function ImportHoldingsScreen({ navigation }) {
           </>
         )}
       </TouchableOpacity>
+      {!fileName && (
+        <Text style={styles.hint}>
+          Needs at least a Symbol and Quantity column — columns matching
+          {' '}{selectedBroker?.label ?? 'this broker'}'s usual export are
+          auto-detected, and any column can be mapped manually below if not.
+        </Text>
+      )}
 
       {/* STEP 3 — column mapping. Only rendered once we have headers. */}
       {headers.length > 0 && (
@@ -286,7 +290,7 @@ export default function ImportHoldingsScreen({ navigation }) {
               <AppIcon
                 name={columns.symbol && columns.quantity ? 'check' : 'alert-triangle'}
                 size={18}
-                color={columns.symbol && columns.quantity ? '#059669' : '#b45309'}
+                color={columns.symbol && columns.quantity ? colors.accent.income : colors.state.warningSurfaceText}
                 strokeWidth={2.2}
               />
             </View>
@@ -333,23 +337,23 @@ export default function ImportHoldingsScreen({ navigation }) {
               <View style={styles.divider} />
               <SummaryRow
                 label="Invested value"
-                value={formatMoney(result.totalCost ?? 0)}
+                value={formatMoneyCurrency(result.totalCost ?? 0, baseCurrency)}
               />
               <View style={styles.divider} />
               <SummaryRow
                 label="Current value"
-                value={formatMoney(result.totalValue)}
+                value={formatMoneyCurrency(result.totalValue, baseCurrency)}
                 emphasize
               />
               <View style={styles.divider} />
               <SummaryRow
                 label="Total P&L"
-                value={formatMoney(result.totalPnL)}
+                value={formatMoneyCurrency(result.totalPnL, baseCurrency)}
                 positive={result.totalPnL >= 0}
               />
             </View>
           ) : (
-            <View style={[styles.summaryCard, { backgroundColor: '#fef2f2' }]}>
+            <View style={[styles.summaryCard, { backgroundColor: colors.state.errorSurface }]}>
               <Text style={styles.errorTitle}>Nothing to import</Text>
               <Text style={styles.errorBody}>
                 No usable rows found. Check that Symbol and Quantity columns
@@ -371,7 +375,7 @@ export default function ImportHoldingsScreen({ navigation }) {
                   </Text>
                   <Text style={styles.previewQty}>× {h.quantity}</Text>
                   <Text style={styles.previewValue}>
-                    {formatMoney(h.currentValue)}
+                    {formatMoneyCurrency(h.currentValue, baseCurrency)}
                   </Text>
                 </View>
               ))}
@@ -401,7 +405,7 @@ export default function ImportHoldingsScreen({ navigation }) {
           )}
 
           <View style={styles.warningRow}>
-            <AppIcon name="alert-triangle" size={16} color="#b45309" strokeWidth={2} />
+            <AppIcon name="alert-triangle" size={16} color={colors.state.warningSurfaceText} strokeWidth={2} />
             <Text style={styles.warning}>
               This will replace any existing {labelFor(broker, brokerChoices)} holdings.
               Other brokers' holdings are untouched.
@@ -466,7 +470,7 @@ export default function ImportHoldingsScreen({ navigation }) {
                     <Text style={[styles.brokerOptionLabel, active && styles.brokerOptionLabelActive]}>
                       {choice.label}
                     </Text>
-                    {active && <AppIcon name="check" size={17} color="#2563eb" strokeWidth={2.4} />}
+                    {active && <AppIcon name="check" size={17} color={colors.accent.primary} strokeWidth={2.4} />}
                   </TouchableOpacity>
                 );
               })}
@@ -514,12 +518,13 @@ function StepHeader({ index, title, done }) {
 
 function ColumnMapper({ field, headers, selected, onSelect }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   return (
     <View style={styles.mapBlock}>
       <View style={styles.mapLabelRow}>
         <Text style={styles.mapLabel}>
           {field.label}
-          {field.required ? <Text style={{ color: '#dc2626' }}> *</Text> : null}
+          {field.required ? <Text style={{ color: colors.accent.expense }}> *</Text> : null}
         </Text>
         <Text style={styles.mapHint}>
           {selected ? `→ ${selected}` : 'Not mapped'}
@@ -557,6 +562,7 @@ function ColumnMapper({ field, headers, selected, onSelect }) {
 
 function SummaryRow({ label, value, emphasize, positive }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
@@ -564,8 +570,8 @@ function SummaryRow({ label, value, emphasize, positive }) {
         style={[
           styles.summaryValue,
           emphasize && styles.summaryValueBold,
-          positive === true && { color: '#059669' },
-          positive === false && { color: '#dc2626' },
+          positive === true && { color: colors.accent.income },
+          positive === false && { color: colors.accent.expense },
         ]}
       >
         {value}
@@ -595,7 +601,7 @@ const makeStyles = (c) => ({
     alignItems: 'center', justifyContent: 'center',
     marginRight: 10,
   },
-  stepBadgeDone: { backgroundColor: '#059669' },
+  stepBadgeDone: { backgroundColor: c.accent.income },
   stepBadgeText: { fontSize: 12, fontWeight: '700', color: c.text.secondary },
   stepTitle: { fontSize: 14, fontWeight: '700', color: c.text.primary },
 
@@ -619,7 +625,7 @@ const makeStyles = (c) => ({
     borderRadius: 8,
     maxWidth: 200,
   },
-  chipSmallActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  chipSmallActive: { backgroundColor: c.accent.primary, borderColor: c.accent.primary },
   chipTextSmall: { fontSize: 12, color: c.text.secondary },
 
   selectField: {
@@ -666,7 +672,7 @@ const makeStyles = (c) => ({
   mappingIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: c.bg.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   mappingTitle: { fontSize: 14, color: c.text.primary, fontWeight: '700' },
   mappingSub: { fontSize: 12, color: c.text.secondary, marginTop: 2 },
-  mappingAction: { fontSize: 12, color: '#2563eb', fontWeight: '800' },
+  mappingAction: { fontSize: 12, color: c.accent.primary, fontWeight: '800' },
   mappingEditor: { marginTop: 6 },
   mapLabelRow: {
     flexDirection: 'row',
@@ -694,16 +700,16 @@ const makeStyles = (c) => ({
   divider: { height: 1, backgroundColor: c.border.subtle },
   validationRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   statusPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
-  statusPill_good: { backgroundColor: '#dcfce7' },
-  statusPill_warn: { backgroundColor: '#ffedd5' },
+  statusPill_good: { backgroundColor: c.state.successSurface },
+  statusPill_warn: { backgroundColor: c.state.warningSurface },
   statusPill_neutral: { backgroundColor: c.bg.surfaceAlt },
   statusPillText: { fontSize: 11, fontWeight: '800' },
-  statusPillText_good: { color: '#166534' },
-  statusPillText_warn: { color: '#9a3412' },
+  statusPillText_good: { color: c.state.successSurfaceText },
+  statusPillText_warn: { color: c.state.warningSurfaceText },
   statusPillText_neutral: { color: c.text.secondary },
 
-  errorTitle: { fontSize: 15, fontWeight: '700', color: '#991b1b', padding: 16 },
-  errorBody:  { fontSize: 13, color: '#7f1d1d', paddingHorizontal: 16, paddingBottom: 16 },
+  errorTitle: { fontSize: 15, fontWeight: '700', color: c.state.errorText, padding: 16 },
+  errorBody:  { fontSize: 13, color: c.state.errorText, paddingHorizontal: 16, paddingBottom: 16 },
 
   previewCard: {
     backgroundColor: c.bg.surface,
@@ -726,23 +732,23 @@ const makeStyles = (c) => ({
 
   errorList: {
     marginTop: 12,
-    backgroundColor: '#fff7ed',
+    backgroundColor: c.state.warningSurface,
     padding: 12,
     borderRadius: 10,
   },
   errorListTitle: {
-    fontSize: 13, fontWeight: '700', color: '#9a3412', marginBottom: 4,
+    fontSize: 13, fontWeight: '700', color: c.state.warningSurfaceText, marginBottom: 4,
   },
-  errorListItem:  { fontSize: 12, color: '#7c2d12', marginTop: 2 },
+  errorListItem:  { fontSize: 12, color: c.state.warningSurfaceText, marginTop: 2 },
 
   confirmButton: {
-    backgroundColor: '#059669',
+    backgroundColor: c.accent.income,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
     paddingHorizontal: 24,
   },
-  confirmButtonDisabled: { backgroundColor: '#a7f3d0' },
+  confirmButtonDisabled: { backgroundColor: withAlpha(c.accent.income, 0.4) },
   confirmText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   warningRow: {
@@ -789,7 +795,7 @@ const makeStyles = (c) => ({
   brokerOptionActive: { backgroundColor: c.bg.surfaceAlt },
   brokerOptionEmoji: { width: 32, fontSize: 18 },
   brokerOptionLabel: { flex: 1, fontSize: 14, color: c.text.primary, fontWeight: '600' },
-  brokerOptionLabelActive: { color: '#2563eb', fontWeight: '800' },
+  brokerOptionLabelActive: { color: c.accent.primary, fontWeight: '800' },
   brokerEmpty: { paddingVertical: 28, alignItems: 'center' },
   brokerEmptyText: { fontSize: 13, color: c.text.muted },
 });

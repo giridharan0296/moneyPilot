@@ -3,14 +3,30 @@ import { ScrollView, SectionList, Text, TextInput, TouchableOpacity, View } from
 
 import ActivitySearchPane from '../components/ActivitySearchPane';
 import AppIcon from '../components/AppIcon';
+import EditTransactionModal from '../components/EditTransactionModal';
 import { EmptyState, StatusBadge } from '../components/UiPrimitives';
 import { useLoans } from '../contexts/LoansContext';
+import { useNetWorth } from '../contexts/NetWorthContext';
+import { usePortfolio } from '../contexts/PortfolioContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
+import { useToast } from '../contexts/ToastContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
 import { buildActivityTimeline, groupTimelineByDate } from '../lib/activityTimeline';
 import { formatMoney } from '../lib/currency';
+import {
+  buildOpeningPositionPayload,
+  openingLotsFromSaved,
+  removeSavedOpeningLots,
+  syncOpeningLots,
+} from '../lib/openingPositions';
+import {
+  hasOtherInvestmentLogs,
+  investmentBrokerKey,
+  investmentSymbolKey,
+} from '../lib/portfolioHoldings';
+import { deleteVoiceNote } from '../lib/voiceNotes';
 import { radii, spacing } from '../lib/theme';
 import { openTransactionsTab } from '../lib/navigationTabReset';
 
@@ -27,13 +43,24 @@ const FILTERS = [
 export default function ActivityTimelineScreen({ navigation, route }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
-  const { expenses, income, investments } = useTransactions();
+  const {
+    expenses, income, investments,
+    addTransaction, updateTransaction, deleteTransaction,
+  } = useTransactions();
   const { transfers } = useTransfers();
   const { loans } = useLoans();
-  const { accounts, categories, baseCurrency } = useSettings();
+  const { accounts, accountGroups, categories, baseCurrency, setBrokerDefaultForSubCategory } = useSettings();
+  const { addOpeningPosition, removeOpeningPosition, removeOpeningPositionsForInstrument } = usePortfolio();
+  const { unhidePortfolioSymbol } = useNetWorth();
+  const { showToast, showUndoableToast } = useToast();
   const [viewMode, setViewMode] = useState(route?.params?.mode === 'search' ? 'search' : 'timeline');
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  // The transaction (income/expense/investment) currently open for editing,
+  // opened directly from a Timeline/Find tap instead of navigating to the
+  // Transactions tab and leaving the user stranded there after closing —
+  // see the note above `openItem` for why transfers/loans still navigate.
+  const [editingTx, setEditingTx] = useState(null); // { item, type } | null
 
   useEffect(() => {
     if (route?.params?.mode === 'search' || route?.params?.mode === 'timeline') {
@@ -54,29 +81,190 @@ export default function ActivityTimelineScreen({ navigation, route }) {
     return groupTimelineByDate(visible);
   }, [items, filter, query]);
 
+  const typeList = (type) => (type === 'income' ? income : type === 'investment' ? investments : expenses);
+
+  // Tapping a result used to navigate to the Transactions tab and just
+  // scroll-to + highlight the matching row, requiring a second tap to
+  // actually open it — and closing that editor left you stranded on the
+  // Transactions tab instead of back here. income/expense/investment now
+  // open inline via EditTransactionModal below, no navigation at all.
+  // Loans and transfers keep navigating — loans open their own detail/
+  // timeline screen (never was an edit-modal case), and transfers carry
+  // enough linked-NetWorth/loan-repayment edge cases (see TransfersScreen's
+  // handleSaveEdit/handleDelete) that duplicating them here isn't worth
+  // the risk for what the report was actually about.
   const openItem = (item) => {
     if (item.source === 'loan') {
       navigation.navigate('LoanDetail', { loanId: item.sourceId });
       return;
     }
     if (item.source === 'transaction') {
-      if (item.type === 'investment') {
-        navigation.getParent()?.navigate('Invest', {
-          screen: 'InvestmentsHome',
-          params: { focusId: item.sourceId },
-          initial: false,
-        });
-        return;
-      }
-      openTransactionsTab(navigation.getParent() ?? navigation, {
-        initialTab: item.type,
-        focusId: item.sourceId,
-      });
+      const raw = typeList(item.type).find((tx) => tx.id === item.sourceId);
+      if (raw) setEditingTx({ item: raw, type: item.type });
       return;
     }
     openTransactionsTab(navigation.getParent() ?? navigation, {
       initialTab: 'transfer',
       focusId: item.sourceId,
+    });
+  };
+
+  // Mirrors TransactionsList.js's handleSaveEdit — investment edits that
+  // change instrument/broker or touch an opening position need the same
+  // lot-sync bookkeeping, so this follows that logic exactly rather than a
+  // simplified re-guess (see lib/portfolioHoldings.js for the shared
+  // investmentBrokerKey/investmentSymbolKey/hasOtherInvestmentLogs helpers).
+  const handleSaveTx = (updated) => {
+    const { item: editing, type } = editingTx;
+    if (type === 'investment') {
+      const prevBroker = investmentBrokerKey(editing);
+      const prevSymbol = investmentSymbolKey(editing);
+      const nextBroker = investmentBrokerKey(updated);
+      const nextSymbol = investmentSymbolKey(updated);
+      const instrumentChanged = Boolean(
+        prevSymbol && nextSymbol && (prevSymbol !== nextSymbol || prevBroker !== nextBroker),
+      );
+
+      if (instrumentChanged) {
+        if (editing.openingPosition) {
+          removeSavedOpeningLots(editing.openingPosition, removeOpeningPosition);
+        }
+        if (
+          prevSymbol
+          && !hasOtherInvestmentLogs(investments, {
+            excludeId: editing.id,
+            broker: prevBroker,
+            symbolKey: prevSymbol,
+          })
+        ) {
+          removeOpeningPositionsForInstrument(prevBroker, prevSymbol);
+        }
+      }
+
+      if (updated.openingPosition) {
+        const lots = openingLotsFromSaved(updated.openingPosition);
+        const broker = updated.openingPosition.broker ?? updated.brokerId;
+        const symbol = updated.openingPosition.symbol ?? updated.instrumentSymbol;
+        if (broker && symbol) {
+          removeOpeningPositionsForInstrument(broker, symbol);
+        }
+        const openingResult = syncOpeningLots({
+          broker,
+          symbol,
+          name: updated.openingPosition.name ?? updated.instrumentName ?? updated.instrumentSymbol,
+          lots,
+          previousLots: instrumentChanged ? [] : openingLotsFromSaved(editing.openingPosition),
+          addOpeningPosition,
+          removeOpeningPosition,
+        });
+        if (openingResult?.ok) {
+          updated.openingPosition = buildOpeningPositionPayload({
+            broker: updated.openingPosition.broker ?? updated.brokerId,
+            symbol: updated.openingPosition.symbol ?? updated.instrumentSymbol,
+            name: updated.openingPosition.name ?? updated.instrumentName ?? updated.instrumentSymbol,
+            lots: openingResult.lots,
+            trackingDate: updated.openingPosition.openingDate,
+          });
+        }
+      } else if (editing.openingPosition) {
+        removeSavedOpeningLots(editing.openingPosition, removeOpeningPosition);
+        if (
+          prevSymbol
+          && !hasOtherInvestmentLogs(investments, {
+            excludeId: editing.id,
+            broker: prevBroker,
+            symbolKey: prevSymbol,
+          })
+        ) {
+          removeOpeningPositionsForInstrument(prevBroker, prevSymbol);
+        }
+      }
+    }
+    updateTransaction(type, updated);
+    if (type === 'investment' && updated.instrumentSymbol) {
+      unhidePortfolioSymbol(updated.instrumentSymbol);
+    }
+    if (
+      type === 'investment'
+      && updated.subCategoryId
+      && updated.brokerId
+      && setBrokerDefaultForSubCategory
+    ) {
+      setBrokerDefaultForSubCategory(updated.subCategoryId, updated.brokerId);
+    }
+    showToast('Updated', { variant: 'success', duration: 1500 });
+  };
+
+  // Mirrors TransactionsList.js's softDeleteWithUndo — delete immediately,
+  // offer a 5s undo toast, only actually clean up the voice-note file (and,
+  // for investments, only re-derive opening-position lots) once undone.
+  const handleDeleteTx = () => {
+    if (!editingTx) return;
+    const { item, type } = editingTx;
+
+    if (type === 'investment') {
+      if (item.openingPosition) {
+        removeSavedOpeningLots(item.openingPosition, removeOpeningPosition);
+      } else if (item.instrumentSymbol && item.brokerId) {
+        const hasOtherLogs = investments.some((tx) =>
+          tx.id !== item.id
+          && tx.instrumentSymbol
+          && String(tx.instrumentSymbol).toUpperCase() === String(item.instrumentSymbol).toUpperCase()
+          && tx.brokerId === item.brokerId,
+        );
+        if (!hasOtherLogs) {
+          removeOpeningPositionsForInstrument(item.brokerId, item.instrumentSymbol);
+        }
+      }
+    }
+    deleteTransaction(type, item.id, { cleanupFiles: false });
+
+    const UNDO_MS = 5000;
+    let undone = false;
+    const audioFile = item.voiceNote?.file;
+    const cleanupTimer = setTimeout(() => {
+      if (!undone && audioFile) deleteVoiceNote(audioFile);
+    }, UNDO_MS + 500);
+
+    const cat = (categories[type] ?? []).find((c) => c.id === item.categoryId);
+    const label = cat
+      ? `${cat.emoji} ${cat.label} ₹${formatMoney(item.amount)}`
+      : `₹${formatMoney(item.amount)}`;
+
+    showUndoableToast({
+      message: `Deleted ${label}`,
+      duration: UNDO_MS,
+      onUndo: () => {
+        undone = true;
+        clearTimeout(cleanupTimer);
+        if (type === 'investment' && item.openingPosition) {
+          const lots = openingLotsFromSaved(item.openingPosition);
+          const openingResult = syncOpeningLots({
+            broker: item.openingPosition.broker ?? item.brokerId,
+            symbol: item.openingPosition.symbol ?? item.instrumentSymbol,
+            name: item.openingPosition.name ?? item.instrumentName ?? item.instrumentSymbol,
+            lots,
+            previousLots: [],
+            addOpeningPosition,
+            removeOpeningPosition,
+          });
+          const restored = openingResult?.ok
+            ? {
+              ...item,
+              openingPosition: buildOpeningPositionPayload({
+                broker: item.openingPosition.broker ?? item.brokerId,
+                symbol: item.openingPosition.symbol ?? item.instrumentSymbol,
+                name: item.openingPosition.name ?? item.instrumentName ?? item.instrumentSymbol,
+                lots: openingResult.lots,
+                trackingDate: item.openingPosition.openingDate,
+              }),
+            }
+            : item;
+          addTransaction(type, restored);
+        } else {
+          addTransaction(type, item);
+        }
+      },
     });
   };
 
@@ -103,7 +291,10 @@ export default function ActivityTimelineScreen({ navigation, route }) {
       </View>
 
       {viewMode === 'search' ? (
-        <ActivitySearchPane navigation={navigation} />
+        <ActivitySearchPane
+          navigation={navigation}
+          onOpenItem={(tx, type) => setEditingTx({ item: tx, type })}
+        />
       ) : (
         <>
           <View style={styles.controls}>
@@ -153,6 +344,25 @@ export default function ActivityTimelineScreen({ navigation, route }) {
             )}
           />
         </>
+      )}
+
+      {editingTx && (
+        <EditTransactionModal
+          visible
+          item={editingTx.item}
+          type={editingTx.type}
+          categories={categories[editingTx.type] ?? []}
+          accounts={accounts}
+          accountGroups={accountGroups}
+          accentColor={
+            editingTx.type === 'income' ? colors.accent.income
+              : editingTx.type === 'investment' ? colors.accent.investment
+              : colors.accent.expense
+          }
+          onClose={() => setEditingTx(null)}
+          onSave={handleSaveTx}
+          onDelete={handleDeleteTx}
+        />
       )}
     </View>
   );

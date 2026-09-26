@@ -42,6 +42,7 @@ import {
   averageMonthlyAmount,
   effectiveAnnualExpense,
 } from '../lib/fire';
+import { withAlpha } from '../lib/colorAlpha';
 import { radii, spacing } from '../lib/theme';
 
 // Categories in NetWorth that count as "already invested" for the
@@ -169,8 +170,8 @@ export default function FireCalculatorScreen() {
       <View style={styles.header}>
         <View style={styles.titleWrap}>
           <View style={styles.titleRow}>
-            <AppIcon name="flame" size={22} color="#ef4444" strokeWidth={2.1} />
-            <Text style={styles.title}>FIRE Calculator</Text>
+            <AppIcon name="flame" size={22} color={themeColors.accent.expense} strokeWidth={2.1} />
+            <Text style={styles.title}>FIRE Planner</Text>
           </View>
           <Text style={styles.sub}>Financial Independence, Retire Early</Text>
         </View>
@@ -185,7 +186,7 @@ export default function FireCalculatorScreen() {
         style={styles.autoFillBig}
       >
         <View style={styles.autoFillBigTitleRow}>
-          <AppIcon name="zap" size={16} color="#78350f" strokeWidth={2.2} filled />
+          <AppIcon name="zap" size={16} color={themeColors.accent.primary} strokeWidth={2.2} filled />
           <Text style={styles.autoFillBigTitle}>Auto-fill from my data</Text>
         </View>
         <Text style={styles.autoFillBigBody}>
@@ -256,7 +257,7 @@ export default function FireCalculatorScreen() {
           <AppIcon
             name={showAdvanced ? 'chevron-up' : 'chevron-down'}
             size={16}
-            color="#2563eb"
+            color={themeColors.accent.primary}
             strokeWidth={2.2}
           />
         </TouchableOpacity>
@@ -291,7 +292,7 @@ export default function FireCalculatorScreen() {
       {hasBasicInputs && (
         <View style={[
           styles.recBanner,
-          { borderColor: rec.color, backgroundColor: rec.color + '15' },
+          { borderColor: rec.color, backgroundColor: rec.surface },
         ]}>
           <View style={styles.recTitleRow}>
             {rec.icon ? (
@@ -499,7 +500,7 @@ function CorpusChart({ series, width = 320 }) {
   return (
     <Svg width={width} height={HEIGHT}>
       {/* Fill under corpus */}
-      <Polyline points={fillPts} fill={themeColors.accent.income + '18'} stroke="none" />
+      <Polyline points={fillPts} fill={withAlpha(themeColors.accent.income, 0.09)} stroke="none" />
 
       {/* Target line (dashed amber) */}
       <Polyline
@@ -526,7 +527,7 @@ function CorpusChart({ series, width = 320 }) {
             cy={yOf(cross.corpus)}
             r={5}
             fill={themeColors.accent.income}
-            stroke="#fff"
+            stroke={themeColors.bg.surface}
             strokeWidth={2}
           />
           <SvgText
@@ -650,7 +651,7 @@ function recommendation(r, themeColors) {
   if (r.annualExpense === 0) {
     return {
       icon: null, title: '', body: '',
-      color: themeColors.border.subtle, textColor: themeColors.text.primary,
+      color: themeColors.border.subtle, surface: 'transparent', textColor: themeColors.text.primary,
     };
   }
   if (r.onTrack) {
@@ -658,8 +659,8 @@ function recommendation(r, themeColors) {
       icon: 'sparkles',
       title: `You're on track for FI by age ${(r.fiAge).toFixed(0)}`,
       body: `Projected corpus of ₹${compact(r.projected)} exceeds the target of ₹${compact(r.fireFuture)}. You could also consider retiring earlier — you'd hit the number ${r.fiAge < 999 ? `at age ${r.fiAge.toFixed(0)}` : ''}.`,
-      color: '#059669',
-      textColor: '#064e3b',
+      color: themeColors.accent.income, surface: themeColors.state.successSurface,
+      textColor: themeColors.state.successSurfaceText,
     };
   }
   if (Number.isFinite(r.yearsToFI)) {
@@ -667,16 +668,16 @@ function recommendation(r, themeColors) {
       icon: 'alert-triangle',
       title: `At current SIP, FI comes at age ${r.fiAge.toFixed(0)}`,
       body: `To hit FI at your target age, invest ₹${compact(r.requiredSIP)}/month instead — that's the number that closes the ₹${compact(r.shortfall)} gap.`,
-      color: '#f59e0b',
-      textColor: '#78350f',
+      color: themeColors.accent.gold, surface: themeColors.state.warningSurface,
+      textColor: themeColors.state.warningSurfaceText,
     };
   }
   return {
     icon: 'alert-triangle',
     title: 'Current plan won\'t reach FIRE',
     body: `Your target of ₹${compact(r.fireFuture)} isn't reachable within 60 years at these inputs. Try increasing your SIP, extending your retirement age, or lowering your expected lifestyle.`,
-    color: '#dc2626',
-    textColor: '#7f1d1d',
+    color: themeColors.accent.expense, surface: themeColors.state.errorSurface,
+    textColor: themeColors.state.errorText,
   };
 }
 
@@ -707,8 +708,8 @@ const makeStyles = (c) => ({
   },
 
   autoFillBig: {
-    backgroundColor: c.accent.primary + '10',
-    borderColor: c.accent.primary + '55',
+    backgroundColor: withAlpha(c.accent.primary, 0.06),
+    borderColor: withAlpha(c.accent.primary, 0.33),
     borderWidth: 1.5,
     borderRadius: radii.lg,
     padding: spacing.md,
@@ -748,6 +749,7 @@ const makeStyles = (c) => ({
 
   smallInputWrap: {
     flex: 1,
+    minWidth: 0,
     gap: 4,
   },
   smallInputBox: {
@@ -761,6 +763,7 @@ const makeStyles = (c) => ({
   },
   smallInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 15,
     color: c.text.primary,
     paddingVertical: 10,
@@ -809,7 +812,7 @@ const makeStyles = (c) => ({
   advancedToggleText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#2563eb',
+    color: c.accent.primary,
   },
   advancedBlock: {
     gap: 10,
