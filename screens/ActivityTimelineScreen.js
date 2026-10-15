@@ -29,6 +29,7 @@ import {
 import { deleteVoiceNote } from '../lib/voiceNotes';
 import { radii, spacing } from '../lib/theme';
 import { openTransactionsTab } from '../lib/navigationTabReset';
+import { withAlpha } from '../lib/colorAlpha';
 
 const VIEW_MODES = [
   { id: 'timeline', label: 'Timeline' },
@@ -370,10 +371,11 @@ export default function ActivityTimelineScreen({ navigation, route }) {
 
 function ActivityRow({ item, onPress }) {
   const styles = useThemedStyles(makeStyles);
+  const colors = useThemeColors();
   const sign = item.direction > 0 ? '+' : item.direction < 0 ? '−' : '';
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.72}>
-      <View style={[styles.rowIcon, { backgroundColor: `${item.color}18` }]}>
+      <View style={[styles.rowIcon, { backgroundColor: withAlpha(item.color, 0.1) }]}>
         <AppIcon name={item.icon} size={19} color={item.color} strokeWidth={2.1} />
       </View>
       <View style={styles.rowCopy}>
@@ -385,7 +387,7 @@ function ActivityRow({ item, onPress }) {
         </View>
       </View>
       {item.amount > 0 ? (
-        <Text style={[styles.amount, { color: item.direction === 0 ? item.color : item.direction > 0 ? '#059669' : '#dc2626' }]}>
+        <Text style={[styles.amount, { color: item.direction === 0 ? item.color : item.direction > 0 ? colors.accent.income : colors.accent.expense }]}>
           {sign}{formatMoney(item.amount, item.currency)}
         </Text>
       ) : null}

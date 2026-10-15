@@ -11,7 +11,8 @@
 //   - Green above the zero baseline, red below (like CashFlowChart).
 //   - Faint fill under the line for depth.
 //   - Range picker chips above the chart: 30D / 90D / 1Y / All.
-//   - Small stats row below: change over range (₹ + %), latest value, min.
+//   - Small stats row below: change over range (amount + %), latest value,
+//     range low, range high — all formatted in the caller's `baseCurrency`.
 //
 // Empty / thin states:
 //   - No history at all → friendly seed prompt.
@@ -26,6 +27,7 @@ import Svg, { Circle, Line, Path, Polyline, Text as SvgText } from 'react-native
 import { radii, spacing } from '../lib/theme';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { RANGE_OPTIONS, filterByRange, seriesStats } from '../lib/netWorthHistory';
+import { DEFAULT_BASE_CURRENCY, formatMoneyDisplay } from '../lib/currency';
 
 const DEFAULT_HEIGHT = 200;
 const PADDING = { top: 20, right: 12, bottom: 28, left: 44 };
@@ -40,6 +42,12 @@ export default function NetWorthChart({
   positiveColor = '#059669',
   negativeColor = '#dc2626',
   defaultRangeId = '90d',
+  // Every amount below is rendered via lib/currency's formatMoneyDisplay
+  // so the axis/stat labels honour the user's actual base currency (₹
+  // lakh/crore for INR, K/M/B for everything else) instead of assuming
+  // INR. Defaults to INR only so this component still renders sensibly
+  // when used outside a currency-aware caller (e.g. a storybook/test).
+  baseCurrency = DEFAULT_BASE_CURRENCY,
 }) {
   const styles = useThemedStyles(makeStyles);
   const [rangeId, setRangeId] = useState(defaultRangeId);
@@ -91,6 +99,7 @@ export default function NetWorthChart({
         negativeColor={negativeColor}
         hasAnyHistory={(history ?? []).length > 0}
         activeRangeLabel={activeRange.label}
+        baseCurrency={baseCurrency}
       />
 
       {/* Stats row — only meaningful when we have 2+ points in the window. */}
@@ -98,19 +107,26 @@ export default function NetWorthChart({
         <View style={styles.statsRow}>
           <Stat
             label={`Change · ${activeRange.label}`}
-            value={formatSignedMoney(stats.delta)}
+            value={money(stats.delta, baseCurrency, true)}
             sub={formatSignedPct(stats.deltaPct)}
             tone={stats.delta >= 0 ? 'positive' : 'negative'}
           />
           <Stat
             label="Latest"
-            value={compactMoney(stats.latest.netWorth)}
+            value={money(stats.latest.netWorth, baseCurrency)}
             sub={shortDate(new Date(stats.latest.at))}
           />
           <Stat
             label="Range low"
-            value={compactMoney(stats.min.netWorth)}
+            value={money(stats.min.netWorth, baseCurrency)}
             sub={shortDate(new Date(stats.min.at))}
+          />
+          {/* stats.max was computed but never surfaced before — the
+              lowest point in range had a tile, the highest didn't. */}
+          <Stat
+            label="Range high"
+            value={money(stats.max.netWorth, baseCurrency)}
+            sub={shortDate(new Date(stats.max.at))}
           />
         </View>
       )}
@@ -121,7 +137,7 @@ export default function NetWorthChart({
 // -------- Chart body (SVG) --------------------------------------------------
 function ChartBody({
   series, width, height, positiveColor, negativeColor,
-  hasAnyHistory, activeRangeLabel,
+  hasAnyHistory, activeRangeLabel, baseCurrency,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
@@ -150,7 +166,7 @@ function ChartBody({
   if (series.length === 1) {
     return (
       <View style={[styles.empty, { width, height }]}>
-        <Text style={styles.emptyTitle}>{compactMoney(series[0].netWorth)}</Text>
+        <Text style={styles.emptyTitle}>{money(series[0].netWorth, baseCurrency)}</Text>
         <Text style={styles.emptyBody}>
           One data point on {shortDate(new Date(series[0].at))} — a line will appear
           after your next NW change (or tomorrow).
@@ -175,8 +191,8 @@ function ChartBody({
   const domainMin = Math.min(0, rawMin);
   const domainMax = Math.max(0, rawMax);
   const padValue = Math.max(1, (domainMax - domainMin) * 0.08);
-  const minY = domainMin === domainMax ? domainMin - padValue : domainMin - padValue;
-  const maxY = domainMin === domainMax ? domainMax + padValue : domainMax + padValue;
+  const minY = domainMin - padValue;
+  const maxY = domainMax + padValue;
   const ySpan = Math.max(1, maxY - minY);
 
   const xOf = (t) => PADDING.left + ((t - t0) / tSpan) * innerW;
@@ -279,7 +295,7 @@ function ChartBody({
             fill={themeColors.text.muted}
             textAnchor="end"
           >
-            {compactMoney(v)}
+            {money(v, baseCurrency)}
           </SvgText>
         ))}
 
@@ -368,19 +384,15 @@ function Stat({ label, value, sub, tone }) {
 function uniqueSorted(arr) {
   return [...new Set(arr.map((n) => Math.round(n)))].sort((a, b) => a - b);
 }
-function compactMoney(n) {
-  if (!isFinite(n)) return '—';
-  const sign = n < 0 ? '-' : '';
-  const v = Math.abs(n);
-  if (v >= 10000000) return `${sign}₹${(v / 10000000).toFixed(1).replace(/\.0$/, '')}Cr`;
-  if (v >= 100000)   return `${sign}₹${(v / 100000).toFixed(1).replace(/\.0$/, '')}L`;
-  if (v >= 1000)     return `${sign}₹${(v / 1000).toFixed(0)}K`;
-  return `${sign}₹${Math.round(v)}`;
-}
-function formatSignedMoney(n) {
-  if (!isFinite(n)) return '—';
-  const sign = n > 0 ? '+' : (n < 0 ? '-' : '');
-  return `${sign}${compactMoney(Math.abs(n)).replace(/^-/, '')}`;
+// Compact, currency-aware amount for axis/stat labels — was previously a
+// hand-rolled ₹/lakh/crore formatter here that ignored the user's actual
+// base currency entirely (a USD/EUR/etc. user would still see "₹1.2Cr").
+// lib/currency's formatMoneyDisplay is what the rest of the app already
+// uses for this (PositionCard, NetWorthScreen's hero card, ...); reusing
+// it here keeps this chart's numbers correct AND visually consistent
+// with the totals shown just above it on the same screen.
+function money(n, code, withSign = false) {
+  return formatMoneyDisplay(n, code, { compactFrom: 1000, withSign });
 }
 function formatSignedPct(pct) {
   if (!isFinite(pct)) return '—';

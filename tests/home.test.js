@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { baseAmountOf, formatMoneyDisplay } from '../lib/currency.js';
-import { daysUntil, netWorthChange, spendPace, topCategoriesThisMonth } from '../lib/homeSummary.js';
+import { daysUntil, netWorthChange, netWorthSparkline, spendPace, topCategoriesThisMonth } from '../lib/homeSummary.js';
 import { buildMonthClose } from '../lib/monthClose.js';
 import { buildNextActions } from '../lib/nextActions.js';
 import { periodStats } from '../lib/reports.js';
@@ -86,6 +86,38 @@ describe('periodStats savings rate (Reports)', () => {
 
   it('is 0 with no income', () => {
     assert.equal(periodStats([], [], []).savingsRate, 0);
+  });
+});
+
+describe('buildMonthClose — saved after investing', () => {
+  it('Saved + Spent + Invested adds back up to income; income − spent is unchanged', () => {
+    const r = buildMonthClose({
+      income: [{ amount: 1000, createdAt: iso(2026, 8, 2) }],
+      expenses: [{ amount: 200, createdAt: iso(2026, 8, 3) }],
+      investments: [{ amount: 300, createdAt: iso(2026, 8, 4) }],
+      now: NOW,
+    });
+    assert.equal(r.keptAfterInvesting, 500);
+    assert.equal(r.keptAfterInvesting + r.expense + r.invested, r.income);
+    assert.equal(r.keptRate, 50);
+    assert.equal(r.saved, 800); // used by the nudges and AI summary — unchanged
+  });
+});
+
+describe('netWorthSparkline', () => {
+  it('returns { t, v } points in range, keeping the real snapshot dates', () => {
+    const history = [
+      { at: iso(2026, 6, 1), netWorth: 900 },   // outside 30 days
+      { at: iso(2026, 8, 1), netWorth: 1000 },
+      { at: iso(2026, 8, 20), netWorth: 1100 },
+    ];
+    const pts = netWorthSparkline(history, 30, NOW);
+    assert.deepEqual(pts.map((p) => p.v), [1000, 1100]);
+    assert.equal(pts[0].t, new Date(iso(2026, 8, 1)).getTime());
+  });
+
+  it('returns nothing for a missing history', () => {
+    assert.deepEqual(netWorthSparkline(undefined, 30, NOW), []);
   });
 });
 

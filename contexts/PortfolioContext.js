@@ -37,6 +37,7 @@ import {
   fetchLiveQuotes,
 } from '../lib/fundamentals';
 import { reconcileHoldingMetrics } from '../lib/portfolioHoldings';
+import { applyFundNavs, fetchAmfiNavs, isFundHolding } from '../lib/mutualFundNav';
 
 const PortfolioContext = createContext(null);
 
@@ -204,26 +205,48 @@ export function PortfolioProvider({ children }) {
    * currentValue / pnl. Returns a small stats object for the UI toast.
    */
   const refreshLivePrices = useCallback(async () => {
-    const symbols = holdings.map((h) => h.symbol).filter(Boolean);
-    if (!symbols.length) {
+    if (!holdings.length) {
       return { updated: 0, resolved: 0, failed: [], fetchedAt: null };
     }
-    const result = await fetchLiveQuotes(symbols);
-    const { updated, skipped = [] } = applyQuotesToHoldings(
-      holdings,
-      result.quotes,
-      result.fetchedAt,
-    );
+    // Mutual funds are priced from AMFI, not Yahoo, so keep them out of the
+    // Yahoo lookup.
+    const symbols = holdings.filter((h) => !isFundHolding(h)).map((h) => h.symbol).filter(Boolean);
+    const result = symbols.length
+      ? await fetchLiveQuotes(symbols)
+      : { quotes: {}, resolved: 0, failed: [], fetchedAt: new Date().toISOString() };
+    const quoted = applyQuotesToHoldings(holdings, result.quotes, result.fetchedAt);
+
+    // AMFI NAVs for whatever Yahoo didn't price. A failed feed doesn't stop the
+    // Yahoo prices from applying; it's reported instead.
+    let navs = null;
+    let navError = null;
+    try {
+      navs = await fetchAmfiNavs();
+    } catch (e) {
+      navError = e.message;
+    }
+    const navPriced = navs ? applyFundNavs(quoted.holdings, navs) : null;
+
     // Apply to the CURRENT rows: the fetch is slow, and rows added, removed
     // or re-imported meanwhile must not be overwritten by the older list.
-    setHoldings((prev) => applyQuotesToHoldings(prev, result.quotes, result.fetchedAt).holdings);
-    if (updated > 0) setPricesUpdatedAt(result.fetchedAt);
+    setHoldings((prev) => {
+      const withQuotes = applyQuotesToHoldings(prev, result.quotes, result.fetchedAt).holdings;
+      return navs ? applyFundNavs(withQuotes, navs).holdings : withQuotes;
+    });
+
+    const updated = quoted.updated + (navPriced?.updated ?? 0);
+    const fetchedAt = result.fetchedAt ?? navs?.fetchedAt ?? null;
+    if (updated > 0 && fetchedAt) setPricesUpdatedAt(fetchedAt);
     return {
       updated,
       resolved: result.resolved,
-      failed: result.failed,
-      skipped,
-      fetchedAt: result.fetchedAt,
+      failed: [
+        ...(result.failed ?? []),
+        ...(navPriced?.unresolved ?? []),
+        ...(navError ? [`AMFI NAV feed unavailable: ${navError}`] : []),
+      ],
+      skipped: quoted.skipped ?? [],
+      fetchedAt,
     };
   }, [holdings]);
 

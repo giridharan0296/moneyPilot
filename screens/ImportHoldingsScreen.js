@@ -362,6 +362,13 @@ export default function ImportHoldingsScreen({ navigation }) {
             </View>
           )}
 
+          {result.format === 'tradebook' && (
+            <Text style={styles.hint}>
+              Read as a tradebook: {result.tradeCount} trades combined into {result.holdings.length} holdings at average cost.
+              A tradebook has no current prices, so values show cost until prices update.
+            </Text>
+          )}
+
           {/* First few parsed rows so the user can sanity-check */}
           {result.holdings.length > 0 && (
             <View style={styles.previewCard}>

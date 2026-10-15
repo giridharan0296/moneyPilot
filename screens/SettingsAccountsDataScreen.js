@@ -7,7 +7,6 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { radii, spacing } from '../lib/theme';
 import { withAlpha } from '../lib/colorAlpha';
-import { CurrencySection } from './SettingsScreen';
 import GoogleAccountSection from './SettingsAccountScreen';
 
 export default function SettingsAccountsDataScreen({ navigation }) {
@@ -20,11 +19,15 @@ export default function SettingsAccountsDataScreen({ navigation }) {
     brokers,
     baseCurrency,
     fxRates,
-    setBaseCurrency,
-    setFxRate,
-    deleteFxRate,
   } = useSettings();
 
+  // Tints match each destination screen's own native header color (see
+  // their Stack.Screen registration in App.js) so a card visually promises
+  // exactly the screen it opens. Accounts and Brokers use the shared
+  // semantic accent tokens (lib/theme.js) their headers already use — that
+  // also makes them correctly adapt in dark mode, which the old hardcoded
+  // hex never did. Categories has no dedicated token (its own header is
+  // hardcoded too), so it stays a literal hex to match.
   const cards = [
     {
       route: 'Categories',
@@ -37,15 +40,22 @@ export default function SettingsAccountsDataScreen({ navigation }) {
       route: 'Accounts',
       icon: 'wallet',
       title: 'Accounts',
-      detail: `${accounts.length} accounts in ${accountGroups.length} groups`,
-      tint: '#0ea5e9',
+      detail: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in ${accountGroups.length} group${accountGroups.length === 1 ? '' : 's'}`,
+      tint: colors.accent.sky,
     },
     {
       route: 'Brokers',
       icon: 'trending-up',
       title: 'Brokers',
-      detail: `${brokers?.length ?? 0} investment platforms`,
-      tint: '#f97316',
+      detail: `${brokers?.length ?? 0} investment platform${(brokers?.length ?? 0) === 1 ? '' : 's'}`,
+      tint: colors.accent.orange,
+    },
+    {
+      route: 'Currency',
+      icon: 'repeat',
+      title: 'Currency',
+      detail: `${baseCurrency} base · ${Object.keys(fxRates ?? {}).length} FX rate${Object.keys(fxRates ?? {}).length === 1 ? '' : 's'}`,
+      tint: '#059669',
     },
   ];
 
@@ -56,41 +66,36 @@ export default function SettingsAccountsDataScreen({ navigation }) {
 
       <GoogleAccountSection />
 
-      <SectionHeader
-        icon="wallet"
-        title="Financial data"
-        tint="#0ea5e9"
-      />
-      <View style={styles.list}>
-        {cards.map((item) => (
-          <TouchableOpacity
-            key={item.route}
-            style={styles.card}
-            activeOpacity={0.72}
-            onPress={() => navigation.navigate(item.route)}
-            accessibilityRole={'button'}
-            accessibilityLabel={item.title}
-            accessibilityHint={item.detail}
-          >
-            <View style={[styles.iconBadge, { backgroundColor: withAlpha(item.tint, 0.13) }]}>
-              <AppIcon name={item.icon} size={21} color={item.tint} strokeWidth={2.1} />
-            </View>
-            <View style={styles.cardBody}>
-              <Text style={styles.cardTitle}>{item.title}</Text>
-              <Text style={styles.cardDetail}>{item.detail}</Text>
-            </View>
-            <AppIcon name={'chevron-right'} size={18} color={colors.text.muted} strokeWidth={2} />
-          </TouchableOpacity>
-        ))}
+      <View style={styles.section}>
+        <SectionHeader
+          icon="wallet"
+          title="Financial data"
+          subtitle="Categories, accounts, brokers, and currency."
+          tint={colors.accent.sky}
+        />
+        <View style={styles.rowList}>
+          {cards.map((item, i) => (
+            <TouchableOpacity
+              key={item.route}
+              style={[styles.row, i > 0 && styles.rowBorder]}
+              activeOpacity={0.72}
+              onPress={() => navigation.navigate(item.route)}
+              accessibilityRole={'button'}
+              accessibilityLabel={item.title}
+              accessibilityHint={item.detail}
+            >
+              <View style={[styles.iconBadge, { backgroundColor: withAlpha(item.tint, 0.13) }]}>
+                <AppIcon name={item.icon} size={20} color={item.tint} strokeWidth={2.1} />
+              </View>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle}>{item.title}</Text>
+                <Text style={styles.cardDetail}>{item.detail}</Text>
+              </View>
+              <AppIcon name={'chevron-right'} size={18} color={colors.text.muted} strokeWidth={2} />
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
-
-      <CurrencySection
-        baseCurrency={baseCurrency}
-        fxRates={fxRates}
-        onChangeBase={setBaseCurrency}
-        onSetRate={setFxRate}
-        onDeleteRate={deleteFxRate}
-      />
     </FormScreen>
   );
 }
@@ -100,9 +105,18 @@ const makeStyles = (c) => ({
   container: { padding: spacing.lg, paddingBottom: 48, maxWidth: 760, width: '100%', alignSelf: 'center' },
   heading: { color: c.text.primary, fontSize: 24, fontWeight: '800', marginBottom: 5 },
   subtitle: { color: c.text.secondary, fontSize: 14, lineHeight: 20, marginBottom: spacing.xl },
-  list: { gap: spacing.sm, marginBottom: spacing.md },
-  card: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, borderRadius: radii.lg, borderWidth: 1, borderColor: c.border.subtle, backgroundColor: c.bg.surface },
-  iconBadge: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+
+  section: {
+    backgroundColor: c.bg.surface,
+    borderColor: c.border.subtle,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+  },
+  rowList: { marginTop: spacing.sm },
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md },
+  rowBorder: { borderTopWidth: 1, borderTopColor: c.border.subtle },
+  iconBadge: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, minWidth: 0 },
   cardTitle: { color: c.text.primary, fontSize: 15, fontWeight: '800' },
   cardDetail: { color: c.text.secondary, fontSize: 12, lineHeight: 17, marginTop: 3 },

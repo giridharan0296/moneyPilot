@@ -25,6 +25,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
+import { SCAN_UPLOAD_ENABLED } from '../constants';
 import { buildDataHealthReport } from '../lib/dataHealth';
 import { renewalStatus } from '../lib/insurancePolicies';
 import { upcomingOccurrence } from '../lib/recurring';
@@ -62,6 +63,7 @@ const SECTIONS = [
     items: [
       { route: 'ImportBankStatement', icon: 'landmark', name: 'Bank statement', desc: 'HDFC / ICICI / SBI CSV or Excel, with duplicate protection.', color: 'slate' },
       { route: 'ImportTransactions', icon: 'download', name: 'Transactions CSV', desc: 'Any CSV file, with manual column mapping.', color: 'pink' },
+      ...(SCAN_UPLOAD_ENABLED ? [{ route: 'ReceiptImport', icon: 'receipt', name: 'Receipts to transactions', desc: 'Add expenses from up to 2 bill photos at a time. Bulk upload coming soon.', color: 'orange' }] : []),
     ],
   },
   {

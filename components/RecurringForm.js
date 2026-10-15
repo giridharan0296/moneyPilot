@@ -32,7 +32,9 @@ import AmountCalculatorButton from './AmountCalculatorButton';
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
 import QuickAddPickerItem from './QuickAddPickerItem';
+import CategoryPicker from './CategoryPicker';
 import TagInput from './TagInput';
+import { CATEGORY_SHEET_ENABLED } from '../constants';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
@@ -274,6 +276,23 @@ export default function RecurringForm({
           placeholderTextColor="#9aa0a6"
         />
       </AmountCalculatorButton>
+      {CATEGORY_SHEET_ENABLED ? (
+        <CategoryPicker
+          type={type}
+          categories={typeCategories}
+          categoryId={categoryId}
+          subCategoryId={subCategoryId}
+          usage={type === 'expense' ? expenses : type === 'income' ? income : investments}
+          accentColor={accent}
+          onSelectCategory={changeCategory}
+          onSelectSub={(id) => setSubCategoryId(id)}
+          onSelectPair={(catId, subId) => {
+            setCategoryId(catId);
+            setSubCategoryId(subId);
+          }}
+        />
+      ) : (
+      <>
       <Text style={styles.label}>Category</Text>
       {typeCategories.length === 0 ? (
         <Text style={styles.chipEmpty}>
@@ -372,6 +391,9 @@ export default function RecurringForm({
             onCreated={(item) => setSubCategoryId(item.id)}
           /> : null}
         </>
+      )}
+
+      </>
       )}
 
       <Text style={styles.label}>Account</Text>

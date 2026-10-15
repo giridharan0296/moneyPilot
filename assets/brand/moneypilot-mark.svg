@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+
+<defs>
+  <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#4BF0B4"/><stop offset="1" stop-color="#14B88A"/>
+  </linearGradient>
+  <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#3FB0FF"/><stop offset="1" stop-color="#1B5FD6"/>
+  </linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFE7A0"/><stop offset="1" stop-color="#D08F1E"/>
+  </linearGradient>
+</defs><g transform="translate(0 0) scale(1)">
+  <path d="M 625 202 A 330 330 0 1 1 455 187" fill="none" stroke="url(#gold)" stroke-width="26" stroke-linecap="round"/>
+  <circle cx="462" cy="196" r="30" fill="url(#gold)"/>
+  <path d="M 300 500 Q 300 478 322 476 L 378 470 L 378 690 Q 378 704 364 706 L 316 712 Q 300 712 300 696 Z" fill="url(#blue)"/>
+  <path d="M 606 430 L 656 420 Q 672 418 672 434 L 672 690 Q 672 704 658 706 L 620 712 Q 606 712 606 696 Z" fill="url(#blue)"/>
+  <polyline points="322,500 470,640 648,452" fill="none" stroke="url(#teal)" stroke-width="66" stroke-linejoin="round" stroke-linecap="round"/>
+  <polygon points="800,226 616,286 814,422" fill="url(#teal)" stroke="url(#teal)" stroke-width="18" stroke-linejoin="round"/></g></svg>

@@ -34,7 +34,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 
 import { useNetWorth } from '../contexts/NetWorthContext';
@@ -113,7 +113,15 @@ export default function NetWorthScreen() {
   // Chart width — match the container's 16px horizontal padding + subtract
   // the chart card's own 16px inner padding on both sides so the SVG
   // renders edge-to-edge inside the card without clipping.
-  const chartWidth = Dimensions.get('window').width - 16 * 2 - 16 * 2;
+  //
+  // useWindowDimensions (not Dimensions.get, which reads once and never
+  // updates) so rotating the device, entering split-screen, or resizing
+  // the browser window on web doesn't leave the chart's width stuck at
+  // whatever it was on mount — every other measurement on this screen is
+  // just flex layout and adapts for free; this is the one place that
+  // bakes in a pixel width, so it's the one place that needs to react.
+  const { width: windowWidth } = useWindowDimensions();
+  const chartWidth = windowWidth - 16 * 2 - 16 * 2;
 
   const netWorthPositive = summary.netWorth >= 0;
   const epfAssets = filterEpfAssets(assets);
@@ -270,6 +278,7 @@ export default function NetWorthScreen() {
             history={chartHistory}
             width={chartWidth}
             defaultRangeId={hasEstimatedRealEstate ? 'all' : '90d'}
+            baseCurrency={baseCurrency}
           />
         </View>
 

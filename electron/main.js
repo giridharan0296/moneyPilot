@@ -151,7 +151,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     backgroundColor: '#f5f7fb',
-    title: 'FinanceIQ',
+    title: 'MoneyPilot',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "FinanceIQ",
+    "name": "MoneyPilot",
     "slug": "expense-tracker",
     "owner": "giridharan19",
     "version": "1.0.0",
@@ -34,6 +34,7 @@
     },
     "plugins": [
       "@react-native-community/datetimepicker",
+      "@react-native-google-signin/google-signin",
       [
         "expo-audio",
         {
@@ -45,6 +46,13 @@
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to hear your voice for auto-filling transactions.",
           "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to recognize your speech and turn it into transactions."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to photograph store bills so it can fill in an expense.",
+          "photosPermission": "Allow $(PRODUCT_NAME) to read store bill photos you choose so it can fill in an expense."
         }
       ],
       "expo-asset",
@@ -72,9 +80,9 @@
         "projectId": "d393366d-2ad1-4564-a445-b692100d4a31"
       },
       "googleAuth": {
-        "webClientId": "",
+        "webClientId": "341507457215-lshv5b5rlkclhip5th2j6nns410jo881.apps.googleusercontent.com",
         "iosClientId": "",
-        "androidClientId": ""
+        "androidClientId": "341507457215-litmc258a01n51sq80ua28m3n4p8sf6o.apps.googleusercontent.com"
       }
     }
   }

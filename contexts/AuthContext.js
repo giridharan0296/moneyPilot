@@ -27,6 +27,8 @@ import {
   getGoogleAuthConfig,
   isGoogleAuthConfigured,
   revokeGoogleToken,
+  signInWithGoogleNative,
+  signOutGoogleNative,
 } from '../lib/googleAuth';
 import { deleteSecret, getSecret, setSecret } from '../lib/secureKeyStore';
 
@@ -134,6 +136,32 @@ export function AuthProvider({ children }) {
       setError('Google Sign-In is not configured on this build.');
       return { ok: false, reason: 'not_configured' };
     }
+    if (Platform.OS === 'android') {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await signInWithGoogleNative(config.webClientId);
+        if (result.cancelled) {
+          setLoading(false);
+          return { ok: false, reason: 'cancelled' };
+        }
+        const session = {
+          user: result.user,
+          accessToken: result.accessToken,
+          refreshToken: null,
+          expiresAt: null,
+          signedInAt: new Date().toISOString(),
+        };
+        await persistSession(session);
+        handleAuthenticated(session);
+        return { ok: true };
+      } catch (e) {
+        const msg = e?.message ?? 'Google sign-in failed.';
+        setError(msg);
+        setLoading(false);
+        return { ok: false, reason: 'error', message: msg };
+      }
+    }
     if (!promptRef.current) {
       setError('Google Sign-In is still starting up. Try again in a moment.');
       return { ok: false, reason: 'not_ready' };
@@ -159,7 +187,7 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return { ok: false, reason: 'error', message: msg };
     }
-  }, [configured]);
+  }, [configured, config, handleAuthenticated]);
 
   const signOut = useCallback(async () => {
     setLoading(true);
@@ -167,6 +195,9 @@ export function AuthProvider({ children }) {
     try {
       if (session?.accessToken) {
         await revokeGoogleToken(session.accessToken);
+      }
+      if (Platform.OS === 'android') {
+        await signOutGoogleNative().catch(() => {});
       }
       await persistSession(null);
       setSession(null);
@@ -205,7 +236,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={value}>
-      {configured ? (
+      {configured && Platform.OS !== 'android' ? (
         <GoogleAuthBridge
           config={config}
           promptRef={promptRef}

@@ -8,10 +8,13 @@ import {
 import { formatSubCategoryLabel } from '../lib/categoryDisplay';
 import { radii, spacing } from '../lib/theme';
 import { currencyMeta } from '../lib/currency';
+import { CATEGORY_SHEET_ENABLED } from '../constants';
 import { useSettings } from '../contexts/SettingsContext';
+import { useTransactions } from '../contexts/TransactionsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import AmountCalculatorButton from './AmountCalculatorButton';
 import QuickAddPickerItem from './QuickAddPickerItem';
+import CategoryPicker from './CategoryPicker';
 
 // ----------------------------------------------------------------------------
 // BudgetForm — add / edit a budget rule.
@@ -50,6 +53,7 @@ export default function BudgetForm({
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { baseCurrency } = useSettings();
+  const { expenses } = useTransactions();
   // categoryId === null means "Overall". React state uses a sentinel
   // '__overall' so we can compare to `null` unambiguously.
   const [categoryId, setCategoryId] = useState(
@@ -96,6 +100,33 @@ export default function BudgetForm({
 
   return (
     <View style={styles.card}>
+      {CATEGORY_SHEET_ENABLED ? (
+        <CategoryPicker
+          type="expense"
+          categories={categories}
+          categoryId={selectedIsOverall ? null : categoryId}
+          subCategoryId={subCategoryId}
+          usage={expenses}
+          accentColor={accentColor}
+          overall={{ label: 'Overall', emoji: '🧮' }}
+          overallSelected={selectedIsOverall}
+          onSelectOverall={() => {
+            setCategoryId('__overall');
+            setSubCategoryId(null);
+          }}
+          justLabel={(name) => `All ${name}`}
+          onSelectCategory={(id) => {
+            if (id !== categoryId) setSubCategoryId(null);
+            setCategoryId(id);
+          }}
+          onSelectSub={(id) => setSubCategoryId(id)}
+          onSelectPair={(catId, subId) => {
+            setCategoryId(catId);
+            setSubCategoryId(subId);
+          }}
+        />
+      ) : (
+      <>
       <Text style={styles.label}>Category</Text>
       <View style={styles.chipRow}>
         {/* Overall (all expenses) chip — kept as the first option so the
@@ -226,6 +257,9 @@ export default function BudgetForm({
             onCreated={(item) => setSubCategoryId(item.id)}
           /> : null}
         </>
+      )}
+
+      </>
       )}
 
       <Text style={styles.label}>Amount ({currencyMeta(baseCurrency).symbol})</Text>

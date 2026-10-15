@@ -5,13 +5,14 @@ import {
   Modal,
   Platform,
   ScrollView,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import DateTimeField from './DateTimeField';
+import RecurrenceRow from './RecurrenceRow';
+import CategoryPicker from './CategoryPicker';
 import VoiceRecorder from './VoiceRecorder';
 import VoicePlayer from './VoicePlayer';
 import SpeakToFillButton from './SpeakToFillButton';
@@ -61,6 +62,15 @@ import {
   resolvePayslipIncomeAmount,
 } from '../lib/payslipIncome';
 import { PAYSLIP_PDF_ALERTS, readPayslipPdf } from '../lib/readPayslipPdf';
+import { buildBillMessages, buildBillNote, normalizeBill, parseBillReply } from '../lib/parseBill';
+import { CATEGORY_SHEET_ENABLED, SCAN_UPLOAD_ENABLED } from '../constants';
+import { parseReceiptText } from '../lib/parseReceiptText';
+import { isQuickReadSupported, recognizeReceiptLines } from '../lib/receiptOcr';
+import { pickBillImage } from '../lib/readBillImage';
+import { callAiChat } from '../lib/aiInsights';
+import { isCursorProvider } from '../lib/cursorAgents';
+import { useEntitlements } from '../contexts/EntitlementContext';
+import { showLimitAlert } from './FeatureGate';
 import {
   CURRENCIES,
   currencyMeta,
@@ -328,7 +338,10 @@ export default function TransactionForm({
     fxRates,
     brokerDefaultsBySubCategory,
     brokers,
+    aiConfig,
+    aiApiKey,
   } = useSettings();
+  const { checkFeature } = useEntitlements();
   const { allTags, expenses, income, investments } = useTransactions();
   const { holdings } = usePortfolio();
   const { isPortfolioSymbolHidden } = useNetWorth();
@@ -606,6 +619,12 @@ export default function TransactionForm({
   const [pdfPhase, setPdfPhase] = useState('idle');
   const [pdfParseResult, setPdfParseResult] = useState(null);
   const [pdfFileName, setPdfFileName] = useState('');
+  const [billPhase, setBillPhase] = useState('idle'); // idle | reading
+  const [billResult, setBillResult] = useState(null);
+  // Quick read (on device, free) on phones; AI on web and desktop.
+  const [scanEngine, setScanEngine] = useState(() => (isQuickReadSupported() ? 'quick' : 'ai'));
+  // Raw OCR lines from the last Quick read, shown so a misread can be diagnosed.
+  const [ocrLines, setOcrLines] = useState(null);
 
   const canShowRecurring = !initialValues
     && !historicalOnly
@@ -886,6 +905,120 @@ export default function TransactionForm({
   const closePayslipReview = () => {
     setPdfPhase('idle');
     setPdfParseResult(null);
+  };
+
+  // Fills amount, date and note from a store bill photo. Nothing is saved
+  // here: the user checks the draft and presses Save.
+  const applyBillDraft = (bill) => {
+    if (bill.total != null) setAmount(String(bill.total));
+    if (bill.date) {
+      const [y, m, d] = bill.date.split('-').map(Number);
+      const now = new Date();
+      setDate(new Date(y, m - 1, d, now.getHours(), now.getMinutes()));
+    }
+    const note = buildBillNote(bill);
+    if (note) setNote((prev) => (prev.trim() ? prev : note));
+    setFormError(null);
+    setBillResult(bill);
+    setBillPhase('idle');
+    showToast('Bill scanned. Check the amount and date, then save.');
+  };
+
+  // On-device read: no AI key, no Pro plan, no network. Results are approximate,
+  // so the draft carries a disclaimer.
+  const handleQuickScanBill = async (source) => {
+    setBillPhase('reading');
+    setBillResult(null);
+    setOcrLines(null);
+    try {
+      const picked = await pickBillImage(source);
+      if (picked.cancelled) {
+        setBillPhase('idle');
+        return;
+      }
+      if (picked.error === 'camera-denied') {
+        setBillPhase('idle');
+        alertPayslipUser('Camera access is off', 'Allow camera access in Settings, or upload a photo instead.');
+        return;
+      }
+      if (picked.error) {
+        setBillPhase('idle');
+        alertPayslipUser('Could not read the photo', 'Try again with a clearer photo or pick another image.');
+        return;
+      }
+      const lines = await recognizeReceiptLines(picked.uri);
+      setOcrLines(lines);
+      const bill = parseReceiptText(lines);
+      if (!bill.ok) {
+        setBillPhase('idle');
+        alertPayslipUser('Could not read the bill', bill.error);
+        return;
+      }
+      applyBillDraft({ ...bill, engine: 'quick' });
+    } catch (e) {
+      setBillPhase('idle');
+      alertPayslipUser('Could not read the bill', e?.message ?? String(e));
+    }
+  };
+
+  const handleScanBill = async (source) => {
+    if (billPhase === 'reading') return;
+    if (scanEngine === 'quick') return handleQuickScanBill(source);
+    const access = checkFeature('ai');
+    if (!access.allowed) {
+      showLimitAlert('ai', access);
+      return;
+    }
+    if (!aiConfig?.enabled || !aiConfig?.consentAcceptedAt || !aiApiKey) {
+      alertPayslipUser(
+        'Turn on AI first',
+        'Scanning a bill sends the photo to your AI provider. Set up AI Insights in Settings and accept the privacy note, then try again.',
+      );
+      return;
+    }
+    if (isCursorProvider(aiConfig)) {
+      alertPayslipUser(
+        'Provider not supported',
+        'Bill scanning needs an OpenAI-compatible provider with image support. Cursor keys cannot read photos.',
+      );
+      return;
+    }
+
+    setBillPhase('reading');
+    setBillResult(null);
+    try {
+      const picked = await pickBillImage(source);
+      if (picked.cancelled) {
+        setBillPhase('idle');
+        return;
+      }
+      if (picked.error === 'camera-denied') {
+        setBillPhase('idle');
+        alertPayslipUser('Camera access is off', 'Allow camera access in Settings, or upload a photo instead.');
+        return;
+      }
+      if (picked.error) {
+        setBillPhase('idle');
+        alertPayslipUser('Could not read the photo', 'Try again with a clearer photo or pick another image.');
+        return;
+      }
+
+      const reply = await callAiChat(
+        { ...aiConfig, apiKey: aiApiKey },
+        buildBillMessages(picked),
+        { maxTokens: 2000 },
+      );
+      const bill = normalizeBill(parseBillReply(reply));
+      if (!bill.ok) {
+        setBillPhase('idle');
+        alertPayslipUser('Could not read the bill', bill.error);
+        return;
+      }
+      applyBillDraft(bill);
+    } catch (e) {
+      setBillPhase('idle');
+      alertPayslipUser('Could not scan the bill', e?.message ?? String(e));
+    }
   };
 
   const updatePayslipField = (key, value) => {
@@ -1391,6 +1524,81 @@ export default function TransactionForm({
         </>
       )}
 
+      {SCAN_UPLOAD_ENABLED && type === 'expense' && !initialValues?.id && (
+        <>
+          {isQuickReadSupported() ? (
+            <View style={styles.billEngineRow}>
+              {[
+                { id: 'quick', label: 'Quick read · free' },
+                { id: 'ai', label: 'Accurate read · AI' },
+              ].map((e) => {
+                const active = scanEngine === e.id;
+                return (
+                  <TouchableOpacity
+                    key={e.id}
+                    onPress={() => setScanEngine(e.id)}
+                    disabled={billPhase === 'reading'}
+                    style={[styles.billEngineChip, active && { borderColor: accentColor, backgroundColor: accentColor + '18' }]}
+                  >
+                    <Text style={[styles.billEngineChipText, active && { color: accentColor }]}>{e.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+          <View style={styles.billScanRow}>
+            <TouchableOpacity
+              style={[styles.uploadPdfBtn, styles.billScanBtn, billPhase === 'reading' && styles.uploadPdfBtnBusy]}
+              onPress={() => handleScanBill('camera')}
+              disabled={billPhase === 'reading'}
+              activeOpacity={0.7}
+            >
+              <AppIcon name="receipt" size={20} color={accentColor} strokeWidth={1.8} />
+              <Text style={[styles.uploadPdfBtnText, { color: accentColor }]}>Scan bill</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.uploadPdfBtn, styles.billScanBtn, billPhase === 'reading' && styles.uploadPdfBtnBusy]}
+              onPress={() => handleScanBill('library')}
+              disabled={billPhase === 'reading'}
+              activeOpacity={0.7}
+            >
+              <AppIcon name="upload" size={20} color={accentColor} strokeWidth={1.8} />
+              <Text style={[styles.uploadPdfBtnText, { color: accentColor }]}>Upload photo</Text>
+            </TouchableOpacity>
+          </View>
+          {billPhase === 'reading' ? (
+            <View style={styles.billReadingRow}>
+              <ActivityIndicator size="small" color={accentColor} />
+              <Text style={styles.uploadPdfBtnSub}>Reading bill…</Text>
+            </View>
+          ) : null}
+          {ocrLines ? (
+            <View style={styles.ocrPanel}>
+              <View style={styles.ocrPanelHead}>
+                <Text style={styles.ocrPanelTitle}>Raw text from the photo</Text>
+                <TouchableOpacity onPress={() => setOcrLines(null)} hitSlop={8}>
+                  <Text style={styles.payslipClearText}>Hide</Text>
+                </TouchableOpacity>
+              </View>
+              <Text selectable style={styles.ocrPanelText}>
+                {ocrLines.length ? ocrLines.join('\n') : '(no text found)'}
+              </Text>
+            </View>
+          ) : null}
+          {billResult ? (
+            <InfoCallout
+              icon="check"
+              title={`${billResult.merchant || 'Store bill'} · ${billResult.items.length} item${billResult.items.length === 1 ? '' : 's'}`}
+              body={[
+                billResult.engine === 'quick' ? 'Quick read is approximate. Check the amount against the bill.' : null,
+                ...billResult.warnings,
+              ].filter(Boolean).join(' ') || 'Review the amount, date and category, then save.'}
+              compact
+            />
+          ) : null}
+        </>
+      )}
+
       {(!tracksIncomePayslip || incomeEntryMode === 'manual')
         && !(historicalOnly && tracksMarketInstrument) && (
         <>
@@ -1413,6 +1621,7 @@ export default function TransactionForm({
 
       {tracksIncomePayslip && incomeEntryMode === 'payslip' && (
         <>
+          {SCAN_UPLOAD_ENABLED && (
           <TouchableOpacity
             style={[styles.uploadPdfBtn, pdfPhase === 'reading' && styles.uploadPdfBtnBusy]}
             onPress={handleUploadPayslip}
@@ -1438,6 +1647,7 @@ export default function TransactionForm({
               </>
             )}
           </TouchableOpacity>
+          )}
 
           {payslipForm ? (
             <View style={styles.payslipPanel}>
@@ -1515,6 +1725,23 @@ export default function TransactionForm({
         </>
       )}
 
+      {CATEGORY_SHEET_ENABLED ? (
+        <CategoryPicker
+          type={type}
+          categories={categories}
+          categoryId={categoryId}
+          subCategoryId={subCategoryId}
+          usage={type === 'expense' ? expenses : type === 'income' ? income : investments}
+          accentColor={accentColor}
+          onSelectCategory={(id) => changeCategory(id)}
+          onSelectSub={(id) => {
+            if (id == null) setSubCategoryId(null);
+            else if (id !== subCategoryId) handleSubCategoryPick(id);
+          }}
+          onSelectPair={(catId, subId) => changeCategory(catId, subId)}
+        />
+      ) : (
+        <>
       <Text style={styles.label}>Category</Text>
       <ChipRow
         items={categories}
@@ -1546,6 +1773,8 @@ export default function TransactionForm({
           /> : null}
         </>
       )}
+        </>
+      )}
 
       {type === 'expense' && (
         <View style={styles.splitSection}>
@@ -1564,6 +1793,21 @@ export default function TransactionForm({
               {splitRows.map((row, index) => (
                 <View key={row.id} style={styles.splitRow}>
                   <View style={styles.splitCategory}>
+                    {CATEGORY_SHEET_ENABLED ? (
+                      <CategoryPicker
+                        type={type}
+                        categories={categories}
+                        categoryId={row.categoryId}
+                        subCategoryId={null}
+                        label={null}
+                        showQuick={false}
+                        withSubs={false}
+                        accentColor={accentColor}
+                        onSelectCategory={(id) => setSplitRows((rows) => rows.map((item) => item.id === row.id ? { ...item, categoryId: id } : item))}
+                        onSelectSub={() => {}}
+                        onSelectPair={() => {}}
+                      />
+                    ) : (
                     <ChipRow
                       items={categories}
                       selectedId={row.categoryId}
@@ -1571,6 +1815,7 @@ export default function TransactionForm({
                       accentColor={accentColor}
                       emptyText="No categories"
                     />
+                    )}
                   </View>
                   <TextInput
                     style={styles.splitAmount}
@@ -2073,6 +2318,29 @@ export default function TransactionForm({
         maximumDate={new Date()}
       />
 
+      {canShowRecurring ? (
+        <RecurrenceRow
+          frequency={makeRecurring ? recurringFrequency : null}
+          onFrequencyChange={(id) => {
+            setMakeRecurring(id != null);
+            if (id != null) setRecurringFrequency(id);
+          }}
+          endDate={recurringEndEnabled ? (recurringEndDate ?? date) : null}
+          onEndDateChange={(d) => {
+            setRecurringEndEnabled(d != null);
+            setRecurringEndDate(d ?? null);
+          }}
+          options={recurringFrequencyOptions}
+          startDate={date}
+          accentColor={accentColor}
+          caption={
+            type === 'investment' && tracksMarketInstrument && instrument?.symbol
+              ? `SIP rule includes ${instrument.name || instrument.symbol}${investmentUnits.trim() ? ` · ${investmentUnits.trim()} units` : ''}`
+              : 'Auto-adds when you open the app.'
+          }
+        />
+      ) : null}
+
       <Text style={styles.label}>Note (optional)</Text>
       <TextInput
         style={styles.input}
@@ -2196,74 +2464,6 @@ export default function TransactionForm({
               {' · '}{selectedAccount.emoji} {selectedAccount.label}
             </Text>
           </View>
-        </View>
-      ) : null}
-
-      {canShowRecurring ? (
-        <View style={styles.recurringCard}>
-          <View style={styles.recurringToggleRow}>
-            <View style={styles.recurringToggleCopy}>
-              <Text style={styles.recurringToggleTitle}>Make this recurring</Text>
-              <Text style={styles.recurringToggleHint}>
-                Also create a rule — future entries auto-add when you open the app.
-              </Text>
-            </View>
-            <Switch
-              value={makeRecurring}
-              onValueChange={setMakeRecurring}
-              trackColor={{ false: themeColors.bg.surfaceAlt, true: accentColor + '88' }}
-              thumbColor={makeRecurring ? accentColor : themeColors.bg.surface}
-            />
-          </View>
-          {makeRecurring ? (
-            <View style={styles.recurringFields}>
-              <Text style={styles.label}>Repeat</Text>
-              <View style={styles.chipRow}>
-                {recurringFrequencyOptions.map((freq) => {
-                  const selected = recurringFrequency === freq.id;
-                  return (
-                    <TouchableOpacity
-                      key={freq.id}
-                      onPress={() => setRecurringFrequency(freq.id)}
-                      style={[styles.chip, selected && { backgroundColor: accentColor, borderColor: accentColor }]}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                        {freq.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <View style={styles.recurringEndRow}>
-                <Text style={styles.recurringEndLabel}>End date (optional)</Text>
-                <Switch
-                  value={recurringEndEnabled}
-                  onValueChange={(on) => {
-                    setRecurringEndEnabled(on);
-                    if (!on) setRecurringEndDate(null);
-                    else if (!recurringEndDate) setRecurringEndDate(date);
-                  }}
-                  trackColor={{ false: themeColors.bg.surfaceAlt, true: accentColor + '88' }}
-                  thumbColor={recurringEndEnabled ? accentColor : themeColors.bg.surface}
-                />
-              </View>
-              {recurringEndEnabled ? (
-                <DateTimeField
-                  label="Ends on"
-                  value={recurringEndDate ?? date}
-                  onChange={setRecurringEndDate}
-                  maximumDate={null}
-                />
-              ) : null}
-              {type === 'investment' && tracksMarketInstrument && instrument?.symbol ? (
-                <Text style={styles.recurringInvestHint}>
-                  SIP rule includes {instrument.name || instrument.symbol}
-                  {investmentUnits.trim() ? ` · ${investmentUnits.trim()} units` : ''}
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
         </View>
       ) : null}
 
@@ -3044,6 +3244,20 @@ const makeStyles = (c) => ({
     opacity: 0.7,
   },
   uploadPdfBtnEmoji: { width: 26, alignItems: 'center' },
+  billScanRow: { flexDirection: 'row', gap: 10 },
+  billEngineRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  billEngineChip: {
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: c.border.subtle,
+  },
+  billEngineChipText: { fontSize: 12, fontWeight: '700', color: c.text.primary },
+  ocrPanel: {
+    marginBottom: 10, padding: 10, borderRadius: 10, backgroundColor: c.bg.surfaceAlt,
+  },
+  ocrPanelHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  ocrPanelTitle: { fontSize: 12, fontWeight: '800', color: c.text.secondary },
+  ocrPanelText: { fontSize: 12, lineHeight: 17, color: c.text.primary, fontFamily: 'monospace' },
+  billScanBtn: { flex: 1, gap: 8, justifyContent: 'center' },
+  billReadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   uploadPdfBtnText: {
     fontSize: 13,
     fontWeight: '800',
@@ -3185,23 +3399,6 @@ const makeStyles = (c) => ({
   savePreviewCopy: { flex: 1, minWidth: 0 },
   savePreviewLabel: { color: c.text.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
   savePreviewValue: { color: c.text.primary, fontSize: 12, fontWeight: '700', lineHeight: 17, marginTop: 2 },
-  recurringCard: {
-    marginTop: 14,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: c.bg.surfaceAlt,
-    borderWidth: 1,
-    borderColor: c.border.subtle,
-    gap: 10,
-  },
-  recurringToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  recurringToggleCopy: { flex: 1, minWidth: 0 },
-  recurringToggleTitle: { color: c.text.primary, fontSize: 14, fontWeight: '800' },
-  recurringToggleHint: { color: c.text.secondary, fontSize: 11, lineHeight: 16, marginTop: 3 },
-  recurringFields: { gap: 8, paddingTop: 4 },
-  recurringEndRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
-  recurringEndLabel: { color: c.text.secondary, fontSize: 12, fontWeight: '600' },
-  recurringInvestHint: { color: c.text.muted, fontSize: 11, lineHeight: 16, marginTop: 4 },
   submitActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   submitSecondary: { flex: 1 },
   submitPrimary: { flex: 1 },

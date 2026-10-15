@@ -557,8 +557,19 @@ const CATEGORY_MIGRATION_KEYS = [
   'add_household_events_subs_v17',
   'add_events_jewellery_sub_v18',
   'add_others_subcategory_v19',
+  'rename_health_to_healthcare_v20',
 ];
-const CURRENT_CATEGORY_MIGRATION = 'add_others_subcategory_v19';
+const CURRENT_CATEGORY_MIGRATION = 'rename_health_to_healthcare_v20';
+
+// Updates a default category only while it still has the old default label and
+// emoji, so anything the user has already edited is left alone.
+function updateDefaultCategory(list, categoryId, from, to) {
+  return list.map((c) => (
+    c.id === categoryId && c.label === from.label && c.emoji === from.emoji
+      ? { ...c, label: to.label, emoji: to.emoji }
+      : c
+  ));
+}
 
 // Persist categories THEN the migration flag, IN THAT ORDER. Ordering
 // matters because of the crash-window (BK-M3):
@@ -934,6 +945,13 @@ export function SettingsProvider({ children }) {
           expense    = ensureOthersSubcategories(expense);
           income     = ensureOthersSubcategories(income);
           investment = ensureOthersSubcategories(investment);
+          // v20 → "Health" is now "Healthcare" with a stethoscope. The id stays
+          // 'health' so existing transactions keep their category.
+          expense    = updateDefaultCategory(
+            expense, 'health',
+            { label: 'Health', emoji: '💊' },
+            { label: 'Healthcare', emoji: '🩺' },
+          );
           for (const key of CATEGORY_MIGRATION_KEYS) migApplied.add(key);
           // BK-M3 fix: persist categories BEFORE the migration flag so
           // a crash between the two writes is recoverable (merge is

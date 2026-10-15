@@ -13,8 +13,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveTextFile } from '../lib/saveFile';
 import { pickTextFile } from '../lib/openFile';
-import { reloadApp } from '../lib/reload';
-import { STORAGE_KEYS, AI_PROVIDER_PRESETS } from '../constants';
+import { STORAGE_KEYS, AI_PROVIDER_PRESETS, DEFAULT_AI_CONFIG } from '../constants';
 import { useSettings } from '../contexts/SettingsContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { usePortfolio } from '../contexts/PortfolioContext';
@@ -25,17 +24,18 @@ import { useTransfers } from '../contexts/TransfersContext';
 import { useGoals } from '../contexts/GoalsContext';
 import { useInsurancePolicies } from '../contexts/InsurancePoliciesContext';
 import { useLoans } from '../contexts/LoansContext';
+import { useAiInsights } from '../contexts/AiInsightsContext';
 import {
   useTheme,
   useThemedStyles,
   useThemeColors,
   FONT_OPTIONS,
+  DEFAULT_FONT_ID,
 } from '../contexts/ThemeContext';
 import buildCsv from '../lib/exportCsv';
-import { CURRENCIES, currencyMeta, isBaseCurrencyLocked } from '../lib/currency';
+import { DEFAULT_BASE_CURRENCY } from '../lib/currency';
 import { spacing } from '../lib/theme';
 import { withAlpha } from '../lib/colorAlpha';
-import { InfoCallout, StatusBadge } from '../components/UiPrimitives';
 import {
   computeVoiceNotesUsage,
   deleteOldVoiceNotes,
@@ -194,53 +194,65 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
     // this backup can honour "already merged" state and skip redundant
     // work.
     settingsMigrations,
+    restoreState: restoreSettings,
   } = useSettings();
 
   const {
     expenses,
     income,
     investments,
+    restoreState: restoreTransactions,
   } = useTransactions();
 
   const {
     holdings,
     pricesUpdatedAt,
+    restoreState: restorePortfolio,
   } = usePortfolio();
 
   const {
     assets,
     liabilities,
     history: netWorthHistory,
+    restoreState: restoreNetWorth,
   } = useNetWorth();
 
   const {
     loans,
     customLoanKinds,
+    restoreState: restoreLoans,
   } = useLoans();
 
   const {
     rules: recurringRules,
+    restoreState: restoreRecurring,
   } = useRecurring();
 
   const {
     budgets,
+    restoreState: restoreBudgets,
   } = useBudgets();
 
   const {
     transfers,
+    restoreState: restoreTransfers,
   } = useTransfers();
 
   const {
     goals,
+    restoreState: restoreGoals,
   } = useGoals();
 
   const {
     policies: insurancePolicies,
+    restoreState: restoreInsurancePolicies,
   } = useInsurancePolicies();
+
+  const { clearCache: clearAiInsightsCache } = useAiInsights();
 
   const { applyRestore, loadDemoData } = useDemoRestore();
 
-  const { mode: themeMode, fontId } = useTheme();
+  const { mode: themeMode, fontId, setThemeMode, setFontId } = useTheme();
   // BK-M2: include theme mode + font in backup payload. Lightweight
   // user preferences — silly to make the user re-pick on every device.
 
@@ -522,10 +534,11 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
 
   // ---- Reset everything -------------------------------------------------
   //
-  // Nuclear option: wipes every AsyncStorage key we own, then reloads the
-  // app so all contexts re-hydrate from empty storage (and re-seed their
-  // defaults where they have any — SettingsContext restores default
-  // categories/accounts, for instance).
+  // Nuclear option: wipes every AsyncStorage key we own, then pushes the
+  // cleared state directly into each context (no app reload needed — see
+  // performResetFinancialData/performResetEverything below) so contexts
+  // re-seed their defaults where they have any — SettingsContext restores
+  // default categories/accounts, for instance.
   //
   // Guarded behind a destructive Alert so a stray tap can't obliterate
   // years of data. The alert copy names exactly what gets deleted, and
@@ -574,17 +587,36 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
   // owns its own reset flow behind an overflow menu, so this helper
   // was removed along with the three <Section> blocks that called it.
 
-  const reloadAfterReset = () => {
-    const reloaded = reloadApp();
-    if (!reloaded) {
-      Alert.alert('Reset complete', 'Data cleared. Please close and reopen the app to finish.');
-    }
-  };
-
+  // Push the cleared state into every affected context, the same way
+  // Restore / Load-demo do (see hooks/useDemoRestore.js), instead of
+  // wiping AsyncStorage and asking for an app reload. `reloadApp()`
+  // silently returned false in a standalone build without expo-updates
+  // (no DevSettings, no Updates module), which left the "Reset complete
+  // — close and reopen the app" fallback alert as the ONLY visible
+  // effect: storage was already wiped, but every context kept serving
+  // its stale in-memory copy until the user force-closed the app —
+  // exactly the "reset does nothing until I restart" symptom.
+  //
+  // PortfolioContext.restoreState bails out entirely when `holdings` is
+  // missing from the payload (it treats that as "nothing to restore"),
+  // so it needs an explicit `{ holdings: [] }` rather than `{}`.
   const performResetFinancialData = async () => {
     try {
       await AsyncStorage.multiRemove(FINANCIAL_DATA_KEYS);
-      reloadAfterReset();
+      await clearAiInsightsCache();
+      restoreTransactions({ expenses: [], income: [], investments: [] });
+      restorePortfolio({ holdings: [], pricesUpdatedAt: null });
+      restoreNetWorth({ assets: [], liabilities: [], netWorthHistory: [] });
+      restoreRecurring({ rules: [] });
+      restoreBudgets({ budgets: [] });
+      restoreTransfers({ transfers: [] });
+      restoreGoals({ goals: [] });
+      restoreInsurancePolicies({ insurancePolicies: [] });
+      // customLoanKinds deliberately omitted — like accounts/categories,
+      // loan kinds are master data and FINANCIAL_DATA_KEYS doesn't wipe
+      // them from storage, so leave them alone in memory too.
+      restoreLoans({ loans: [] });
+      Alert.alert('Reset complete', 'Financial data has been cleared.');
     } catch (e) {
       console.warn('Financial data reset failed:', e);
       Alert.alert('Reset failed', e.message ?? 'Unknown error');
@@ -596,13 +628,28 @@ export default function AdvancedSettingsScreen({ navigation, route }) {
       // Delete every known key. multiRemove is atomic-ish on both iOS and
       // Android — either all keys go, or the whole operation fails.
       await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
-      await setAiConfig({ apiKey: '' });
+      await clearAiInsightsCache();
+      await setAiConfig({ ...DEFAULT_AI_CONFIG, apiKey: '' });
 
-      // Reload the app so every context re-runs its hydration effect
-      // against the now-empty storage. If we skipped the reload, contexts
-      // would keep serving their in-memory (now-stale) copies until the
-      // user manually closed and reopened the app.
-      reloadAfterReset();
+      restoreTransactions({ expenses: [], income: [], investments: [] });
+      restorePortfolio({ holdings: [], pricesUpdatedAt: null });
+      restoreNetWorth({ assets: [], liabilities: [], netWorthHistory: [] });
+      restoreRecurring({ rules: [] });
+      restoreBudgets({ budgets: [] });
+      restoreTransfers({ transfers: [] });
+      restoreGoals({ goals: [] });
+      restoreInsurancePolicies({ insurancePolicies: [] });
+      restoreLoans({ loans: [], customLoanKinds: [] });
+      // Categories/accounts/brokers reset to app defaults automatically
+      // when their section is omitted from the payload (see
+      // SettingsContext.restoreState) — base currency does NOT, by
+      // design (a restore of a backup with no currency section keeps
+      // the device's current base), so it's forced back explicitly here.
+      restoreSettings({ baseCurrency: DEFAULT_BASE_CURRENCY, fxRates: {} });
+      setThemeMode('system');
+      setFontId(DEFAULT_FONT_ID);
+
+      Alert.alert('Reset complete', 'All data has been cleared and defaults restored.');
     } catch (e) {
       console.warn('Reset failed:', e);
       Alert.alert('Reset failed', e.message ?? 'Unknown error');
@@ -1548,256 +1595,12 @@ export function WhisperKeySection({ apiKey, onSave, keyEncrypted }) {
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
-// CurrencySection — F9 Tier 2 UI:
-//   * Base currency selector (the currency every aggregate reports in).
-//   * FX rate table (manual entry). Rows the app has ever seen used as a
-//     transaction / account / asset currency need a rate; a missing one
-//     just means base-currency identity (rate 1.0).
-//
-// Behaviour notes:
-//   * Base changes never rewrite historical `*InBase` snapshots. Rows
-//     stay at whatever they were frozen at; only new rows use the new
-//     base going forward. A soft explainer surfaces this.
-//   * Rate updates likewise don't retroactively affect past rows.
-//   * The base-currency row is not editable (it's always 1:1 with itself).
-// ----------------------------------------------------------------------------
-export function CurrencySection({
-  baseCurrency,
-  fxRates,
-  onChangeBase,
-  onSetRate,
-  onDeleteRate,
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const themeColors = useThemeColors();
-  const [addingCode, setAddingCode] = useState(null); // e.g. 'USD'
-  const [addingRate, setAddingRate] = useState('');
-
-  // The base can't change under existing entries (see isBaseCurrencyLocked).
-  const { expenses: ledgerExpenses, income: ledgerIncome, investments: ledgerInvestments } = useTransactions();
-  const { transfers: ledgerTransfers } = useTransfers();
-  const { loans: ledgerLoans } = useLoans();
-  const baseIsLocked = isBaseCurrencyLocked({
-    expenses: ledgerExpenses,
-    income: ledgerIncome,
-    investments: ledgerInvestments,
-    transfers: ledgerTransfers,
-    loans: ledgerLoans,
-  });
-
-  const sortedRateRows = Object.entries(fxRates ?? {})
-    .filter(([code]) => code !== baseCurrency)
-    .sort(([a], [b]) => a.localeCompare(b));
-
-  // Currencies not yet in the rate table (candidates for "Add rate").
-  const availableToAdd = CURRENCIES
-    .map((c) => c.code)
-    .filter((code) => code !== baseCurrency && !(code in (fxRates ?? {})));
-
-  const baseMeta = currencyMeta(baseCurrency);
-
-  const commitRate = () => {
-    if (!addingCode) return;
-    const res = onSetRate?.(addingCode, addingRate);
-    if (res?.ok) {
-      setAddingCode(null);
-      setAddingRate('');
-    } else {
-      Alert.alert(
-        'Invalid rate',
-        'Enter a positive number. E.g. for USD → INR, use 88.4.',
-      );
-    }
-  };
-
-  return (
-    <View style={styles.section}>
-      {/* Compact header: the multi-line explainer + FX-behaviour warning
-          that used to sit here moved into the InfoChip so the section's
-          resting state is a single-line title. The destructive base-
-          change and delete-rate paths still surface their own
-          confirmation Alerts before touching data. */}
-      <View style={styles.sectionHeaderRow}>
-        <Text style={styles.sectionTitle}>Currency</Text>
-        <InfoChip
-          title="About Currency"
-          body={
-            'BASE CURRENCY\n'
-            + 'Every dashboard total, chart, and report is expressed in this. Foreign-currency rows keep their native amount too — you\'ll see both on the row.\n\n'
-            + 'The base can only be changed while you have no transactions, transfers or loans: every saved total is stored in it, so switching later would relabel your amounts rather than convert them. To switch, back up, reset, then set the new base before adding entries.\n\n'
-            + 'FX RATES\n'
-            + 'Set the current exchange rate for each foreign currency you use. These prefill the rate field when you add a transaction or foreign account.\n\n'
-            + 'Updating a rate here does NOT retroactively re-value existing rows (their per-row rate is frozen at add time — matches how bank statements behave).'
-          }
-        />
-      </View>
-
-      {/* ---- Base currency picker ---- */}
-      <Text style={styles.pickerLabel}>Base currency</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.currencyRow}
-      >
-        {CURRENCIES.map((c) => {
-          const selected = baseCurrency === c.code;
-          return (
-            <TouchableOpacity
-              key={c.code}
-              onPress={() => {
-                if (selected) return;
-                if (baseIsLocked) {
-                  Alert.alert(
-                    'Base currency is locked',
-                    `Your entries are saved in ${baseCurrency}, and every total is added up in it. Switching to ${c.code} now would relabel those amounts instead of converting them.
-
-To change it: back up your data, reset in Settings → Advanced, then set the new base currency before adding entries.`,
-                  );
-                  return;
-                }
-                Alert.alert(
-                  'Change base currency?',
-                  `New totals and entries will use ${c.code}.`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: `Use ${c.code}`, onPress: () => onChangeBase?.(c.code) },
-                  ],
-                );
-              }}
-              style={[styles.currencyChip, selected && styles.currencyChipActive]}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.currencyChipCode, selected && styles.currencyChipCodeActive]}>
-                {c.code}
-              </Text>
-              <Text style={styles.currencyChipSymbol}>{c.symbol}</Text>
-              {selected ? <StatusBadge label="Base" tone="info" icon="check" /> : null}
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* ---- FX rate table ----
-          Standalone help paragraph removed (moved to InfoChip above).
-          The section header ⓘ covers both base-currency and FX-rate
-          semantics in one place, so users looking for context find it
-          predictably at the top. */}
-      <Text style={[styles.pickerLabel, { marginTop: 16 }]}>
-        FX rates (1 unit → {baseCurrency})
-      </Text>
-
-      {sortedRateRows.length === 0 && (
-        <InfoCallout
-          icon="repeat"
-          title="No foreign rates"
-          body="Add only the currencies you use."
-          compact
-        />
-      )}
-
-      {sortedRateRows.map(([code, row]) => {
-        const meta = currencyMeta(code);
-        return (
-          <View key={code} style={styles.fxRow}>
-            <Text style={styles.fxCode}>{code}</Text>
-            <Text style={styles.fxSymbol}>{meta.symbol}</Text>
-            <Text style={styles.fxRate}>
-              1 = {baseMeta.symbol} {Number(row.rate).toLocaleString('en-IN', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 4,
-              })}
-            </Text>
-            <TouchableOpacity
-              hitSlop={8}
-              onPress={() => {
-                setAddingCode(code);
-                setAddingRate(String(row.rate));
-              }}
-              style={styles.itemEdit}
-            >
-              <AppIcon name="edit-3" size={13} color={themeColors.text.secondary} strokeWidth={2} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              hitSlop={8}
-              onPress={() =>
-                Alert.alert(
-                  `Delete ${code} rate?`,
-                  `Existing ${code} entries stay unchanged. New entries will need a rate.`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Delete', style: 'destructive', onPress: () => onDeleteRate?.(code) },
-                  ],
-                )
-              }
-              style={styles.itemDelete}
-            >
-              <AppIcon name="x" size={13} color={themeColors.text.secondary} strokeWidth={2.2} />
-            </TouchableOpacity>
-          </View>
-        );
-      })}
-
-      {addingCode && (
-        <View style={styles.fxAddCard}>
-          <Text style={styles.fxAddTitle}>
-            {addingCode} → {baseCurrency}
-          </Text>
-          <View style={styles.fxEquationRow}>
-            <Text style={styles.fxEquationText}>1 {addingCode} =</Text>
-            <TextInput
-              style={[styles.addInput, styles.fxEquationInput]}
-              keyboardType="decimal-pad"
-              value={addingRate}
-              onChangeText={setAddingRate}
-              placeholder="88.40"
-              placeholderTextColor={themeColors.text.muted}
-              autoFocus
-            />
-            <Text style={styles.fxEquationText}>{baseCurrency}</Text>
-          </View>
-          <View style={styles.formButtonsRow}>
-            <TouchableOpacity
-              onPress={() => { setAddingCode(null); setAddingRate(''); }}
-              style={[styles.formBtn, styles.formBtnCancel]}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.formBtnCancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={commitRate}
-              style={[styles.formBtn, styles.formBtnAdd]}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.formBtnAddText}>Save rate</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {!addingCode && availableToAdd.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.currencyRow}
-        >
-          {availableToAdd.map((code) => (
-            <TouchableOpacity
-              key={code}
-              onPress={() => { setAddingCode(code); setAddingRate(''); }}
-              style={styles.currencyChip}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.currencyChipCode}>+ {code}</Text>
-              <Text style={styles.currencyChipSymbol}>
-                {currencyMeta(code).symbol}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-    </View>
-  );
-}
+// CurrencySection used to live here (F9 Tier 2 UI: base currency selector +
+// FX rate table). Moved to screens/SettingsCurrencyScreen.js in the same
+// "v4 polish pass" that already pulled Categories/Accounts/Brokers out of
+// this file — see that file for the behaviour notes (base changes never
+// rewrite historical `*InBase` snapshots, rate updates don't retroactively
+// affect past rows, etc.) and the redesigned UI.
 
 // ----------------------------------------------------------------------------
 // (removed in v4 polish pass) All of these lived inline in Settings and

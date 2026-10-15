@@ -43,6 +43,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { STORAGE_KEYS } from '../constants';
 import { useSettings }      from './SettingsContext';
+import { useEntitlements }  from './EntitlementContext';
+import { checkAccess, limitMessage } from '../lib/entitlements';
 import { useTransactions }  from './TransactionsContext';
 import { useBudgets }       from './BudgetContext';
 import { useGoals }         from './GoalsContext';
@@ -67,6 +69,7 @@ export function AiInsightsProvider({ children }) {
     fxRates,
     brokers,
   } = useSettings();
+  const { isPro }                                       = useEntitlements();
   const { expenses, income, investments }               = useTransactions();
   const { budgets }                                     = useBudgets();
   const { goals }                                       = useGoals();
@@ -173,6 +176,10 @@ export function AiInsightsProvider({ children }) {
   const generate = useCallback(async () => {
     if (loading) return;
 
+    if (!isPro) {
+      setError(limitMessage('ai', checkAccess('free', 'ai')));
+      return;
+    }
     if (!aiConfig?.enabled) {
       setError('AI Insights is turned off. Enable it in Settings → AI Insights.');
       return;
@@ -233,7 +240,7 @@ export function AiInsightsProvider({ children }) {
       // hit a completed controller.
       if (abortRef.current === ctrl) abortRef.current = null;
     }
-  }, [aiConfig, aiApiKey, summary, loading]);
+  }, [aiConfig, aiApiKey, summary, loading, isPro]);
 
   // ---- Clear-cache utility (used by "Sign out AI" / privacy revoke) ---
   const clearCache = useCallback(async () => {

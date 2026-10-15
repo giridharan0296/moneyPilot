@@ -9,7 +9,7 @@
 // one screen. The filter still drives Transactions and Reports.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useCallback, useMemo, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
   ScrollView,
@@ -42,6 +42,7 @@ import {
   netWorthChange,
   topCategoriesThisMonth,
 } from '../lib/homeSummary';
+import { buildNetWorthSeriesFromData, dayKey } from '../lib/netWorthHistory';
 import { NAV } from '../lib/nextActions';
 import useHomeSignals from '../hooks/useHomeSignals';
 import useLoadProblems from '../hooks/useLoadProblems';
@@ -119,8 +120,13 @@ export default function DashboardScreen({ route }) {
   });
   const showSetupChecklist = ready && !setupDismissed && !setupComplete;
 
+  // The tour opens by itself once per app launch while setup is incomplete.
+  // Closing it only closes it for now — it doesn't reopen on every tab focus.
+  const autoOpenedRef = useRef(false);
   useEffect(() => {
+    if (autoOpenedRef.current) return;
     if (isFocused && ready && onboardingReady && !setupDismissed && !setupComplete) {
+      autoOpenedRef.current = true;
       setOnboardingVisible(true);
     }
   }, [isFocused, ready, onboardingReady, setupDismissed, setupComplete]);
@@ -137,6 +143,10 @@ export default function DashboardScreen({ route }) {
     setOnboardingStep(safeStep);
     AsyncStorage.setItem(STORAGE_KEYS.guided_onboarding_step, String(safeStep)).catch(() => {});
   }, []);
+
+  // Close the tour for this visit only. Nothing is persisted, so the checklist
+  // and the tour come back on the next launch until "Don't show again".
+  const closeOnboarding = useCallback(() => setOnboardingVisible(false), []);
 
   const dismissSetupChecklist = useCallback(() => {
     setSetupDismissed(true);
@@ -229,9 +239,35 @@ export default function DashboardScreen({ route }) {
     [expenses, fxRates, baseCurrency, findCategory, themeColors, isFocused],
   );
 
+  // Trend built from the ledger's own dates (see buildNetWorthSeriesFromData),
+  // not from the days the app happened to be opened. The live figure is
+  // appended as today's point so the line ends at the number on screen.
+  const nwHistory = useMemo(() => {
+    const series = buildNetWorthSeriesFromData({
+      accounts, income, expenses, investments, transfers,
+      assets: netWorth.assets,
+      liabilities: netWorth.liabilities,
+      fxRates, baseCurrency,
+    });
+    if (!hasNetWorthData) return series;
+    const now = new Date();
+    const today = dayKey(now);
+    return [
+      ...series.filter((p) => dayKey(p.at) !== today),
+      {
+        at: now.toISOString(),
+        totalAssets: netWorth.summary.totalAssets,
+        totalLiabilities: netWorth.summary.totalLiabilities,
+        netWorth: netWorth.summary.netWorth,
+      },
+    ];
+  }, [
+    accounts, income, expenses, investments, transfers, fxRates, baseCurrency,
+    netWorth.assets, netWorth.liabilities, netWorth.summary, hasNetWorthData, isFocused,
+  ]);
   const nwChange = useMemo(
-    () => (hasNetWorthData ? netWorthChange(netWorth.history, netWorth.summary.netWorth) : null),
-    [netWorth.history, netWorth.summary.netWorth, hasNetWorthData, isFocused],
+    () => (hasNetWorthData ? netWorthChange(nwHistory, netWorth.summary.netWorth) : null),
+    [nwHistory, netWorth.summary.netWorth, hasNetWorthData, isFocused],
   );
   // Latest activity across everything, newest first, excluding future-dated rows.
   const recentActivity = useMemo(() => {
@@ -351,7 +387,8 @@ export default function DashboardScreen({ route }) {
           showAddMenu();
         }}
         onFinish={markSetupFinished}
-        onDismiss={dismissSetupChecklist}
+        onDismiss={closeOnboarding}
+        onHideChecklist={dismissSetupChecklist}
       />
       <ScrollView style={styles.root} contentContainerStyle={styles.container}>
         {loadNotice ? (
@@ -425,7 +462,7 @@ export default function DashboardScreen({ route }) {
             assets={netWorth.summary.totalAssets}
             liabilities={netWorth.summary.totalLiabilities}
             change={nwChange}
-            netWorthHistory={netWorth.history}
+            netWorthHistory={nwHistory}
             baseCurrency={baseCurrency}
             onPress={() => go(NAV.netWorth)}
           />

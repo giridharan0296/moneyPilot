@@ -10,15 +10,17 @@ import { moneyText, spacing } from '../../lib/theme';
 
 // ----------------------------------------------------------------------------
 // MonthTiles — this month at a glance: Saved · Spent · Invested.
-// "Saved" is income − expenses (see lib/monthClose.js), so the rate here is the
-// same number the AI summary and Reports headline use.
+// "Saved" here is income that was neither spent nor invested
+// (month.keptAfterInvesting), so the three tiles add up to income. Investing
+// moves cash out of Saved. The AI summary and Reports headline still use
+// income − spent (month.saved); that figure is not shown on this card.
 // ----------------------------------------------------------------------------
 export default function MonthTiles({ month, lastMonth, pace, baseCurrency, onOpenReports }) {
   const styles = useThemedStyles(makeStyles);
   const colors = useThemeColors();
   const money = (n, opts) => formatMoneyDisplay(n, baseCurrency, { compactFrom: 1e5, ...opts });
 
-  const savedColor = month.saved >= 0 ? colors.accent.income : colors.accent.expense;
+  const savedColor = month.keptAfterInvesting >= 0 ? colors.accent.income : colors.accent.expense;
 
   // Spending up is bad (red), down is good (green).
   const paceUp = pace ? pace.delta > 0 : false;
@@ -38,9 +40,9 @@ export default function MonthTiles({ month, lastMonth, pace, baseCurrency, onOpe
           <Tile
             icon="wallet"
             label="Saved"
-            value={money(month.saved)}
+            value={money(month.keptAfterInvesting)}
             color={savedColor}
-            sub={month.savingsRate != null ? `${Math.round(month.savingsRate)}% of income` : 'No income yet'}
+            sub={month.keptRate != null ? `${Math.round(month.keptRate)}% of income` : 'No income yet'}
             subColor={colors.text.secondary}
           />
           <Tile

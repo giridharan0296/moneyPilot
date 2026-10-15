@@ -1,6 +1,6 @@
-# FinanceIQ — User Guide
+# MoneyPilot — User Guide
 
-FinanceIQ is an app for recording daily money activity, tracking investments and net worth, planning goals, and reviewing reports. It supports Indian financial-year reporting and multiple currencies.
+MoneyPilot is an app for recording daily money activity, tracking investments and net worth, planning goals, and reviewing reports. It supports Indian financial-year reporting and multiple currencies.
 
 > This app is a tracking and planning tool, not financial, tax, or investment advice.
 

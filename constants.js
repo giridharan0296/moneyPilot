@@ -9,7 +9,7 @@
 // ----------------------------------------------------------------------------
 
 /** Home-screen / window title — plain label, not a product codename. */
-export const APP_DISPLAY_NAME = 'FinanceIQ';
+export const APP_DISPLAY_NAME = 'MoneyPilot';
 
 export const STORAGE_KEYS = {
   // Transaction lists
@@ -34,6 +34,7 @@ export const STORAGE_KEYS = {
   setup_checklist_dismissed:      '@financeApp/onboarding/setupDismissed/v1',
   setup_currency_confirmed:       '@financeApp/onboarding/currencyConfirmed/v1',
   guided_onboarding_step:         '@financeApp/onboarding/guidedStep/v1',
+  welcome_screen_seen:            '@financeApp/onboarding/welcomeSeen/v1',
   ui_collapsible_sections:        '@financeApp/ui/collapsibleSections/v1',
   dashboard_layout:               '@financeApp/ui/dashboardLayout/v1',
 
@@ -94,6 +95,10 @@ export const STORAGE_KEYS = {
   //                   All rates express "1 unit foreign in base".
   base_currency:                  '@financeApp/currency/base/v1',
   fx_rates:                       '@financeApp/currency/fxRates/v1',
+
+  // Jeweller's own 22K ₹/g, typed by the user. When set it replaces the
+  // COMEX-derived gold reference for today's valuations. { rate22k, updatedAt }
+  manual_gold_rate:               '@financeApp/metals/manualGoldRate/v1',
 
   // Broker auto-suggestion memory: which broker was last used per
   // investment sub-category. Shape: { [subCategoryId]: brokerId }.
@@ -159,6 +164,15 @@ export const STORAGE_KEYS = {
   //   { insights: [...], generatedAt: ISO, provider, model }
   ai_insights_cache:              '@financeApp/ai/insightsCache/v1',
 
+  // Plan tier ('free' | 'pro'). Missing means Free. Written by billing once
+  // store purchases are wired up; see contexts/EntitlementContext.js.
+  entitlement_plan:               '@financeApp/entitlements/plan/v1',
+
+  // Weekly usage counters for soft plan limits. Shape:
+  //   { week: 'YYYY-Www', counts: { imports, calculators } }
+  // Counts from an older week are discarded (lib/entitlements.js).
+  entitlement_usage:              '@financeApp/entitlements/usage/v1',
+
   // Google Sign-In session blob (user profile + token metadata). Stored in
   // SecureStore via lib/secureKeyStore — not AsyncStorage.
   auth_session_secret:            '@financeApp/secrets/authSession/v1',
@@ -188,6 +202,14 @@ export const AI_PROVIDER_PRESETS = {
     model:   'gpt-4o-mini',
     keyHint: 'sk-...',
     docs:    'https://platform.openai.com/api-keys',
+  },
+  anthropic: {
+    label:   'Anthropic (Claude)',
+    baseUrl: 'https://api.anthropic.com/v1',
+    // Haiku is the cheap, fast default and reads images. Any Claude model ID works.
+    model:   'claude-haiku-4-5-20251001',
+    keyHint: 'sk-ant-...',
+    docs:    'https://console.anthropic.com/settings/keys',
   },
   groq: {
     label:   'Groq',
@@ -425,7 +447,7 @@ const EXPENSE_CATEGORY_SEEDS = [
     ],
   },
   {
-    id: 'health', label: 'Health', emoji: '💊', color: '#ef4444',
+    id: 'health', label: 'Healthcare', emoji: '🩺', color: '#ef4444',
     subCategories: [
       { id: 'health_doctor',      label: 'Doctor',       emoji: '👨‍⚕️', color: '#ef4444' },
       { id: 'health_pharmacy',    label: 'Pharmacy',     emoji: '💊', color: '#dc2626' },
@@ -909,3 +931,11 @@ export const COLOR_PALETTE = [
   '#84cc16', '#10b981', '#14b8a6', '#0ea5e9',
   '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
 ];
+
+// Image scan / upload entry points (expense bill scan, income payslip upload,
+// Receipts to Transactions). Switched off for now; flip to true to restore.
+export const SCAN_UPLOAD_ENABLED = false;
+
+// Compact category picker (summary row + quick picks + searchable sheet).
+// Set to false to go back to the full wrapping chip rows.
+export const CATEGORY_SHEET_ENABLED = true;

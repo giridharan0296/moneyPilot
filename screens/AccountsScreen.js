@@ -39,6 +39,8 @@ import FormScreen from '../components/FormScreen';
 import { StatusBadge } from '../components/UiPrimitives';
 import DateTimePicker from '../components/DatePicker';
 import { useSettings } from '../contexts/SettingsContext';
+import { useEntitlements } from '../contexts/EntitlementContext';
+import { showLimitAlert } from '../components/FeatureGate';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
 import { useTransfers } from '../contexts/TransfersContext';
@@ -77,6 +79,7 @@ export default function AccountsScreen({ navigation }) {
   } = useSettings();
   const { income, expenses, investments } = useTransactions();
   const { transfers } = useTransfers();
+  const { checkFeature } = useEntitlements();
 
   const [addingGroup, setAddingGroup] = useState(false);
 
@@ -114,6 +117,14 @@ export default function AccountsScreen({ navigation }) {
     return { groups: accountGroups?.length ?? 0, accounts: acctCount };
   }, [accountGroups, accountsByGroup]);
 
+  // Free plan caps the total accounts held. Shows the limit message and
+  // returns false when the cap is reached.
+  const canAddAccount = () => {
+    const access = checkFeature('accounts', totals.accounts);
+    if (!access.allowed) showLimitAlert('accounts', access);
+    return access.allowed;
+  };
+
   return (
     <FormScreen
       style={styles.root}
@@ -140,6 +151,7 @@ export default function AccountsScreen({ navigation }) {
             key={group.id}
             group={group}
             accounts={accountsByGroup?.[group.id] ?? []}
+            canAddAccount={canAddAccount}
             onAddAccount={addAccount}
             onDeleteAccount={deleteAccount}
             onUpdateAccount={updateAccount}
@@ -183,6 +195,7 @@ export default function AccountsScreen({ navigation }) {
 function GroupCard({
   group,
   accounts,
+  canAddAccount,
   onAddAccount,
   onDeleteAccount,
   onUpdateAccount,
@@ -326,7 +339,9 @@ function GroupCard({
           </TouchableOpacity>
           {!addingAccount ? (
             <TouchableOpacity
-              onPress={() => setAddingAccount(true)}
+              onPress={() => {
+                if (canAddAccount()) setAddingAccount(true);
+              }}
               hitSlop={6}
               style={[
                 styles.groupAddBtn,

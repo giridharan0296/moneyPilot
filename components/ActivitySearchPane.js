@@ -1,5 +1,8 @@
-// Advanced transaction search (expense / income / investment) with filters.
-// Embedded in ActivityTimelineScreen — not a standalone route.
+// Advanced transaction search (expense / income / investment / transfer /
+// loan) with filters. Embedded in ActivityTimelineScreen — not a standalone
+// route. Searches over the SAME unified item shape buildActivityTimeline()
+// produces for the Timeline tab, so Find and Timeline can never disagree
+// about how something is labeled/colored (see lib/searchTransactions.js).
 
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -14,9 +17,13 @@ import {
 
 import DateTimePicker from './DatePicker';
 import AppIcon from './AppIcon';
+import { EmptyState } from './UiPrimitives';
+import { useLoans } from '../contexts/LoansContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { useThemedStyles, useThemeColors } from '../contexts/ThemeContext';
 import { useTransactions } from '../contexts/TransactionsContext';
+import { useTransfers } from '../contexts/TransfersContext';
+import { buildActivityTimeline } from '../lib/activityTimeline';
 import searchTransactions from '../lib/searchTransactions';
 import { financialYearRange, financialYearStartYear } from '../lib/financialYear';
 import {
@@ -24,14 +31,9 @@ import {
   formatMoney as formatMoneyCurrency,
   isForeign,
 } from '../lib/currency';
+import { withAlpha } from '../lib/colorAlpha';
 import { radii, spacing } from '../lib/theme';
 import { openTransactionsTab } from '../lib/navigationTabReset';
-
-const TYPE_META = {
-  expense: { label: 'Expenses', icon: 'credit-card', color: '#dc2626' },
-  income: { label: 'Income', icon: 'wallet', color: '#059669' },
-  investment: { label: 'Investments', icon: 'bar-chart-2', color: '#6366f1' },
-};
 
 const DATE_PRESETS = [
   {
@@ -103,13 +105,29 @@ export default function ActivitySearchPane({
   // (e.g. ActivityTimelineScreen's own edit modal) instead of navigating
   // to the Transactions/Invest tab. Falls back to the old nav-based
   // `openTransactionsTab` behavior when omitted, so other callers of this
-  // pane (AccountActivityScreen) are unaffected.
+  // pane (AccountActivityScreen) are unaffected. Only ever called for
+  // expense/income/investment results — loan/transfer results always
+  // navigate (see openResult), since EditTransactionModal (what onOpenItem
+  // opens) has no loan/transfer edit UI.
   onOpenItem,
 }) {
   const styles = useThemedStyles(makeStyles);
   const themeColors = useThemeColors();
   const { categories, accounts, baseCurrency, fxRates } = useSettings();
   const { expenses, income, investments, allTags } = useTransactions();
+  const { transfers } = useTransfers();
+  const { loans } = useLoans();
+
+  const TYPE_META = {
+    expense:    { label: 'Expenses',    icon: 'credit-card',      color: themeColors.accent.expense },
+    income:     { label: 'Income',      icon: 'wallet',           color: themeColors.accent.income },
+    investment: { label: 'Investments', icon: 'bar-chart-2',      color: themeColors.accent.investment },
+    transfer:   { label: 'Transfers',   icon: 'arrow-right-left', color: themeColors.accent.sky },
+    loan:       { label: 'Loans',       icon: 'landmark',         color: themeColors.accent.gold },
+  };
+  const TYPE_IDS = Object.keys(TYPE_META);
+
+  const typeList = (type) => (type === 'income' ? income : type === 'investment' ? investments : expenses);
 
   const lockedAccountKey = lockAccountFilter && initialAccountIds?.length
     ? initialAccountIds.join('|')
@@ -160,6 +178,13 @@ export default function ActivitySearchPane({
   const toggleAccount = (id) =>
     setAccountIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
+  // Unified item list — the exact same shape/source the Timeline tab
+  // builds from, so a transfer or loan found here looks identical to its
+  // Timeline row.
+  const timelineItems = useMemo(() => buildActivityTimeline({
+    expenses, income, investments, transfers, loans, accounts, categories, baseCurrency,
+  }), [expenses, income, investments, transfers, loans, accounts, categories, baseCurrency]);
+
   const results = useMemo(
     () =>
       searchTransactions({
@@ -171,9 +196,7 @@ export default function ActivitySearchPane({
         amountMax,
         dateFrom,
         dateTo,
-        transactions: { expense: expenses, income, investment: investments },
-        categories,
-        accounts,
+        items: timelineItems,
       }),
     [
       debouncedQuery,
@@ -184,16 +207,12 @@ export default function ActivitySearchPane({
       amountMax,
       dateFrom,
       dateTo,
-      expenses,
-      income,
-      investments,
-      categories,
-      accounts,
+      timelineItems,
     ],
   );
 
   const activeFilterCount =
-    (types.length < 3 ? 1 : 0) +
+    (types.length < TYPE_IDS.length ? 1 : 0) +
     (tagFilter.length > 0 ? 1 : 0) +
     (accountIds.length > 0 ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
@@ -228,93 +247,63 @@ export default function ActivitySearchPane({
     }
   };
 
-  const openResult = (tx, type) => {
-    if (onOpenItem) {
-      onOpenItem(tx, type);
+  // Navigation precedence mirrors ActivityTimelineScreen.openItem exactly:
+  // loan → transfer → (inline edit, expense/income/investment only) →
+  // investment tab → default transactions tab. Loan/transfer must never
+  // reach `onOpenItem` — it only knows how to open EditTransactionModal,
+  // which has no loan/transfer editing UI.
+  const openResult = (item, type) => {
+    if (type === 'loan') {
+      navigation.navigate('LoanDetail', { loanId: item.sourceId });
       return;
+    }
+    if (type === 'transfer') {
+      openTransactionsTab(navigation.getParent() ?? navigation, {
+        initialTab: 'transfer',
+        focusId: item.sourceId,
+      });
+      return;
+    }
+    if (onOpenItem) {
+      const raw = typeList(type).find((tx) => tx.id === item.sourceId);
+      if (raw) {
+        onOpenItem(raw, type);
+        return;
+      }
     }
     if (type === 'investment') {
       navigation.getParent()?.navigate('Invest', {
         screen: 'InvestmentsHome',
-        params: { focusId: tx.id },
+        params: { focusId: item.sourceId },
         initial: false,
       });
       return;
     }
     openTransactionsTab(navigation.getParent() ?? navigation, {
       initialTab: type,
-      focusId: tx.id,
+      focusId: item.sourceId,
     });
   };
 
-  const renderRow = ({ item }) => {
-    const { item: tx, type } = item;
-    const catList = categories[type] ?? [];
-    const cat = catList.find((c) => c.id === tx.categoryId);
-    const sub = tx.subCategoryId
-      ? cat?.subCategories?.find((s) => s.id === tx.subCategoryId)
-      : null;
-    const acc = accounts.find((a) => a.id === tx.accountId);
+  const renderRow = ({ item: result }) => {
+    const { item, type } = result;
     const meta = TYPE_META[type];
-    const rowCurrency = tx.currency ?? baseCurrency;
-    const rowIsForeign = isForeign(rowCurrency, baseCurrency);
-    const rowBaseAmount = baseAmountOf(tx, fxRates, baseCurrency, 'amount');
+    if (type === 'transfer') {
+      return <TransferResultRow item={item} meta={meta} onPress={() => openResult(item, type)} />;
+    }
+    if (type === 'loan') {
+      return <LoanResultRow item={item} meta={meta} onPress={() => openResult(item, type)} />;
+    }
+    const raw = typeList(type).find((tx) => tx.id === item.sourceId);
     return (
-      <TouchableOpacity
-        style={styles.resultCard}
-        activeOpacity={0.7}
-        onPress={() => openResult(tx, type)}
-      >
-        <View style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]} />
-        <View style={styles.resultBody}>
-          <View style={styles.resultTop}>
-            <Text style={styles.resultEmoji}>{cat?.emoji ?? '📌'}</Text>
-            <View style={styles.resultLabelCol}>
-              <Text style={styles.resultCategory}>
-                {cat?.label ?? 'Unknown'}
-              </Text>
-              {sub ? (
-                <Text style={styles.resultSubCategory}>
-                  {sub.emoji} {sub.label}
-                </Text>
-              ) : null}
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={[styles.resultAmount, { color: meta?.color ?? '#111' }]}>
-                {rowIsForeign
-                  ? formatMoneyCurrency(tx.amount, rowCurrency)
-                  : formatMoneyCurrency(tx.amount, baseCurrency)}
-              </Text>
-              {rowIsForeign && (
-                <Text style={styles.resultAmountSub}>
-                  ≈ {formatMoneyCurrency(rowBaseAmount, baseCurrency)}
-                </Text>
-              )}
-            </View>
-          </View>
-          {tx.note ? (
-            <Text style={styles.resultNote} numberOfLines={2}>{tx.note}</Text>
-          ) : null}
-          {tx.instrumentName ? (
-            <Text style={styles.resultNote} numberOfLines={1}>{tx.instrumentName}</Text>
-          ) : null}
-          {tx.tags && tx.tags.length > 0 && (
-            <View style={styles.tagRow}>
-              {tx.tags.slice(0, 5).map((t) => (
-                <View key={t} style={styles.miniTag}>
-                  <Text style={styles.miniTagText}>#{t}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-          <View style={styles.resultMeta}>
-            <Text style={styles.resultMetaText}>
-              {formatDate(tx.createdAt)} · {meta?.label ?? type}
-              {acc ? `  ·  ${acc.emoji} ${acc.label}` : ''}
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
+      <TransactionResultRow
+        item={item}
+        raw={raw}
+        meta={meta}
+        baseCurrency={baseCurrency}
+        fxRates={fxRates}
+        onPress={() => openResult(item, type)}
+      />
     );
   };
 
@@ -348,11 +337,21 @@ export default function ActivitySearchPane({
           onPress={() => setShowFilters((s) => !s)}
           style={styles.filterToggle}
           activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showFilters }}
         >
-          <Text style={styles.filterToggleText}>
-            {showFilters ? '▾ Filters' : '▸ Filters'}
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
-          </Text>
+          <AppIcon
+            name={showFilters ? 'chevron-up' : 'chevron-down'}
+            size={14}
+            color={themeColors.text.secondary}
+            strokeWidth={2.2}
+          />
+          <Text style={styles.filterToggleText}>Filters</Text>
+          {activeFilterCount > 0 && (
+            <View style={styles.filterCountBadge}>
+              <Text style={styles.filterCountBadgeText}>{activeFilterCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
         <Text style={styles.resultCount}>
           {results.length} result{results.length === 1 ? '' : 's'}
@@ -367,7 +366,7 @@ export default function ActivitySearchPane({
         >
           <Text style={styles.filterLabel}>Type</Text>
           <View style={styles.chipRow}>
-            {(['expense', 'income', 'investment']).map((t) => {
+            {TYPE_IDS.map((t) => {
               const meta = TYPE_META[t];
               const active = types.includes(t);
               return (
@@ -379,14 +378,16 @@ export default function ActivitySearchPane({
                     styles.filterChipWithIcon,
                     active && { backgroundColor: meta.color, borderColor: meta.color },
                   ]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
                 >
                   <AppIcon
                     name={meta.icon}
                     size={13}
-                    color={active ? '#fff' : meta.color}
+                    color={active ? themeColors.text.inverse : meta.color}
                     strokeWidth={2.2}
                   />
-                  <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
+                  <Text style={[styles.filterChipText, active && { color: themeColors.text.inverse }]}>
                     {meta.label}
                   </Text>
                 </TouchableOpacity>
@@ -411,8 +412,10 @@ export default function ActivitySearchPane({
                           borderColor: themeColors.accent.primary,
                         },
                       ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
                     >
-                      <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
+                      <Text style={[styles.filterChipText, active && { color: themeColors.text.inverse }]}>
                         #{t}
                       </Text>
                     </TouchableOpacity>
@@ -436,8 +439,10 @@ export default function ActivitySearchPane({
                         styles.filterChip,
                         active && { backgroundColor: a.color, borderColor: a.color },
                       ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
                     >
-                      <Text style={[styles.filterChipText, active && { color: '#fff' }]}>
+                      <Text style={[styles.filterChipText, active && { color: themeColors.text.inverse }]}>
                         {a.emoji} {a.label}
                       </Text>
                     </TouchableOpacity>
@@ -454,6 +459,7 @@ export default function ActivitySearchPane({
                 key={preset.id}
                 onPress={() => applyDatePreset(preset)}
                 style={styles.filterChip}
+                accessibilityRole="button"
               >
                 <Text style={styles.filterChipText}>{preset.label}</Text>
               </TouchableOpacity>
@@ -465,6 +471,7 @@ export default function ActivitySearchPane({
                   setDateTo(null);
                 }}
                 style={[styles.filterChip, styles.filterChipMuted]}
+                accessibilityRole="button"
               >
                 <Text style={styles.filterChipText}>Clear dates</Text>
               </TouchableOpacity>
@@ -545,24 +552,159 @@ export default function ActivitySearchPane({
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={(
-          <View style={styles.empty}>
-            <View style={styles.emptyIconWrap}>
-              <AppIcon
-                name={query.length === 0 && activeFilterCount === 0 ? 'search' : 'search-x'}
-                size={40}
-                color={themeColors.text.muted}
-                strokeWidth={1.7}
-              />
-            </View>
-            <Text style={styles.emptyText}>
-              {query.length === 0 && activeFilterCount === 0
+          <EmptyState
+            icon={query.length === 0 && activeFilterCount === 0 ? 'search' : 'search-x'}
+            title={query.length === 0 && activeFilterCount === 0 ? 'Find a transaction' : 'No matches'}
+            body={
+              query.length === 0 && activeFilterCount === 0
                 ? 'Search or apply a filter to find transactions.'
-                : 'No matches. Try a different word or clear filters.'}
-            </Text>
-          </View>
+                : 'No matches. Try a different word or clear filters.'
+            }
+            tint={themeColors.accent.primary}
+          />
         )}
       />
     </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Result rows — one per source type. Each reads straight off the unified
+// buildActivityTimeline() item (so Find always agrees with the Timeline tab
+// on labels/colors); TransactionResultRow additionally looks up the raw
+// record for the foreign-currency conversion line and an investment's
+// instrument name, neither of which the unified shape carries.
+// ---------------------------------------------------------------------------
+
+function TransactionResultRow({ item, raw, meta, baseCurrency, fxRates, onPress }) {
+  const styles = useThemedStyles(makeStyles);
+  const rowCurrency = raw?.currency ?? item.currency ?? baseCurrency;
+  const rowIsForeign = raw ? isForeign(rowCurrency, baseCurrency) : false;
+  const rowBaseAmount = raw ? baseAmountOf(raw, fxRates, baseCurrency, 'amount') : item.amount;
+
+  return (
+    <TouchableOpacity style={styles.resultCard} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]} />
+      <View style={styles.resultBody}>
+        <View style={styles.resultTop}>
+          <Text style={styles.resultEmoji}>📌</Text>
+          <View style={styles.resultLabelCol}>
+            <Text style={styles.resultCategory}>{item.categoryLabel || 'Unknown'}</Text>
+            {item.subCategoryLabel ? (
+              <Text style={styles.resultSubCategory}>{item.subCategoryLabel}</Text>
+            ) : null}
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.resultAmount, { color: meta?.color ?? '#111' }]}>
+              {rowIsForeign
+                ? formatMoneyCurrency(raw.amount, rowCurrency)
+                : formatMoneyCurrency(item.amount, baseCurrency)}
+            </Text>
+            {rowIsForeign && (
+              <Text style={styles.resultAmountSub}>
+                ≈ {formatMoneyCurrency(rowBaseAmount, baseCurrency)}
+              </Text>
+            )}
+          </View>
+        </View>
+        {item.note ? (
+          <Text style={styles.resultNote} numberOfLines={2}>{item.note}</Text>
+        ) : null}
+        {raw?.instrumentName ? (
+          <Text style={styles.resultNote} numberOfLines={1}>{raw.instrumentName}</Text>
+        ) : null}
+        {item.tags && item.tags.length > 0 && (
+          <View style={styles.tagRow}>
+            {item.tags.slice(0, 5).map((t) => (
+              <View key={t} style={styles.miniTag}>
+                <Text style={styles.miniTagText}>#{t}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        <View style={styles.resultMeta}>
+          <Text style={styles.resultMetaText}>
+            {formatDate(item.date)} · {meta?.label ?? item.type}
+            {item.accountLabel ? `  ·  ${item.accountLabel}` : ''}
+          </Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function directionTone(direction, meta, themeColors) {
+  if (direction > 0) return themeColors.accent.income;
+  if (direction < 0) return themeColors.accent.expense;
+  return meta?.color ?? themeColors.text.primary;
+}
+
+function directionSign(direction) {
+  return direction > 0 ? '+' : direction < 0 ? '−' : '';
+}
+
+function TransferResultRow({ item, meta, onPress }) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const amountColor = directionTone(item.direction, meta, themeColors);
+  return (
+    <TouchableOpacity style={styles.resultCard} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]} />
+      <View style={styles.resultBody}>
+        <View style={styles.resultTop}>
+          <View style={styles.resultIconBadge}>
+            <AppIcon name={meta?.icon ?? 'arrow-right-left'} size={16} color={meta?.color} strokeWidth={2.1} />
+          </View>
+          <View style={styles.resultLabelCol}>
+            <Text style={styles.resultCategory} numberOfLines={1}>{item.title}</Text>
+            <Text style={styles.resultSubCategory} numberOfLines={1}>{item.subtitle}</Text>
+          </View>
+          <Text style={[styles.resultAmount, { color: amountColor }]}>
+            {directionSign(item.direction)}{formatMoneyCurrency(item.amount, item.currency)}
+          </Text>
+        </View>
+        {item.tags && item.tags.length > 0 && (
+          <View style={styles.tagRow}>
+            {item.tags.slice(0, 5).map((t) => (
+              <View key={t} style={styles.miniTag}>
+                <Text style={styles.miniTagText}>#{t}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        <View style={styles.resultMeta}>
+          <Text style={styles.resultMetaText}>{formatDate(item.date)} · {meta?.label ?? 'Transfer'}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function LoanResultRow({ item, meta, onPress }) {
+  const styles = useThemedStyles(makeStyles);
+  const themeColors = useThemeColors();
+  const amountColor = directionTone(item.direction, meta, themeColors);
+  return (
+    <TouchableOpacity style={styles.resultCard} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.resultBar, { backgroundColor: meta?.color ?? '#9ca3af' }]} />
+      <View style={styles.resultBody}>
+        <View style={styles.resultTop}>
+          <View style={styles.resultIconBadge}>
+            <AppIcon name={meta?.icon ?? 'landmark'} size={16} color={meta?.color} strokeWidth={2.1} />
+          </View>
+          <View style={styles.resultLabelCol}>
+            <Text style={styles.resultCategory} numberOfLines={1}>{item.title}</Text>
+            <Text style={styles.resultSubCategory} numberOfLines={1}>{item.subtitle}</Text>
+          </View>
+          <Text style={[styles.resultAmount, { color: amountColor }]}>
+            {directionSign(item.direction)}{formatMoneyCurrency(item.amount, item.currency)}
+          </Text>
+        </View>
+        <View style={styles.resultMeta}>
+          <Text style={styles.resultMetaText}>{formatDate(item.date)} · {meta?.label ?? 'Loan'}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -611,6 +753,9 @@ const makeStyles = (c) => ({
     marginTop: spacing.md,
   },
   filterToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     paddingVertical: 4,
     paddingRight: spacing.sm,
   },
@@ -618,6 +763,20 @@ const makeStyles = (c) => ({
     fontSize: 13,
     fontWeight: '700',
     color: c.text.secondary,
+  },
+  filterCountBadge: {
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: c.accent.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterCountBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: c.text.inverse,
   },
   resultCount: {
     fontSize: 12,
@@ -755,6 +914,14 @@ const makeStyles = (c) => ({
   resultBody: { flex: 1, padding: spacing.md, gap: 4 },
   resultTop: { flexDirection: 'row', alignItems: 'flex-start' },
   resultEmoji: { fontSize: 18, marginRight: spacing.sm, marginTop: 1 },
+  resultIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
   resultLabelCol: { flex: 1, minWidth: 0, gap: 2 },
   resultCategory: {
     fontSize: 14,
@@ -797,24 +964,11 @@ const makeStyles = (c) => ({
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 6,
-    backgroundColor: c.accent.primary + '15',
+    backgroundColor: withAlpha(c.accent.primary, 0.08),
   },
   miniTagText: {
     fontSize: 10,
     fontWeight: '700',
     color: c.accent.primary,
-  },
-
-  empty: {
-    marginTop: 60,
-    alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-  },
-  emptyIconWrap: { marginBottom: spacing.sm, opacity: 0.85 },
-  emptyText: {
-    fontSize: 13,
-    color: c.text.secondary,
-    textAlign: 'center',
-    lineHeight: 19,
   },
 });

@@ -1,6 +1,6 @@
 {
   "appId": "com.giridharan19.expensetracker.desktop",
-  "productName": "FinanceIQ",
+  "productName": "MoneyPilot",
   "copyright": "Copyright © 2026",
   "directories": {
     "output": "dist-desktop",
@@ -23,7 +23,7 @@
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "perMachine": false,
-    "shortcutName": "FinanceIQ"
+    "shortcutName": "MoneyPilot"
   },
   "mac": {
     "target": ["dmg"],

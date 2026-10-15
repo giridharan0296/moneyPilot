@@ -363,6 +363,18 @@ export function NetWorthProvider({ children }) {
     setHistory(sanitizeHistory(payload.netWorthHistory));
   }, []);
 
+  // Merge pre-computed historical points into history — e.g. a CSV import
+  // of back-dated transactions backfilling the days it touched (see
+  // lib/netWorthHistory.js#computeAccountBackfillPoints and
+  // ImportTransactionsScreen). sanitizeHistory already implements "one
+  // point per day, latest wins", so this is a safe no-op-if-redundant
+  // merge — re-running the same import twice just recomputes the same
+  // points, it doesn't duplicate or corrupt existing days.
+  const backfillHistory = useCallback((points) => {
+    if (!Array.isArray(points) || points.length === 0) return;
+    setHistory((prev) => sanitizeHistory([...prev, ...points]));
+  }, []);
+
   // ---- Derived totals + per-category breakdown (memoized) ----
   //
   // Totals are in BASE CURRENCY. Each row's `valueInBase` /
@@ -494,6 +506,7 @@ export function NetWorthProvider({ children }) {
       findAssetCategory,
       findLiabilityCategory,
       restoreState,
+      backfillHistory,
       portfolioSyncHiddenSymbols,
       isPortfolioSymbolHidden,
       hidePortfolioSymbol,
@@ -516,6 +529,7 @@ export function NetWorthProvider({ children }) {
       findAssetCategory,
       findLiabilityCategory,
       restoreState,
+      backfillHistory,
       portfolioSyncHiddenSymbols,
       isPortfolioSymbolHidden,
       hidePortfolioSymbol,

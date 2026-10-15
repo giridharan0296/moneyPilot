@@ -11,7 +11,8 @@
 // currentPrice, currentValue, and pnl from Yahoo quotes.
 // ----------------------------------------------------------------------------
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
 import {
   ActivityIndicator,
   DeviceEventEmitter,
@@ -88,6 +89,9 @@ function formatDateTime(iso) {
     return '';
   }
 }
+
+// Prices older than this are refreshed automatically when the tab is opened.
+const PRICE_STALE_MS = 30 * 60 * 1000;
 
 export default function PortfolioScreen({ navigation }) {
   const styles = useThemedStyles(makeStyles);
@@ -385,7 +389,9 @@ export default function PortfolioScreen({ navigation }) {
     );
   }
 
-  async function handleRefreshPrices() {
+  async function handleRefreshPrices({ quiet = false } = {}) {
+    // quiet: no toasts. Used by the automatic refresh when the tab comes into view.
+    const notify = (msg, opts) => { if (!quiet) showToast(msg, opts); };
     if (refreshing) return;
     setRefreshing(true);
     try {
@@ -404,23 +410,38 @@ export default function PortfolioScreen({ navigation }) {
         const msg = failedCount > 0
           ? `Updated ${result.updated} holding${result.updated === 1 ? '' : 's'} · ${failedCount} unresolved`
           : `Updated ${result.updated} holding${result.updated === 1 ? '' : 's'} with live prices`;
-        showToast(msg, { variant: 'success' });
+        notify(msg, { variant: 'success' });
       } else if (failedCount > 0) {
-        showToast(
+        notify(
           `Could not resolve prices for ${failedCount} symbol${failedCount === 1 ? '' : 's'}. Try again or check tickers.`,
           { variant: 'error' },
         );
       } else {
-        showToast('No prices returned. Try again later.', { variant: 'error' });
+        notify('No prices returned. Try again later.', { variant: 'error' });
       }
     } catch (e) {
-      showToast(e?.message || 'Price refresh failed. Check network and try again.', {
+      notify(e?.message || 'Price refresh failed. Check network and try again.', {
         variant: 'error',
       });
     } finally {
       setRefreshing(false);
     }
   }
+
+  // Refresh prices when the Portfolio tab comes into view, if the last prices
+  // are older than PRICE_STALE_MS. Silent. A separate last-attempt time stops a
+  // failing feed from being retried on every visit.
+  const isFocused = useIsFocused();
+  const lastAutoAttemptRef = useRef(0);
+  useEffect(() => {
+    if (!isFocused || refreshing || holdings.length === 0) return;
+    const now = Date.now();
+    const lastPriced = pricesUpdatedAt ? Date.parse(pricesUpdatedAt) : 0;
+    if (now - lastPriced < PRICE_STALE_MS || now - lastAutoAttemptRef.current < PRICE_STALE_MS) return;
+    lastAutoAttemptRef.current = now;
+    handleRefreshPrices({ quiet: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFocused]);
 
   // ---- Empty state ----
   if (!hasHoldings) {

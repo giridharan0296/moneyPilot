@@ -128,7 +128,7 @@ export default function PositionCard({
             })}
           </View>
           <View style={styles.spark}>
-            <Sparkline values={spark} color={flat ? colors.accent.primary : trendColor} height={64} />
+            <Sparkline points={spark} color={flat ? colors.accent.primary : trendColor} height={64} />
           </View>
         </>
       ) : null}

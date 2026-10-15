@@ -7,6 +7,7 @@ import {
   MAX_POINTS,
   appendSnapshot,
   applyRealEstateHistory,
+  computeAccountBackfillPoints,
   dayKey,
   filterByRange,
   realEstateValueAt,
@@ -182,6 +183,119 @@ describe('real-estate growth history', () => {
   it('leaves history alone with no growth-valued properties', () => {
     const history = [point('2026-03-05T09:00:00.000Z', 100, 0)];
     assert.deepEqual(applyRealEstateHistory(history, [{ valuationMethod: 'manual' }]), history);
+  });
+});
+
+describe('computeAccountBackfillPoints', () => {
+  it('returns one point per distinct day, with the account balance as of the end of that day', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [{ id: 'acc1', label: 'Cash', openingBalance: 1000, openingBalanceDate: '2026-01-01' }];
+    const income = [
+      { accountId: 'acc1', amount: 500, createdAt: '2026-01-05T10:00:00.000Z' },
+      { accountId: 'acc1', amount: 300, createdAt: '2026-01-10T10:00:00.000Z' },
+    ];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05', '2026-01-10'])]]),
+      income, expenses: [], investments: [], transfers: [],
+      assets: [], liabilities: [],
+      fxRates: {}, baseCurrency: 'INR',
+    });
+    assert.equal(points.length, 2);
+    assert.equal(points[0].totalAssets, 1500); // opening 1000 + the Jan-5 credit
+    assert.equal(points[1].totalAssets, 1800); // + the Jan-10 credit too
+    assert.equal(points[0].netWorth, 1500);
+  });
+
+  it('holds every OTHER asset/liability at its current value across every backfilled day', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [{ id: 'acc1', label: 'Cash', openingBalance: 0, openingBalanceDate: '2026-01-01' }];
+    const income = [{ accountId: 'acc1', amount: 100, createdAt: '2026-01-05T10:00:00.000Z' }];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05'])]]),
+      income, expenses: [], investments: [], transfers: [],
+      assets: [{ linkedAccountId: 'other-acc', value: 5000 }],
+      liabilities: [{ linkedAccountId: null, outstanding: 2000 }],
+      fxRates: {}, baseCurrency: 'INR',
+    });
+    assert.equal(points[0].totalAssets, 5100); // unrelated asset (5000) + this account's 100
+    assert.equal(points[0].totalLiabilities, 2000);
+    assert.equal(points[0].netWorth, 3100);
+  });
+
+  it('excludes the touched account\'s OWN synced asset/liability row from the "other" total (it\'s replaced by the computed value, not added on top)', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [{ id: 'acc1', label: 'Cash', openingBalance: 0, openingBalanceDate: '2026-01-01' }];
+    const income = [{ accountId: 'acc1', amount: 100, createdAt: '2026-01-05T10:00:00.000Z' }];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05'])]]),
+      income, expenses: [], investments: [], transfers: [],
+      // This stale value (999999) is acc1's CURRENT synced asset — if it
+      // leaked into the "other" total alongside the freshly computed 100,
+      // the backfilled day would show a huge bogus spike.
+      assets: [{ linkedAccountId: 'acc1', value: 999999 }],
+      liabilities: [],
+      fxRates: {}, baseCurrency: 'INR',
+    });
+    assert.equal(points[0].totalAssets, 100);
+  });
+
+  it('an overdrawn account contributes to liabilities, never a negative asset', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [{ id: 'acc1', label: 'Credit', openingBalance: 0, openingBalanceDate: '2026-01-01' }];
+    const expenses = [{ accountId: 'acc1', amount: 500, createdAt: '2026-01-05T10:00:00.000Z' }];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05'])]]),
+      income: [], expenses, investments: [], transfers: [],
+      assets: [], liabilities: [],
+      fxRates: {}, baseCurrency: 'INR',
+    });
+    assert.equal(points[0].totalAssets, 0);
+    assert.equal(points[0].totalLiabilities, 500);
+    assert.equal(points[0].netWorth, -500);
+  });
+
+  it('converts a foreign-currency account balance to base currency', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [{ id: 'acc1', label: 'USD Wallet', currency: 'USD', openingBalance: 100, openingBalanceDate: '2026-01-01' }];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05'])]]),
+      income: [], expenses: [], investments: [], transfers: [],
+      assets: [], liabilities: [],
+      fxRates: { USD: { rate: 88 } }, baseCurrency: 'INR',
+    });
+    assert.equal(points[0].totalAssets, 8800);
+  });
+
+  it('sums across multiple accounts touched on the same day', () => {
+    process.env.TZ = 'Asia/Kolkata';
+    const accounts = [
+      { id: 'acc1', label: 'Cash', openingBalance: 100, openingBalanceDate: '2026-01-01' },
+      { id: 'acc2', label: 'Bank', openingBalance: 200, openingBalanceDate: '2026-01-01' },
+    ];
+    const points = computeAccountBackfillPoints({
+      accounts,
+      transactionDatesByAccount: new Map([['acc1', new Set(['2026-01-05'])], ['acc2', new Set(['2026-01-05'])]]),
+      income: [], expenses: [], investments: [], transfers: [],
+      assets: [], liabilities: [],
+      fxRates: {}, baseCurrency: 'INR',
+    });
+    assert.equal(points.length, 1);
+    assert.equal(points[0].totalAssets, 300);
+  });
+
+  it('returns no points when nothing is affected', () => {
+    assert.deepEqual(
+      computeAccountBackfillPoints({
+        accounts: [], transactionDatesByAccount: new Map(), income: [], expenses: [], investments: [],
+        transfers: [], assets: [], liabilities: [], fxRates: {}, baseCurrency: 'INR',
+      }),
+      [],
+    );
   });
 });
 

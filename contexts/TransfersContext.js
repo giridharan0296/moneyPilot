@@ -736,6 +736,22 @@ export function TransfersProvider({ children }) {
     setTransfers(Array.isArray(payload.transfers) ? payload.transfers.map(normalize) : []);
   }, []);
 
+  // Bulk insert from CSV import (see lib/parseTransactions.js#parseTransfers
+  // and ImportTransactionsScreen). Mirrors TransactionsContext's
+  // importTransactions: a plain prepend, skipping addTransfer's full
+  // validation/side-effect machinery. That's safe ONLY because every
+  // imported row is kind: 'internal_transfer' — the one Transfer kind
+  // that moves cash only and never creates or mutates a Net Worth
+  // asset/liability, so there's no linked state to get wrong in bulk.
+  const importTransfers = useCallback((items) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const normalized = items
+      .filter((t) => t?.kind === 'internal_transfer')
+      .map(normalize);
+    if (normalized.length === 0) return;
+    setTransfers((prev) => [...normalized, ...prev]);
+  }, []);
+
   const value = useMemo(
     () => ({
       ready,
@@ -745,6 +761,7 @@ export function TransfersProvider({ children }) {
       deleteTransfer,
       restoreTransfer,
       restoreState,
+      importTransfers,
       findAsset,
       findLiability,
     }),
@@ -756,6 +773,7 @@ export function TransfersProvider({ children }) {
       deleteTransfer,
       restoreTransfer,
       restoreState,
+      importTransfers,
       findAsset,
       findLiability,
     ],

@@ -23,6 +23,7 @@ import {
   purityLabel,
   summarizeOpenChitSchemes,
 } from '../lib/goldChit';
+import { setManualGoldRate, useManualGoldRate } from '../lib/manualGoldRate';
 import { fetchIndicativeMetalRates } from '../lib/metalRates';
 
 const ACCENT = '#d97706';
@@ -44,8 +45,23 @@ export default function GoldChitPanel({ navigation }) {
   const [closingScheme, setClosingScheme] = useState(null);
   const [assetName, setAssetName] = useState('');
   const [closing, setClosing] = useState(false);
+  const manualRate = useManualGoldRate();
+  const [rateDraft, setRateDraft] = useState(null);
 
   if (openSchemes.length === 0) return null;
+
+  const rateText = rateDraft ?? (manualRate ? String(manualRate.rate22k) : '');
+  const saveRate = async () => {
+    const trimmed = rateText.trim();
+    const n = Number(trimmed);
+    if (trimmed && !(n > 0)) {
+      showToast('Enter the 22K rate in ₹ per gram', { variant: 'info' });
+      return;
+    }
+    await setManualGoldRate(trimmed ? n : null);
+    setRateDraft(null);
+    showToast(trimmed ? 'Gold rate saved · Net Worth updated' : 'Using market reference rate', { variant: 'success' });
+  };
 
   const openCloseModal = (scheme) => {
     setClosingScheme(scheme);
@@ -118,6 +134,34 @@ export default function GoldChitPanel({ navigation }) {
     <>
       <View style={styles.wrap}>
         <Text style={styles.title}>Open gold chits</Text>
+        <View style={styles.card}>
+          <Text style={styles.schemeName}>Today's 22K rate (₹/g)</Text>
+          <View style={styles.rateRow}>
+            <TextInput
+              style={[styles.input, styles.rateInput]}
+              value={rateText}
+              onChangeText={setRateDraft}
+              keyboardType="decimal-pad"
+              placeholder="From your jeweller"
+              placeholderTextColor={themeColors.text.muted}
+              accessibilityLabel="Jeweller 22 karat rate per gram"
+            />
+            <TouchableOpacity
+              style={[styles.closeBtn, rateDraft == null && { opacity: 0.5 }]}
+              onPress={saveRate}
+              disabled={rateDraft == null}
+              accessibilityRole="button"
+              accessibilityLabel="Save gold rate"
+            >
+              <Text style={styles.closeBtnText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.schemePaid}>
+            {manualRate
+              ? 'Chit value in Net Worth uses this rate. Clear it to go back to the market reference.'
+              : 'Not set: Net Worth uses the international reference, which is usually below shop rates. Enter your Salem shop rate to match it.'}
+          </Text>
+        </View>
         {openSchemes.map((scheme) => (
           <View key={scheme.schemeId} style={styles.card}>
             <View style={styles.cardLead}>
@@ -254,6 +298,8 @@ const makeStyles = (c) => ({
     color: c.text.muted,
     marginTop: 2,
   },
+  rateRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rateInput: { flex: 1, marginBottom: 0 },
   closeBtn: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12,

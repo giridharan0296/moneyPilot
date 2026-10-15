@@ -5,7 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { csvWarnings, parseCSV, parseCSVRaw, reshapeWithHeaderRow, toNumber } from '../lib/csv.js';
 import buildCsv from '../lib/exportCsv.js';
-import { detectDateOrder, localDayKey, parseDate, parseTransactions } from '../lib/parseTransactions.js';
+import { detectDateOrder, localDayKey, parseDate, parseTransactions, parseTransfers } from '../lib/parseTransactions.js';
 
 const originalTZ = process.env.TZ;
 function inZone(tz) {
@@ -283,6 +283,378 @@ describe('parseTransactions', () => {
     assert.equal(new Set(r.transactions.map((t) => t.id)).size, 2);
   });
 
+  it('a Category value that matches one of our sub-categories promotes to the real parent + sub (flat external CSVs)', () => {
+    // Many bank exports / other budgeting apps use a flat category list
+    // whose values are what THIS app treats as sub-categories — e.g. our
+    // test fixture has "Groceries" as a sub-category of "Food", not a
+    // top-level category of its own.
+    const r = run([row('2025-01-15', '10', { Category: 'Groceries' })]);
+    assert.equal(r.transactions[0].categoryId, 'food');
+    assert.equal(r.transactions[0].subCategoryId, 'groc');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+    assert.equal(r.summary.matched, 1);
+  });
+
+  it('category/sub-category matching tolerates punctuation and separator variance without going fuzzy', () => {
+    const cats = [{ id: 'hf', label: 'Health & Fitness', subCategories: [{ id: 'gym', label: 'Gym / Fitness Class' }] }];
+    const r = run(
+      [
+        row('2025-01-15', '10', { Category: 'Health and Fitness', 'Sub-category': 'Gym Fitness Class' }),
+      ],
+      { categories: cats, fallbackCategoryId: 'hf', mapping: { ...MAP, subCategoryCol: 'Sub-category' } },
+    );
+    assert.equal(r.transactions[0].categoryId, 'hf');
+    assert.equal(r.transactions[0].subCategoryId, 'gym');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+    assert.deepEqual(r.summary.unmatchedSubCategoryValues, []);
+  });
+
+  it('never conflates genuinely different category names (Food vs Fuel) despite the looser normalization', () => {
+    const cats = [
+      { id: 'food', label: 'Food', subCategories: [] },
+      { id: 'transport', label: 'Transport', subCategories: [{ id: 'fuel', label: 'Fuel' }] },
+    ];
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Fuel' })],
+      { categories: cats, fallbackCategoryId: 'food' },
+    );
+    // "Fuel" is one of OUR sub-categories (under Transport) — it must land
+    // there via promotion, never get silently absorbed into the unrelated
+    // "Food" fallback just because both are short category-ish words.
+    assert.equal(r.transactions[0].categoryId, 'transport');
+    assert.equal(r.transactions[0].subCategoryId, 'fuel');
+  });
+
+  it('whole-word containment promotes a phrase like "House Rent" to the sub-category "Rent" it contains, and its real parent', () => {
+    const cats = [
+      { id: 'bills', label: 'Bills', subCategories: [{ id: 'rent', label: 'Rent' }] },
+      { id: 'food', label: 'Food', subCategories: [] },
+    ];
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'House Rent' })],
+      { categories: cats, fallbackCategoryId: 'food' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'bills');
+    assert.equal(r.transactions[0].subCategoryId, 'rent');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+  });
+
+  it('separate Category="House Rent" + Sub-category="Rent" columns both resolve to the same Bills > Rent match', () => {
+    const cats = [
+      { id: 'bills', label: 'Bills', subCategories: [{ id: 'rent', label: 'Rent' }] },
+      { id: 'food', label: 'Food', subCategories: [] },
+    ];
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'House Rent', 'Sub-category': 'Rent' })],
+      { categories: cats, fallbackCategoryId: 'food', mapping: { ...MAP, subCategoryCol: 'Sub-category' } },
+    );
+    assert.equal(r.transactions[0].categoryId, 'bills');
+    assert.equal(r.transactions[0].subCategoryId, 'rent');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+    assert.deepEqual(r.summary.unmatchedSubCategoryValues, []);
+  });
+
+  it('whole-word containment also matches directly against a top-level category label when no sub-category fits', () => {
+    const cats = [
+      { id: 'shopping', label: 'Shopping', subCategories: [{ id: 'clothes', label: 'Clothing' }] },
+      { id: 'food', label: 'Food', subCategories: [] },
+    ];
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Online Shopping' })],
+      { categories: cats, fallbackCategoryId: 'food' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'shopping');
+    assert.equal(r.transactions[0].subCategoryId, null);
+  });
+
+  it('falls back instead of guessing when whole-word containment is ambiguous between two candidates', () => {
+    const cats = [
+      { id: 'bills', label: 'Bills', subCategories: [{ id: 'homeins', label: 'Home Insurance' }] },
+      { id: 'transport', label: 'Transport', subCategories: [{ id: 'vehins', label: 'Vehicle Insurance' }] },
+      { id: 'misc', label: 'Misc', subCategories: [] },
+    ];
+    // "Insurance" alone is a whole-word subset of BOTH "Home Insurance"
+    // and "Vehicle Insurance" — genuinely ambiguous between Bills and
+    // Transport, so it must fall back rather than silently picking one.
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Insurance' })],
+      { categories: cats, fallbackCategoryId: 'misc' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'misc');
+    assert.equal(r.transactions[0].subCategoryId, null);
+    assert.deepEqual(r.summary.unmatchedCategoryValues, ['Insurance']);
+  });
+
+  it('matches via best-overlap scoring when containment fails but most words overlap', () => {
+    const cats = [
+      { id: 'food', label: 'Food Delivery Service', subCategories: [] },
+      { id: 'misc', label: 'Misc', subCategories: [] },
+    ];
+    // Neither "Delivery Service Charge" nor "Food Delivery Service" fully
+    // contains the other's words, but they share 2 of 4 distinct words
+    // (delivery, service) — above the overlap bar, and no other category
+    // comes close, so this should resolve instead of falling back.
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Delivery Service Charge' })],
+      { categories: cats, fallbackCategoryId: 'misc' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'food');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+  });
+
+  it('best-overlap scoring still falls back when the overlap is too weak to be confident', () => {
+    const cats = [
+      { id: 'transport', label: 'Transport', subCategories: [{ id: 'repair', label: 'Service / Repair' }] },
+      { id: 'misc', label: 'Misc', subCategories: [] },
+    ];
+    // "Car Service Center" shares only "service" with "Service / Repair" —
+    // 1 of 4 distinct words — well under the bar, so this must still
+    // fall back rather than guess off a single coincidental word.
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Car Service Center' })],
+      { categories: cats, fallbackCategoryId: 'misc' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'misc');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, ['Car Service Center']);
+  });
+
+  it('best-overlap scoring falls back on a tie between two equally-plausible categories', () => {
+    const cats = [
+      { id: 'a', label: 'Home Office Setup', subCategories: [] },
+      { id: 'b', label: 'Office Home Decor', subCategories: [] },
+      { id: 'misc', label: 'Misc', subCategories: [] },
+    ];
+    // "Home Office" scores identically against both A and B — genuinely
+    // ambiguous, so it must fall back rather than arbitrarily pick one.
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Home Office' })],
+      { categories: cats, fallbackCategoryId: 'misc' },
+    );
+    assert.equal(r.transactions[0].categoryId, 'misc');
+    assert.deepEqual(r.summary.unmatchedCategoryValues, ['Home Office']);
+  });
+
+  it('account matching tolerates punctuation/separator variance the same way', () => {
+    const accounts = [{ id: 'hdfc', label: 'HDFC - Savings' }];
+    const r = run(
+      [row('2025-01-15', '10', { Account: 'HDFC Savings' })],
+      { accounts, fallbackAccountId: 'hdfc' },
+    );
+    assert.equal(r.transactions[0].accountId, 'hdfc');
+    assert.deepEqual(r.summary.unmatchedAccountValues, []);
+  });
+
+  it('unmatchedAccountEntries carries the earliest row date for each unmatched value', () => {
+    // A newly-created account defaults its opening date to "today" — if
+    // the earliest imported row predates that, the account's whole ledger
+    // window excludes every row that prompted creating it in the first
+    // place (see isOnOrAfterAccountOpeningDate in lib/accountBalances.js),
+    // leaving its synced Net Worth balance stuck at 0 forever. The screen
+    // uses this field to set the new account's opening date on-or-before
+    // the real earliest activity instead of defaulting to today.
+    const r = run([
+      row('2025-03-10', '10', { Account: 'New Bank' }),
+      row('2025-01-15', '20', { Account: 'New Bank' }), // earlier than the row above
+      row('2025-02-01', '30', { Account: 'New Bank' }),
+    ]);
+    const entry = r.summary.unmatchedAccountEntries.find((e) => e.value === 'New Bank');
+    assert.ok(entry, 'entry present');
+    assert.equal(ymd(new Date(entry.earliestDate)), '2025-01-15');
+  });
+
+  it('unmatchedAccountEntries.earliestDate is null for a value that never appears (defensive)', () => {
+    const r = run([row('2025-01-15', '10')]); // Account defaults to 'HDFC', which matches
+    assert.deepEqual(r.summary.unmatchedAccountEntries, []);
+  });
+
+  it('accountValueMap resolves an unmatched account value to an existing account, case/whitespace-insensitively', () => {
+    const r = run(
+      [row('2025-01-15', '10', { Account: '  HDFC Bank  ' })],
+      { accountValueMap: { 'hdfc bank': 'cash' } },
+    );
+    assert.equal(r.transactions[0].accountId, 'cash');
+    assert.deepEqual(r.summary.unmatchedAccountValues, []);
+  });
+
+  it('categoryValueMap sends a category value to the chosen category, ahead of name matching', () => {
+    // "Food" name-matches our Food category, but the user explicitly picked Misc for it.
+    const r = run(
+      [row('2025-01-15', '10', { Category: '  food ' }), row('2025-01-16', '10', { Category: 'Eating Out' })],
+      { categoryValueMap: { '  food ': 'misc', 'Eating Out': 'misc' } },
+    );
+    assert.deepEqual(r.transactions.map((t) => t.categoryId), ['misc', 'misc']);
+    assert.deepEqual(r.summary.unmatchedCategoryValues, []);
+  });
+
+  it('categoryValueMap pointing at a category that is not in this type falls back to normal matching', () => {
+    const r = run(
+      [row('2025-01-15', '10', { Category: 'Food' })],
+      { categoryValueMap: { Food: 'no-such-category' } },
+    );
+    assert.equal(r.transactions[0].categoryId, 'food'); // name match still wins
+  });
+
+  describe('mixed-type file with a Type column', () => {
+    const INCOME_CATS = [{ id: 'sal', label: 'Salary', subCategories: [] }];
+    const INVEST_CATS = [{ id: 'stk', label: 'Stocks', subCategories: [] }];
+    const MIXED = { ...MAP, typeCol: 'Type' };
+    const runMixed = (rows, extra = {}) => parseTransactions({
+      rows,
+      mapping: MIXED,
+      type: 'expense',
+      categories: CATS,
+      categoriesByType: { expense: CATS, income: INCOME_CATS, investment: INVEST_CATS },
+      accounts: ACCOUNTS,
+      fallbacksByType: {
+        expense: { categoryId: 'food', subCategoryId: null },
+        income: { categoryId: 'sal', subCategoryId: null },
+        investment: { categoryId: 'stk', subCategoryId: null },
+      },
+      fallbackAccountId: 'hdfc',
+      ...extra,
+    });
+
+    it('allowedTypes skips rows of types the user left out, without errors', () => {
+      const rows = [
+        row('2025-01-15', '10', { Type: 'expense' }),
+        row('2025-01-16', '20', { Type: 'income' }),
+        row('2025-01-17', '30', { Type: 'investment' }),
+      ];
+      const picked = runMixed(rows, { allowedTypes: ['expense', 'income'] });
+      assert.equal(picked.summary.valid, 2);
+      assert.equal(picked.transactions.filter((t) => t.categoryId === 'stk').length, 0);
+      assert.equal(picked.errors.length, 0);
+      const skipped = picked.rowPreviews.find((p) => p.rowNum === 4);
+      assert.equal(skipped.status, 'skipped');
+      assert.match(skipped.reason, /investment rows are not part of this import/);
+      // Without allowedTypes, every recognized type still imports.
+      assert.equal(runMixed(rows).summary.valid, 3);
+    });
+
+    it('typeValueMap reads unrecognized Type values and overrides recognized ones', () => {
+      // "Paid", "Got", "Buy" aren't in TYPE_ALIASES, so they skip without a mapping.
+      const rows = [
+        row('2025-01-15', '10', { Type: 'Paid' }),
+        row('2025-01-16', '20', { Type: 'Got' }),
+        row('2025-01-17', '30', { Type: 'Buy' }),
+        row('2025-01-18', '40', { Type: 'Debit' }), // a recognized alias, overridden below
+      ];
+      const unmapped = runMixed(rows);
+      assert.equal(unmapped.summary.valid, 1); // only Debit (expense alias) imports
+      const mapped = runMixed(rows, {
+        typeValueMap: { Paid: 'expense', Got: 'income', Buy: 'investment', Debit: 'income' },
+      });
+      assert.equal(mapped.summary.valid, 4);
+      assert.deepEqual(mapped.transactions.map((t) => t.importType), ['expense', 'income', 'investment', 'income']);
+    });
+
+    it('a mapped category applies only when it belongs to the row\'s own type', () => {
+      const rows = [row('2025-01-15', '10', { Type: 'Cr', Category: 'Food' })];
+      // "Food" is an expense category, so the income row ignores the mapping and falls back to Salary.
+      const r = runMixed(rows, { categoryValueMap: { Food: 'food' } });
+      assert.equal(r.transactions[0].categoryId, 'sal');
+      const ok = runMixed(
+        [row('2025-01-15', '10', { Type: 'Cr', Category: 'Food' })],
+        { categoryValueMap: { Food: 'sal' }, typeValueMap: {} },
+      );
+      assert.equal(ok.transactions[0].categoryId, 'sal');
+      assert.equal(ok.transactions[0].importType, 'income');
+    });
+
+    it('mappingByType: each row type reads its own column set (Date / Amount / Type stay shared)', () => {
+      const rows = [
+        { Date: '2025-01-15', Amount: '10', Type: 'Expense', Category: 'Food', Source: '', Account: 'HDFC', From: '', To: '' },
+        { Date: '2025-01-16', Amount: '20', Type: 'Income', Category: 'Misc', Source: 'Salary', Account: 'HDFC', From: '', To: '' },
+        { Date: '2025-01-17', Amount: '30', Type: 'Transfer', Category: '', Source: '', Account: '', From: 'HDFC', To: 'Cash' },
+      ];
+      const r = runMixed(rows, {
+        mappingByType: {
+          expense: { categoryCol: 'Category', accountCol: 'Account' },
+          // Income keeps its category in a different column than expense does.
+          income: { categoryCol: 'Source', accountCol: 'Account' },
+          investment: { categoryCol: 'Category', accountCol: 'Account' },
+          transfer: { accountCol: 'From', toAccountCol: 'To' },
+        },
+      });
+      assert.equal(r.transactions[0].categoryId, 'food');
+      assert.equal(r.transactions[1].categoryId, 'sal'); // from "Source", not "Category"
+      assert.equal(r.transfers.length, 1);
+      assert.equal(r.transfers[0].accountId, 'hdfc');
+      assert.equal(r.transfers[0].targetAccountId, 'cash');
+      assert.equal(r.summary.valid, 3);
+    });
+
+    it('with no default type (All mode), a blank Type cell skips the row rather than guessing', () => {
+      const r = runMixed(
+        [row('2025-01-15', '10', { Type: '' }), row('2025-01-16', '20', { Type: 'Expense' })],
+        { type: null },
+      );
+      assert.equal(r.transactions.length, 1);
+      assert.match(r.errors[0], /Unrecognized type/);
+    });
+
+    describe('Transfer rows (To account column)', () => {
+      const withTo = (rows, extra = {}) => runMixed(rows, { mapping: { ...MIXED, toAccountCol: 'To', tagsCol: 'Tags' }, ...extra });
+      const xfer = (date, amount, more = {}) => row(date, amount, { Type: 'Transfer', To: 'Cash', ...more });
+
+      it('a Transfer row becomes an internal transfer From the Account column To the To account column', () => {
+        const r = withTo([xfer('2025-01-15', '500', { Note: 'ATM', Tags: 'cash; monthly' })]);
+        assert.equal(r.transactions.length, 0);
+        assert.equal(r.transfers.length, 1);
+        const t = r.transfers[0];
+        assert.equal(t.kind, 'internal_transfer');
+        assert.equal(t.accountId, 'hdfc');
+        assert.equal(t.targetAccountId, 'cash');
+        assert.equal(t.amount, 500);
+        assert.equal(t.note, 'ATM');
+        assert.deepEqual(t.tags, ['cash', 'monthly']);
+        assert.equal(r.summary.valid, 1);
+        assert.equal(r.summary.typeCounts.transfer, 1);
+      });
+
+      it('expense and transfer rows in one file land in their own lists', () => {
+        const r = withTo([row('2025-01-15', '10', { Type: 'Expense' }), xfer('2025-01-16', '20')]);
+        assert.equal(r.transactions.length, 1);
+        assert.equal(r.transfers.length, 1);
+        assert.equal(r.summary.valid, 2);
+        assert.equal(r.summary.skipped, 0);
+      });
+
+      it('a Transfer row with no To account is skipped, not sent to a fallback', () => {
+        const r = withTo([xfer('2025-01-15', '500', { To: '' })]);
+        assert.equal(r.transfers.length, 0);
+        assert.equal(r.rowPreviews[0].reason, 'Transfer has no To account');
+      });
+
+      it('a Transfer row with From equal to To is skipped', () => {
+        const r = withTo([xfer('2025-01-15', '500', { To: 'HDFC' })]);
+        assert.equal(r.transfers.length, 0);
+        assert.match(r.rowPreviews[0].reason, /must be different/);
+      });
+
+      it('an identical transfer already saved is skipped as a duplicate', () => {
+        const existingTransfers = [{ kind: 'internal_transfer', accountId: 'hdfc', targetAccountId: 'cash', amount: 500, note: 'ATM', createdAt: new Date(2025, 0, 15, 12).toISOString() }];
+        const r = withTo([xfer('2025-01-15', '500', { Note: 'ATM' })], { existingTransfers });
+        assert.equal(r.transfers.length, 0);
+        assert.equal(r.summary.duplicates, 1);
+      });
+
+      it('typeValueMap can route a custom Type value to transfer', () => {
+        const r = withTo([row('2025-01-15', '50', { Type: 'Moved', To: 'Cash' })], { typeValueMap: { Moved: 'transfer' } });
+        assert.equal(r.transfers.length, 1);
+      });
+    });
+  });
+
+  it('accountValueMap pointing at a since-deleted account id falls back like a normal unmatched value', () => {
+    const r = run(
+      [row('2025-01-15', '10', { Account: 'HDFC Bank' })],
+      { accountValueMap: { 'HDFC Bank': 'no-longer-exists' } },
+    );
+    assert.equal(r.transactions[0].accountId, 'hdfc'); // fallbackAccountId
+    assert.deepEqual(r.summary.unmatchedAccountValues, ['HDFC Bank']);
+  });
+
   it('a US-format file is read as US throughout (ambiguous rows included)', () => {
     const r = run([row('01/15/2025', '1'), row('02/03/2025', '2'), row('12/11/2025', '3')]);
     assert.equal(r.summary.dateOrder, 'mdy');
@@ -319,7 +691,7 @@ describe('parseTransactions', () => {
   });
 
   it('a mixed import reads the Type column and skips unknown types', () => {
-    const rows = [row('2025-01-15', '5', { Type: 'Income' }), row('2025-01-15', '5', { Type: 'Expense' }), row('2025-01-15', '5', { Type: 'Transfer' })];
+    const rows = [row('2025-01-15', '5', { Type: 'Income' }), row('2025-01-15', '5', { Type: 'Expense' }), row('2025-01-15', '5', { Type: 'Mystery' })];
     const r = run(rows, {
       mapping: { ...MAP, typeCol: 'Type' },
       categoriesByType: { expense: CATS, income: [{ id: 'salary', label: 'Food' }], investment: [] },
@@ -329,6 +701,16 @@ describe('parseTransactions', () => {
     assert.equal(r.buckets.expense.length, 1);
     assert.equal(r.summary.skipped, 1);
     assert.match(r.errors[0], /Unrecognized type/);
+  });
+
+  it('a Transfer row in a mixed file is a transfer, skipped when it has no To account column', () => {
+    const r = run([row('2025-01-15', '5', { Type: 'Transfer' })], {
+      mapping: { ...MAP, typeCol: 'Type' },
+      categoriesByType: { expense: CATS, income: [], investment: [] },
+      fallbacksByType: { expense: { categoryId: 'food' }, income: {}, investment: {} },
+    });
+    assert.equal(r.transfers.length, 0);
+    assert.match(r.errors[0], /Transfer has no To account/);
   });
 
   it('flags rows that duplicate saved transactions and skips them unless told not to', () => {
@@ -386,6 +768,120 @@ describe('parseTransactions', () => {
     const r = run(rows);
     assert.equal(r.summary.valid, 20000);
     assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0}ms`);
+  });
+});
+
+// ---- transfer import ("move money between my own accounts") ------------------
+const XFER_ACCOUNTS = [{ id: 'hdfc', label: 'HDFC' }, { id: 'cash', label: 'Cash' }, { id: 'icici', label: 'ICICI' }];
+const XFER_MAP = { dateCol: 'Date', amountCol: 'Amount', fromAccountCol: 'From', toAccountCol: 'To', noteCol: 'Note' };
+function runXfer(rows, extra = {}) {
+  return parseTransfers({
+    rows, mapping: XFER_MAP, accounts: XFER_ACCOUNTS,
+    fallbackFromAccountId: 'hdfc', fallbackToAccountId: 'cash', ...extra,
+  });
+}
+const xrow = (date, amount, more = {}) => ({ Date: date, Amount: amount, From: 'HDFC', To: 'Cash', Note: '', ...more });
+
+describe('parseTransfers', () => {
+  inZone('America/New_York');
+
+  it('imports a valid row with matched From/To accounts', () => {
+    const r = runXfer([xrow('2025-01-15', '500', { From: 'HDFC', To: 'ICICI', Note: 'moved savings' })]);
+    assert.equal(r.summary.valid, 1);
+    assert.equal(r.transfers[0].kind, 'internal_transfer');
+    assert.equal(r.transfers[0].amount, 500);
+    assert.equal(r.transfers[0].accountId, 'hdfc');
+    assert.equal(r.transfers[0].targetAccountId, 'icici');
+    assert.equal(r.transfers[0].note, 'moved savings');
+  });
+
+  it('falls back to the fallback From/To accounts when a value does not match', () => {
+    const r = runXfer([xrow('2025-01-15', '500', { From: 'Nope', To: 'AlsoNope' })]);
+    assert.equal(r.summary.valid, 1);
+    assert.equal(r.transfers[0].accountId, 'hdfc'); // fallbackFromAccountId
+    assert.equal(r.transfers[0].targetAccountId, 'cash'); // fallbackToAccountId
+    assert.deepEqual(r.summary.unmatchedAccountValues, ['Nope', 'AlsoNope']);
+  });
+
+  it('skips a row where From and To resolve to the same account', () => {
+    const r = runXfer([xrow('2025-01-15', '500', { From: 'HDFC', To: 'HDFC' })]);
+    assert.equal(r.summary.valid, 0);
+    assert.equal(r.summary.skipped, 1);
+    assert.match(r.errors[0], /From and To accounts must be different/);
+  });
+
+  it('skips a row that cannot resolve both accounts and has no fallback set', () => {
+    const r = runXfer(
+      [xrow('2025-01-15', '500', { From: 'Nope', To: 'AlsoNope' })],
+      { fallbackFromAccountId: null, fallbackToAccountId: null },
+    );
+    assert.equal(r.summary.valid, 0);
+    assert.match(r.errors[0], /No fallback account set/);
+  });
+
+  it('requires Date and Amount columns before importing', () => {
+    assert.match(
+      parseTransfers({ rows: [{}], mapping: { dateCol: 'Date' }, accounts: XFER_ACCOUNTS }).errors[0],
+      /map both the Date and Amount/,
+    );
+  });
+
+  it('From/To account columns are optional — every row just uses the fallback pair when neither is mapped', () => {
+    const r = parseTransfers({
+      rows: [{ Date: '2025-01-15', Amount: '500' }],
+      mapping: { dateCol: 'Date', amountCol: 'Amount' },
+      accounts: XFER_ACCOUNTS,
+      fallbackFromAccountId: 'hdfc',
+      fallbackToAccountId: 'cash',
+    });
+    assert.equal(r.summary.valid, 1);
+    assert.equal(r.transfers[0].accountId, 'hdfc');
+    assert.equal(r.transfers[0].targetAccountId, 'cash');
+  });
+
+  it('flags duplicates of an already-saved internal transfer and skips them unless told not to', () => {
+    const existing = [{
+      kind: 'internal_transfer', accountId: 'hdfc', targetAccountId: 'cash',
+      createdAt: new Date(2025, 0, 15, 10, 0).toISOString(), amount: 500, note: 'rent',
+    }];
+    const rows = [xrow('2025-01-15', '500', { Note: 'Rent' }), xrow('2025-01-15', '500', { To: 'ICICI', Note: 'rent' })];
+    const r1 = runXfer(rows, { existing });
+    assert.equal(r1.summary.duplicates, 1);
+    assert.equal(r1.summary.valid, 1); // only the ICICI one (different account pair) is new
+    const r2 = runXfer(rows, { existing, skipDuplicates: false });
+    assert.equal(r2.summary.valid, 2);
+  });
+
+  it('a non-matching lend/borrow kind can never slip through — only internal_transfer rows are ever produced', () => {
+    const r = runXfer([xrow('2025-01-15', '500')]);
+    assert.ok(r.transfers.every((t) => t.kind === 'internal_transfer'));
+  });
+
+  it('accountValueMap resolves an unmatched value for either From or To, same as the transaction importer', () => {
+    const r = runXfer(
+      [xrow('2025-01-15', '500', { From: 'HDFC Bank', To: 'Cash' })],
+      { accountValueMap: { 'hdfc bank': 'icici' } },
+    );
+    assert.equal(r.transfers[0].accountId, 'icici');
+    assert.deepEqual(r.summary.unmatchedAccountValues, []);
+  });
+
+  it('unmatchedAccountEntries tracks the earliest date across both From and To columns', () => {
+    const r = runXfer([
+      xrow('2025-03-10', '10', { From: 'New Bank', To: 'Cash' }),
+      xrow('2025-01-15', '20', { From: 'HDFC', To: 'New Bank' }), // earliest overall
+    ]);
+    const entry = r.summary.unmatchedAccountEntries.find((e) => e.value === 'New Bank');
+    assert.ok(entry, 'entry present');
+    assert.equal(ymd(new Date(entry.earliestDate)), '2025-01-15');
+  });
+
+  it('tags are parsed the same way as the transaction importer', () => {
+    const r = runXfer(
+      [xrow('2025-01-15', '500', { Tags: 'house; bills' })],
+      { mapping: { ...XFER_MAP, tagsCol: 'Tags' } },
+    );
+    assert.deepEqual(r.transfers[0].tags, ['house', 'bills']);
   });
 });
 

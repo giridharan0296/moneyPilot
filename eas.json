@@ -18,7 +18,8 @@
       "developmentClient": false,
       "distribution": "internal",
       "env": {
-        "NPM_CONFIG_PRODUCTION": "true"
+        "NPM_CONFIG_PRODUCTION": "true",
+        "EXPO_PUBLIC_DEFAULT_PLAN": "pro"
       },
       "android": {
         "buildType": "apk"

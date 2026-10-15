@@ -48,7 +48,8 @@
 //               Route names Invest / Insights are kept so deep links still work.
 // ----------------------------------------------------------------------------
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import {
   NavigationContainer,
@@ -78,28 +79,30 @@ import AccountActivityScreen  from './screens/AccountActivityScreen';
 import DataHealthScreen       from './screens/DataHealthScreen';
 import ActivityTimelineScreen from './screens/ActivityTimelineScreen';
 import BrokersScreen          from './screens/BrokersScreen';
+import SettingsCurrencyScreen from './screens/SettingsCurrencyScreen';
 // v4 restructure — MoreMenuScreen absorbs the old Analysis + Tools menus
 // into a single sectioned hub. ToolsMenuScreen + AnalysisMenuScreen were
 // deleted; if you need to recover them, see git history for App.js v3.
 import MoreMenuScreen             from './screens/MoreMenuScreen';
 import FinancialToolsScreen       from './screens/FinancialToolsScreen';
 import InsightsScreen             from './screens/InsightsScreen';
-import EMICalculatorScreen       from './screens/EMICalculatorScreen';
-import SIPCalculatorScreen       from './screens/SIPCalculatorScreen';
+import EMICalculatorScreenBase   from './screens/EMICalculatorScreen';
+import SIPCalculatorScreenBase   from './screens/SIPCalculatorScreen';
 import ImportTransactionsScreen  from './screens/ImportTransactionsScreen';
 import ImportBankStatementScreen from './screens/ImportBankStatementScreen';
+import ReceiptImportScreen from './screens/ReceiptImportScreen';
 import RecurringTransactionsScreen from './screens/RecurringTransactionsScreen';
 import PlansScreen               from './screens/PlansScreen';
 import PlanScreen                from './screens/PlanScreen';
 import TransfersRedirectScreen   from './screens/TransfersRedirectScreen';
 import ReportsScreen             from './screens/ReportsScreen';
 import InsurancePoliciesScreen   from './screens/InsurancePoliciesScreen';
-import TaxCalculatorScreen       from './screens/TaxCalculatorScreen';
+import TaxCalculatorScreenBase   from './screens/TaxCalculatorScreen';
 import CashFlowScreen            from './screens/CashFlowScreen';
-import FireCalculatorScreen      from './screens/FireCalculatorScreen';
-import SWPCalculatorScreen       from './screens/SWPCalculatorScreen';
-import MISCalculatorScreen       from './screens/MISCalculatorScreen';
-import GratuityCalculatorScreen  from './screens/GratuityCalculatorScreen';
+import FireCalculatorScreenBase  from './screens/FireCalculatorScreen';
+import SWPCalculatorScreenBase   from './screens/SWPCalculatorScreen';
+import MISCalculatorScreenBase   from './screens/MISCalculatorScreen';
+import GratuityCalculatorScreenBase from './screens/GratuityCalculatorScreen';
 import FundamentalAnalysisScreen from './screens/FundamentalAnalysisScreen';
 import StockMarketScreen         from './screens/StockMarketScreen';
 import StockHistoryScreen        from './screens/StockHistoryScreen';
@@ -110,6 +113,7 @@ import MarketAllocationScreen from './screens/MarketAllocationScreen';
 import ImportHoldingsScreen   from './screens/ImportHoldingsScreen';
 import NetWorthScreen         from './screens/NetWorthScreen';
 import LoanDetailScreen       from './screens/LoanDetailScreen';
+import WelcomeScreen          from './screens/WelcomeScreen';
 
 import AppIcon                  from './components/AppIcon';
 import AccountNetWorthSync      from './components/AccountNetWorthSync';
@@ -134,6 +138,19 @@ import { GoalsProvider }        from './contexts/GoalsContext';
 import { InsurancePoliciesProvider } from './contexts/InsurancePoliciesContext';
 import { AllocationProvider }   from './contexts/AllocationContext';
 import { AiInsightsProvider }   from './contexts/AiInsightsContext';
+import { EntitlementProvider }  from './contexts/EntitlementContext';
+import { withCalculatorGate }   from './components/FeatureGate';
+
+// Calculators count one weekly use each on the Free plan (see FeatureGate).
+// Routes below use these gated versions, so the rule is applied in one place.
+const EMICalculatorScreen      = withCalculatorGate(EMICalculatorScreenBase);
+const SIPCalculatorScreen      = withCalculatorGate(SIPCalculatorScreenBase);
+const TaxCalculatorScreen      = withCalculatorGate(TaxCalculatorScreenBase);
+const FireCalculatorScreen     = withCalculatorGate(FireCalculatorScreenBase);
+const SWPCalculatorScreen      = withCalculatorGate(SWPCalculatorScreenBase);
+const MISCalculatorScreen      = withCalculatorGate(MISCalculatorScreenBase);
+const GratuityCalculatorScreen = withCalculatorGate(GratuityCalculatorScreenBase);
+import { SCAN_UPLOAD_ENABLED, STORAGE_KEYS } from './constants';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -412,6 +429,13 @@ function MoreStack() {
         component={ImportTransactionsScreen}
         options={{ headerTitle: hdr('download', 'Import Transactions', colors.accent.primary) }}
       />
+      {SCAN_UPLOAD_ENABLED && (
+        <Stack.Screen
+          name="ReceiptImport"
+          component={ReceiptImportScreen}
+          options={{ headerTitle: hdr('receipt', 'Receipts to Transactions', colors.accent.primary) }}
+        />
+      )}
 
       {/* ---- Financial tools ---- */}
       {/* Tints below reuse each tool's own `accent` from FinancialToolsScreen's
@@ -555,6 +579,14 @@ function MoreStack() {
         component={BrokersScreen}
         options={{ headerTitle: hdr('trending-up', 'Brokers', colors.accent.orange) }}
       />
+      {/* Currency — same v4-polish extraction, applied to the base-
+          currency picker + FX rate table that used to live inline on
+          Accounts & data. See screens/SettingsCurrencyScreen.js. */}
+      <Stack.Screen
+        name="Currency"
+        component={SettingsCurrencyScreen}
+        options={{ headerTitle: hdr('repeat', 'Currency', '#059669') }}
+      />
     </Stack.Navigator>
   );
 }
@@ -580,15 +612,36 @@ function ThemedApp() {
   const { colors, isDark, ready, fontsLoaded, fontFamilyBold } = useTheme();
   const insets = useSafeAreaInsets();
 
+  // Whether the one-time Welcome screen has already been dismissed on this
+  // device. `null` = not yet loaded from storage (don't flash either state
+  // while we don't know); `true`/`false` once resolved.
+  const [welcomeSeen, setWelcomeSeen] = useState(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEYS.welcome_screen_seen)
+      .then((value) => setWelcomeSeen(value === 'true'))
+      .catch(() => setWelcomeSeen(true));
+  }, []);
+
+  const handleWelcomeDismiss = () => {
+    AsyncStorage.setItem(STORAGE_KEYS.welcome_screen_seen, 'true').catch(() => {});
+    setWelcomeSeen(true);
+  };
+
   useEffect(() => {
     if (ready && fontsLoaded) {
       SplashScreen.hideAsync().catch(() => {});
     }
   }, [ready, fontsLoaded]);
 
-  // Wait for the persisted theme choice before rendering anything so we
-  // don't briefly flash the wrong palette on cold start.
-  if (!ready || !fontsLoaded) return null;
+  // Wait for the persisted theme choice (and the welcome-seen flag) before
+  // rendering anything so we don't briefly flash the wrong palette/screen
+  // on cold start.
+  if (!ready || !fontsLoaded || welcomeSeen === null) return null;
+
+  if (!welcomeSeen) {
+    return <WelcomeScreen onDismiss={handleWelcomeDismiss} />;
+  }
 
   // Android edge-to-edge (app.json) draws behind the system nav bar — pad the
   // tab bar by the real bottom inset so icons/labels aren't covered.
@@ -746,6 +799,7 @@ export default function App() {
           <AndroidDateTimePickerProvider>
           <ConfirmSheetProvider>
           <AuthProvider>
+          <EntitlementProvider>
           <SettingsProvider>
           <TransactionsProvider>
             <RecurringProvider>
@@ -781,6 +835,7 @@ export default function App() {
             </RecurringProvider>
           </TransactionsProvider>
           </SettingsProvider>
+          </EntitlementProvider>
           </AuthProvider>
           </ConfirmSheetProvider>
           </AndroidDateTimePickerProvider>

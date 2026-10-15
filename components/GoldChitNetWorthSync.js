@@ -7,6 +7,7 @@ import {
   openChitAssetNeedsUpdate,
   summarizeOpenChitSchemes,
 } from '../lib/goldChit';
+import { useManualGoldRate } from '../lib/manualGoldRate';
 import { fetchIndicativeMetalRates } from '../lib/metalRates';
 
 export default function GoldChitNetWorthSync() {
@@ -21,6 +22,7 @@ export default function GoldChitNetWorthSync() {
 
   const [metalRates, setMetalRates] = useState(null);
   const ratesReq = useRef(0);
+  const manualRate = useManualGoldRate();
 
   const ready = txReady && nwReady;
   const openSchemes = useMemo(
@@ -48,7 +50,7 @@ export default function GoldChitNetWorthSync() {
       }
     })();
     return () => { cancelled = true; };
-  }, [ready, openSchemes.map((s) => s.schemeId).join('|')]);
+  }, [ready, openSchemes.map((s) => s.schemeId).join('|'), manualRate?.rate22k]);
 
   useEffect(() => {
     if (!ready) return;
